@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Форма результата</title>
+<style>
+:root{color-scheme:light dark;--bg:#f4f5f7;--card:#fff;--tx:#1c2430;--mut:#5d6878;--line:#dde1e7;--acc:#1f5fbf;--ok:#1b7a45;--okb:#e2f4e9;--pt:#8a5a00;--ptb:#fdf0d5;--no:#a3302a;--nob:#fbe5e3}
+@media(prefers-color-scheme:dark){:root{--bg:#14181e;--card:#1d232b;--tx:#e6eaf0;--mut:#9aa6b6;--line:#333c48;--acc:#7fb0ff;--ok:#7fdca5;--okb:#173526;--pt:#f0c46a;--ptb:#3a2d10;--no:#ff9d96;--nob:#40201e}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:820px;margin:0 auto;padding:32px 16px 64px}h1{font-size:26px;line-height:1.25;margin:0 0 12px}h2{font-size:18px;margin:0}
+.mut{color:var(--mut)}.sum{display:flex;flex-wrap:wrap;gap:8px 20px;padding:14px 0;margin:8px 0 16px;border-block:1px solid var(--line)}
+section{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px;margin:0 0 14px}
+.top{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}.req{color:var(--no)}
+.st{flex:none;font-size:13px;font-weight:600;padding:2px 10px;border-radius:99px}.done{color:var(--ok);background:var(--okb)}.partial{color:var(--pt);background:var(--ptb)}.todo{color:var(--no);background:var(--nob)}
+.hint{font-size:14px;color:var(--mut);margin:6px 0 12px}.val{white-space:pre-wrap;overflow-wrap:anywhere;border:1px solid var(--line);border-radius:8px;padding:12px;background:var(--bg)}
+.empty{color:var(--mut);font-style:italic}h3{font-size:14px;margin:14px 0 4px}ul{margin:0;padding-left:20px;font-size:15px}
+button{font:inherit;font-size:14px;margin-top:8px;padding:5px 12px;border:1px solid var(--line);border-radius:7px;background:var(--card);color:var(--acc);cursor:pointer}button:focus-visible{outline:2px solid var(--acc)}
+</style>
+</head>
+<body>
+<main id="app"><p class="mut">Загрузка…</p></main>
+<script>
+const ST={done:'Готово',partial:'Частично',todo:'Не сделано'};
+const el=(t,c,s)=>{const e=document.createElement(t);if(c)e.className=c;if(s!=null)e.textContent=s;return e};
+const when=d=>new Date(d).toLocaleString('ru-RU',{timeZone:'Europe/Moscow',day:'numeric',month:'long',hour:'2-digit',minute:'2-digit'})+' МСК';
+const left=ms=>{const m=Math.max(0,Math.floor(ms/6e4));return Math.floor(m/1440)+' д '+Math.floor(m%1440/60)+' ч '+m%60+' мин'};
+async function copy(text,b){try{await navigator.clipboard.writeText(text)}catch{const t=el('textarea');t.value=text;document.body.append(t);t.select();document.execCommand('copy');t.remove()}b.textContent='Скопировано';setTimeout(()=>b.textContent='Скопировать',1500)}
+function list(box,name,items){if(!items||!items.length)return;box.append(el('h3','',name));const u=el('ul');items.forEach(i=>u.append(el('li','',i)));box.append(u)}
+function draw(f){const app=document.getElementById('app');app.replaceChildren();
+app.append(el('h1','',f.title),el('p','mut',f.intro));
+const sum=el('div','sum'),n=s=>f.fields.filter(x=>x.status===s).length;
+sum.append(el('strong','',`Готово ${n('done')} из ${f.fields.length}`),el('span','',`Частично ${n('partial')}`),el('span','',`Не сделано ${n('todo')}`));
+const now=Date.now(),a=new Date(f.start),z=new Date(f.deadline);
+sum.append(el('span','',now<a?'До старта: '+left(a-now):now<z?'До сдачи: '+left(z-now):'Срок сдачи прошёл'),el('span','mut','Обновлено '+when(f.updated)));
+app.append(sum,el('p','hint','Звёздочкой отмечены обязательные поля.'));
+f.fields.forEach(x=>{const s=el('section'),t=el('div','top'),h=el('h2','',x.title);s.id=x.id;
+if(x.required)h.append(el('span','req',' *'));t.append(h,el('span','st '+x.status,ST[x.status]||x.status));
+s.append(t,el('p','hint',x.hint));const v=(x.value||'').replace('{{origin}}',location.origin);
+s.append(el('div',v?'val':'val empty',v||'Пока не заполнено'));
+if(v){const b=el('button','','Скопировать');b.type='button';b.onclick=()=>copy(v,b);s.append(b)}
+list(s,'Сделано',x.done);list(s,'Осталось',x.left);app.append(s)})}
+const load=()=>fetch('form.json',{cache:'no-store'}).then(r=>{if(!r.ok)throw Error(r.status);return r.json()}).then(draw).catch(e=>{document.getElementById('app').replaceChildren(el('p','','Не удалось загрузить форму: '+e.message))});
+load();setInterval(load,60000);
+</script>
+</body>
+</html>
