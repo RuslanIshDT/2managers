@@ -1,0 +1,29 @@
+# Зависимости и сборка
+node_modules/
+dist/
+coverage/
+__pycache__/
+*.pyc
+.venv/
+
+# Секреты и локальное окружение
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+
+# Прочее
+*.log
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+.claude/
+.cursor/*
+!.cursor/rules/
+*.swp
+*~
+
+# Материалы проекта, которые не должны попадать в git
+_not_in_git/
