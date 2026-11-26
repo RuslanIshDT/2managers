@@ -1,10 +1,10 @@
-// Задание аудитора потока. mode=from-json пересобирает отчёт из уже посчитанного JSON
-// и модель не вызывает. mode=model — полный прогон, его ставит только явный вызов, не кнопка на стенде.
+// Задание аудитора потока. mode=from-json пересобирает общий пример и модель не вызывает.
+// mode=model — прогон за конкретного руководителя, пишет в flow_reports и общий файл не трогает.
 import { readFile, writeFile } from 'node:fs/promises';
 import { eq } from 'drizzle-orm';
 import PgBoss from 'pg-boss';
 import type { Db } from '../db/client.ts';
-import { agentRuns } from '../db/schema.ts';
+import { agentRuns, flowReports } from '../db/schema.ts';
 import { loadSynthetic } from '../data/synthetic.ts';
 import type { AuditedItem } from '../agents/flow-audit.ts';
 import { summarize, toMarkdown, view } from '../agents/flow-audit-report.ts';
@@ -14,6 +14,29 @@ export const FLOW_AUDIT_QUEUE = 'flow-audit';
 export interface FlowAuditJob {
   mode: 'from-json' | 'model';
   leaderId?: string;
+}
+
+export interface AuditQuote {
+  calls: number;
+  costUsd: number;
+}
+
+export function quoteOf(summary: { calls?: number; costUsd?: number }): AuditQuote {
+  const calls = summary.calls;
+  const costUsd = summary.costUsd;
+  if (typeof calls !== 'number' || typeof costUsd !== 'number' || calls < 1 || costUsd < 0) {
+    throw new Error('В примере аудита нет цены прогона');
+  }
+  return { calls, costUsd };
+}
+
+export function assertAuditConfirm(mode: 'from-json' | 'model', confirm: boolean | undefined): void {
+  if (mode === 'model' && confirm !== true) throw new Error('Нужно подтверждение цены');
+}
+
+export async function exampleQuote(path = 'reports/flow-audit.json'): Promise<AuditQuote> {
+  const prev = JSON.parse(await readFile(path, 'utf8')) as { summary?: { calls?: number; costUsd?: number } };
+  return quoteOf(prev.summary ?? {});
 }
 
 export async function rebuildFlowAuditFromJson() {
@@ -51,6 +74,7 @@ async function runFlowAuditJob(db: Db, id: string, data: FlowAuditJob) {
   });
   try {
     if (data.mode === 'model') {
+      if (!data.leaderId) throw new Error('Прогон моделью записывается только за руководителем');
       const { runAudit, buildItems } = await import('../agents/flow-audit.ts');
       const synthetic = await loadSynthetic();
       const items = buildItems(synthetic);
@@ -58,10 +82,20 @@ async function runFlowAuditJob(db: Db, id: string, data: FlowAuditJob) {
       const at = new Date().toISOString();
       const summary = summarize(synthetic, audited, at);
       const viewItems = view(audited);
-      const { writeFile: write, mkdir } = await import('node:fs/promises');
-      await mkdir('reports', { recursive: true });
-      await write('reports/flow-audit.json', JSON.stringify({ at, summary, view: viewItems, items: audited }, null, 2));
-      await write('reports/flow-audit.md', toMarkdown(summary, viewItems, synthetic, audited));
+      const report = { at, summary, view: viewItems, items: audited, source: 'leader' as const };
+      await db
+        .insert(flowReports)
+        .values({
+          leaderId: data.leaderId,
+          report,
+          calls: summary.calls,
+          costUsd: String(summary.costUsd),
+          createdAt: new Date(),
+        })
+        .onConflictDoUpdate({
+          target: flowReports.leaderId,
+          set: { report, calls: summary.calls, costUsd: String(summary.costUsd), createdAt: new Date() },
+        });
     } else {
       await rebuildFlowAuditFromJson();
     }

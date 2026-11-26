@@ -115,6 +115,17 @@ describe('почта и кнопки', () => {
   });
 });
 
+describe('цена аудита', () => {
+  it('берёт цену примера и не пускает прогон модели без подтверждения', async () => {
+    const { assertAuditConfirm, quoteOf } = await import('../src/jobs/flow-audit-job.ts');
+    expect(quoteOf({ calls: 35, costUsd: 0.697 })).toEqual({ calls: 35, costUsd: 0.697 });
+    expect(() => quoteOf({ calls: 0, costUsd: 1 })).toThrow(/цены/);
+    expect(() => assertAuditConfirm('model', undefined)).toThrow(/подтверждение/);
+    expect(() => assertAuditConfirm('model', true)).not.toThrow();
+    expect(() => assertAuditConfirm('from-json', undefined)).not.toThrow();
+  });
+});
+
 const modelReturn: ModelVerdict = {
   вердикт: 'вернуть',
   в_полномочиях: 'да',

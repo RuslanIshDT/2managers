@@ -45,7 +45,7 @@ let tab='письма';
 function kpi(big,small){const k=el('div','kpi');k.append(el('b','',big),el('span','',small));return k}
 function draw(r){const s=r.summary,v=r.view,app=document.getElementById('app');app.replaceChildren();
 const gone=s.byVerdict.find(x=>x.verdict==='не_должно');
-app.append(el('h1','','Аудит потока руководителя'),el('p','mut','Каких писем и встреч в потоке руководителя не должно быть, почему и что поменять в отделе, чтобы они перестали появляться. Данные — синтетика заказчика: письма за неделю 7–11 декабря и календарь 7–18 декабря.'));
+app.append(el('h1','','Аудит потока руководителя'),el('p','mut', (r.source==='leader'?'Отчёт этого руководителя. ':'Пример первого прогона, общий файл. ')+'Каких писем и встреч в потоке руководителя не должно быть, почему и что поменять в отделе, чтобы они перестали появляться. Данные — синтетика заказчика: письма за неделю 7–11 декабря и календарь 7–18 декабря.'));
 const k=el('div','kpis');k.append(kpi(hh(s.freedHours)+' ч','освобождается в неделю из '+hh(s.flowHours)+' ч на почту и встречи'),kpi(gone.letters+' из '+s.letters,'писем не должно быть вовсе'),kpi(gone.meetings+' из '+s.meetings,'встреч не должно быть вовсе'),kpi(s.byChange.length+'','оргизменений, которые убирают поток'));app.append(k);
 const sp=el('section');sp.append(el('h2','','Куда уходит время руководителя сейчас'));const bar=el('div','split');
 s.byVerdict.forEach(x=>{const i=el('i',SC[x.verdict]);i.style.width=(100*x.hours/s.flowHours)+'%';i.title=x.label+': '+hh(x.hours)+' ч';bar.append(i)});
@@ -72,7 +72,7 @@ const btn=el('button','','Принять правила недели');btn.type=
 const out=el('p','small','');
 btn.onclick=async()=>{btn.disabled=true;out.textContent='Запись…';try{const res=await fetch('/api/rules/accept',{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json'},body:'{}'});const data=await res.json();if(res.status===401){out.textContent='Сначала войдите на главной странице стенда.';return}if(!res.ok)throw Error(data.error||res.status);out.textContent=`Принято. Индекс ${data.before}% → ${data.after}%. В кабинете цифра уже новая.`}catch(e){out.textContent='Не удалось: '+e.message}finally{btn.disabled=false}};
 act.append(note,btn,out);app.append(act)}
-fetch('/reports/flow-audit.json',{cache:'no-store'}).then(r=>{if(!r.ok)throw Error(r.status);return r.json()}).then(draw).catch(e=>{document.getElementById('app').replaceChildren(el('p','','Не удалось загрузить отчёт: '+e.message))});
+fetch('/api/audit/report',{credentials:'same-origin',cache:'no-store'}).then(r=>{if(!r.ok)throw Error(r.status);return r.json()}).then(draw).catch(e=>{document.getElementById('app').replaceChildren(el('p','','Не удалось загрузить отчёт: '+e.message))});
 </script>
 </body>
 </html>

@@ -10,13 +10,13 @@ import type pg from 'pg';
 import { z } from 'zod';
 import { hashToken, newSessionToken, verifyPassword } from '../auth.ts';
 import type { Db } from '../db/client.ts';
-import { agentRuns, emails, leaders, meetings, people, sessions, tasks, telegramClicks } from '../db/schema.ts';
+import { agentRuns, emails, flowReports, leaders, meetings, people, sessions, tasks, telegramClicks } from '../db/schema.ts';
 import { departmentForLeader } from '../agents/k1.ts';
 import { applyClick, pullInbox, requestFeed } from '../agents/intake.ts';
 import { acceptWeek, acceptWeekByChat, weekScene } from '../agents/week.ts';
 import { checkMail, mailConfig, readSyntheticInbox } from '../mail.ts';
 import { applyOrigin, formOrigin } from '../http/origin.ts';
-import { FLOW_AUDIT_QUEUE, type FlowAuditJob } from '../jobs/flow-audit-job.ts';
+import { assertAuditConfirm, exampleQuote, FLOW_AUDIT_QUEUE, type FlowAuditJob } from '../jobs/flow-audit-job.ts';
 import { answerCallback, parseCallback, parseRuleCallback, parseStart, sendMessage, sendRulesCard, telegramConfigured } from '../telegram.ts';
 
 const COOKIE = 'sid';
@@ -28,7 +28,8 @@ const loginBody = z.object({
 });
 
 const jobBody = z.object({
-  mode: z.literal('from-json').default('from-json'),
+  mode: z.enum(['from-json', 'model']).default('from-json'),
+  confirm: z.boolean().optional(),
 });
 
 const telegramUpdate = z.object({
@@ -225,11 +226,35 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     }
   });
 
+  app.get('/api/audit/report', async (request) => {
+    const leader = await currentLeader(request);
+    if (leader) {
+      const rows = await deps.db.select().from(flowReports).where(eq(flowReports.leaderId, leader.id)).limit(1);
+      const stored = rows[0]?.report;
+      if (stored && typeof stored === 'object') return stored;
+    }
+    const example = JSON.parse(await readFile('reports/flow-audit.json', 'utf8')) as Record<string, unknown>;
+    return { ...example, source: 'example' };
+  });
+
+  app.get('/api/jobs/flow-audit/quote', async (request, reply) => {
+    const leader = await currentLeader(request);
+    if (!leader) return reply.code(401).send({ error: 'Нужен вход' });
+    const quote = await exampleQuote();
+    return { ...quote, note: 'Цена прошлого прогона примера. Новый запишется только вам и общий отчёт не заменит.' };
+  });
+
   app.post('/api/jobs/flow-audit', async (request, reply) => {
     const leader = await currentLeader(request);
     if (!leader) return reply.code(401).send({ error: 'Нужен вход' });
     const parsed = jobBody.safeParse(request.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: 'Неизвестный режим задания' });
+    try {
+      assertAuditConfirm(parsed.data.mode, parsed.data.confirm);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : 'Нужно подтверждение';
+      return reply.code(400).send({ error: detail });
+    }
     const payload: FlowAuditJob = { mode: parsed.data.mode, leaderId: leader.id };
     const id = await deps.boss.send(FLOW_AUDIT_QUEUE, payload);
     if (!id) return reply.code(503).send({ error: 'Очередь не приняла задание' });

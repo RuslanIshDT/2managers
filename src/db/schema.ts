@@ -187,6 +187,14 @@ export const rules = pgTable('rules', {
   acceptedAt: timestamp('accepted_at', { withTimezone: true }).notNull(),
 });
 
+export const flowReports = pgTable('flow_reports', {
+  leaderId: text('leader_id').primaryKey(),
+  report: jsonb('report').notNull(),
+  calls: integer('calls').notNull(),
+  costUsd: text('cost_usd').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+});
+
 export const llmCalls = pgTable('llm_calls', {
   id: bigserial('id', { mode: 'number' }).primaryKey(),
   leaderId: text('leader_id'),

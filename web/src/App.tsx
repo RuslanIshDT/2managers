@@ -168,6 +168,37 @@ export function App() {
     }
   }
 
+  async function runModelAudit() {
+    setJob('');
+    setError('');
+    setPending(true);
+    try {
+      const quote = await api<{ calls: number; costUsd: number; note: string }>('/api/jobs/flow-audit/quote');
+      const agreed = window.confirm(
+        `Прогон вызовет модель около ${quote.calls} раз. Прошлая цена примера ${quote.costUsd} USD. ${quote.note} Запустить?`,
+      );
+      if (!agreed) return;
+      const created = await api<{ id: string }>('/api/jobs/flow-audit', {
+        method: 'POST',
+        body: JSON.stringify({ mode: 'model', confirm: true }),
+      });
+      for (let i = 0; i < 90; i++) {
+        await new Promise((r) => setTimeout(r, 4000));
+        const state = await api<{ status: string; detail: string | null }>(`/api/jobs/${created.id}`);
+        if (state.status === 'done') {
+          setJob('Прогон моделью записан за этим руководителем');
+          return;
+        }
+        if (state.status === 'failed') throw new Error(state.detail || 'Задание не выполнилось');
+      }
+      setJob('Прогон ещё идёт. Отчёт появится на странице аудита, когда задание закончится.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось запустить аудит');
+    } finally {
+      setPending(false);
+    }
+  }
+
   async function rebuildAudit() {
     setJob('');
     setError('');
@@ -285,9 +316,14 @@ export function App() {
           <Button type="button" onClick={rebuildAudit} disabled={pending}>
             {pending ? 'Задание…' : 'Пересобрать отчёт аудита'}
           </Button>
+          <Button type="button" variant="outline" onClick={runModelAudit} disabled={pending}>
+            {pending ? 'Задание…' : 'Прогнать моделью'}
+          </Button>
           {job ? <span className="text-sm text-[#1b7a45]">{job}</span> : null}
         </div>
-        <p className="mt-2 text-sm text-[#5d6878]">Задание очереди пересобирает уже посчитанный отчёт и модель не вызывает.</p>
+        <p className="mt-2 text-sm text-[#5d6878]">
+          «Пересобрать» не вызывает модель. «Прогнать моделью» сначала показывает цену прошлого прогона и пишет отчёт только этому руководителю.
+        </p>
       </Card>
       <Card className="mb-4">
         <h2 className="mb-2 text-lg font-semibold">Профиль</h2>
