@@ -15,7 +15,7 @@ import { departmentForLeader } from '../agents/k1.ts';
 import { accuracyView } from '../agents/accuracy.ts';
 import { controlOf, withLeader } from '../agents/control.ts';
 import { approveProtocol, parseProtocolCallback, protocolCard } from '../agents/protocol.ts';
-import { applyClick, applyLeaderAction, pullInbox, requestFeed, saveEditText } from '../agents/intake.ts';
+import { applyClick, applyLeaderAction, hideMailbox, pullInbox, requestFeed, saveEditText } from '../agents/intake.ts';
 import { acceptWeek, acceptWeekByChat, weekScene } from '../agents/week.ts';
 import { focusForLeader, sendFocus } from '../agents/focus-run.ts';
 import { mirrorForLeader, sendWeeklyNote, setSeriesFate } from '../agents/mirror-run.ts';
@@ -178,7 +178,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       .limit(1);
     return {
       name: leader.name,
-      profile: (profileRow[0]?.profile ?? '').slice(0, 700),
+      profile: hideMailbox((profileRow[0]?.profile ?? '').slice(0, 700), mailConfig()?.user ?? ''),
       linkCode: profileRow[0]?.linkCode ?? '',
       counts: {
         people: Number(peopleN[0]?.n ?? 0),

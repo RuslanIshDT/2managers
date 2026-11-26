@@ -1,6 +1,6 @@
 // Письмо из ящика → вердикт K2 → карточка или ответ.
 import { randomUUID } from 'node:crypto';
-import { and, asc, desc, eq } from 'drizzle-orm';
+import { and, asc, count, desc, eq, ne } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
 import { authorities, decisions, kpis, leaders, mailIn, people, revisions, tasks, verdicts } from '../db/schema.ts';
 import { mailConfig, sendMail, type MailboxLetter } from '../mail.ts';
@@ -352,16 +352,35 @@ export async function saveEditText(db: Db, chatId: string, text: string): Promis
   return `Правка записана для категории «${category}». Черновик этого решения обновлён, следующее письмо той же категории её учтёт.`;
 }
 
+export function hideMailbox(text: string, mailbox: string): string {
+  const own = mailbox.trim();
+  if (!own) return text;
+  return text.replace(new RegExp(own.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), '').replace(/[ \t]{2,}/g, ' ').trim();
+}
+
 export async function requestFeed(db: Db, leaderId: string) {
   await dropOwnMailbox(db, leaderId);
-  const rows = await db.select().from(verdicts).where(eq(verdicts.leaderId, leaderId)).orderBy(desc(verdicts.createdAt)).limit(20);
-  return rows.map((row) => ({
-    id: row.id,
-    kind: row.kind,
-    category: row.category,
-    summary: row.summary,
-    basis: row.basis,
-  }));
+  const mailbox = mailConfig()?.user ?? '';
+  const [hidden] = await db
+    .select({ n: count() })
+    .from(verdicts)
+    .where(and(eq(verdicts.leaderId, leaderId), eq(verdicts.kind, 'не_из_отдела')));
+  const rows = await db
+    .select()
+    .from(verdicts)
+    .where(and(eq(verdicts.leaderId, leaderId), ne(verdicts.kind, 'не_из_отдела')))
+    .orderBy(desc(verdicts.createdAt))
+    .limit(20);
+  return {
+    outside: Number(hidden?.n ?? 0),
+    items: rows.map((row) => ({
+      id: row.id,
+      kind: row.kind,
+      category: row.category,
+      summary: hideMailbox(row.summary, mailbox),
+      basis: hideMailbox(row.basis, mailbox),
+    })),
+  };
 }
 
 export async function deliverReply(name: string, email: string, subject: string, draft: string) {

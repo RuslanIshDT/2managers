@@ -4,7 +4,8 @@ import { checkDepartment, readDepartment } from '../src/agents/k1.ts';
 import { controlOf, kpiOutlook, reviewTasks, withLeader, type PersonGoal } from '../src/agents/control.ts';
 import { readFile } from 'node:fs/promises';
 import { chainKey, discountLimit, enforce, textSignals, type ModelVerdict } from '../src/agents/k2.ts';
-import { isOwnAddress, lettersForMailbox } from '../src/agents/intake.ts';
+import { hideMailbox, isOwnAddress, lettersForMailbox } from '../src/agents/intake.ts';
+import { pickDiscountAboveLimit } from '../src/agents/reset-stand.ts';
 import { freshVerdictKind } from '../src/agents/week.ts';
 import { applyRevision, revisionPrompt } from '../src/agents/revisions.ts';
 import { loadSynthetic } from '../src/data/synthetic.ts';
@@ -614,6 +615,36 @@ describe('цели, задачи и KPI', () => {
     expect(second.signals.length).toBeGreaterThan(0);
     const firstNames = new Set(synthetic.goals.flatMap((goal) => goal.owners));
     expect(second.goals.some((goal) => goal.owners.some((name) => firstNames.has(name)))).toBe(false);
+  });
+});
+
+describe('лента и сброс стенда', () => {
+  it('прячет адрес ящика и выбирает скидку выше полномочия без зашитого id', async () => {
+    expect(hideMailbox('Письмо на box@example.com и BOX@example.com', 'box@example.com')).toBe('Письмо на и');
+    const within = {
+      id: 'low',
+      fromEmail: 'a@example.com',
+      fromName: 'Аня',
+      subject: 'Скидка 8% клиенту',
+      body: '',
+      received: '2026-11-01T10:00:00',
+    };
+    const above = {
+      id: 'high',
+      fromEmail: 'old@example.com',
+      fromName: 'Боря',
+      subject: 'Скидка 12% клиенту',
+      body: '',
+      received: '2026-11-02T10:00:00',
+    };
+    const limits = [
+      { email: 'a@example.com', name: 'Аня', limit: 10 },
+      { email: 'new@example.com', name: 'Боря', limit: 10 },
+    ];
+    expect(pickDiscountAboveLimit([within, above], limits)?.id).toBe('high');
+    const source = await readFile('src/scripts/reset-stand.ts', 'utf8');
+    const picker = await readFile('src/agents/reset-stand.ts', 'utf8');
+    expect(source + picker).not.toMatch(/m062|Ольга|10%/);
   });
 });
 

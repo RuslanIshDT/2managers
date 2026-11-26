@@ -103,7 +103,7 @@ interface Cabinet {
   mail: 'configured' | 'missing';
   telegram: 'configured' | 'missing';
   department: { errors: string[]; people: DepartmentPerson[] };
-  feed: FeedItem[];
+  feed: { items: FeedItem[]; outside: number };
   week: WeekScene;
   focus: FocusScene;
   mirror: MirrorScene;
@@ -499,17 +499,18 @@ export function App() {
       {section === 'feed' ? (
       <Card className="mb-4">
         <h2 className="mb-2 text-lg font-semibold">Что помощник сделал сам</h2>
-        {cabinet?.feed.length ? (
+        {(cabinet?.feed.outside ?? 0) > 0 ? <p className="mb-3 text-sm text-[#5d6878]">Не из отдела: {cabinet?.feed.outside}</p> : null}
+        {cabinet && cabinet.feed.items.length ? (
           <ul className="grid gap-2 text-sm">
-            {cabinet.feed.map((item) => (
+            {cabinet.feed.items.map((item) => (
               <li key={item.id}>
                 <b>{kindLabel(item.kind)}</b> · {categoryWords(item.category)}
-                <span className="block">{item.summary}</span>
-                <span className="block text-[#5d6878]">{item.basis}</span>
+                <span className="block">{cleanDots(item.summary)}</span>
+                <span className="block text-[#5d6878]">{cleanDots(item.basis)}</span>
               </li>
             ))}
           </ul>
-        ) : (
+        ) : cabinet?.feed.outside ? null : (
           <p className="text-sm text-[#5d6878]">Пока пусто. Письма подчинённых читаются из ящика, не из файла.</p>
         )}
       </Card>
@@ -641,15 +642,18 @@ function Mirror({
       <Card className="mb-4">
         <h2 className="mb-2 text-lg font-semibold">Записки</h2>
         <p className="mb-2 text-sm text-[#5d6878]">В ящик уходит одна записка. Остальные видны здесь.</p>
-        <ul className="grid gap-2 text-sm">
-          {mirror.notes.map((note) => (
-            <li key={note.email}>
-              <b>{note.name}</b>
-              {note.quiet ? ' · тихая проблема' : ''}
-              <span className="block whitespace-pre-wrap text-[#5d6878]">{note.text}</span>
-            </li>
-          ))}
-        </ul>
+        <details className="text-sm">
+          <summary>подробнее</summary>
+          <ul className="mt-2 grid gap-2">
+            {mirror.notes.map((note) => (
+              <li key={note.email}>
+                <b>{note.name}</b>
+                {note.quiet ? ' · тихая проблема' : ''}
+                <span className="block whitespace-pre-wrap text-[#5d6878]">{cleanDots(note.text)}</span>
+              </li>
+            ))}
+          </ul>
+        </details>
         <Button className="mt-3" type="button" variant="outline" onClick={onSend} disabled={pending}>
           {pending ? 'Отправка…' : 'Отправить одну записку'}
         </Button>
@@ -667,7 +671,7 @@ function Mirror({
             {item.kind ? <span className="text-[#5d6878]"> · {item.kind}</span> : null}
             <span className="text-[#5d6878]"> · {verdictWords(item.verdict)}</span>
             <span className="block text-[#5d6878]">
-              {durationWords(item.hours)}. {item.change}
+              {cleanDots(`${durationWords(item.hours)}. ${item.change}`)}
               {item.action ? ` Записано: ${item.action}${item.reason ? ` — ${item.reason}` : ''}.` : ''}
             </span>
             <span className="mt-1 flex gap-2">
@@ -687,7 +691,7 @@ function Mirror({
 
 function Focus({ focus, pending, onSend }: { focus: FocusScene | undefined; pending: boolean; onSend: () => void }) {
   if (!focus) return null;
-  const [lead, rest] = focus.text.split('\n\nНе сегодня:');
+  const [lead, rest] = cleanDots(focus.text).split('\n\nНе сегодня:');
   return (
     <Card className="mb-4">
       <h2 className="mb-2 text-lg font-semibold">Три дела на сегодня</h2>
@@ -743,7 +747,7 @@ function Revisions({ rows, onSaved }: { rows: { id: string; category: string; in
       <ul className="mb-3 grid gap-1 text-sm">
         {rows.map((row) => (
           <li key={row.id}>
-            <b>{row.category}.</b> {row.instead}
+            <b>{row.category.replace(/\.+$/, '')}.</b> {cleanDots(row.instead)}
           </li>
         ))}
       </ul>
@@ -788,7 +792,7 @@ function Week({
           <p className="text-5xl font-semibold tabular-nums">{week.current}%</p>
           <p className="mt-2 text-sm text-[#5d6878]">
             {week.accepted
-              ? `Было ${week.before}%. Стало ${week.after}%. До руководителя не доходят ${countWords(week.stoppedLetters, 'письмо', 'письма', 'писем')} (около ${countWords(week.stoppedLetters * 4, 'минута', 'минуты', 'минут')}) и ${countWords(week.stoppedMeetings, 'встреча', 'встречи', 'встреч')}. Остаются ${countWords(week.stillLetters, 'письмо', 'письма', 'писем')} и ${countWords(week.stillMeetings, 'встреча', 'встречи', 'встреч')}.`
+              ? `Было ${week.before}%. Стало ${week.after}%. До руководителя не доходят ${countWords(week.stoppedLetters, 'письмо', 'письма', 'писем')} (${durationWords((week.stoppedLetters * 4) / 60)}) и ${countWords(week.stoppedMeetings, 'встреча', 'встречи', 'встреч')}. Остаются ${countWords(week.stillLetters, 'письмо', 'письма', 'писем')} и ${countWords(week.stillMeetings, 'встреча', 'встречи', 'встреч')}.`
               : `Сейчас на руководителя приходится весь поток: ${countWords(week.letters, 'письмо', 'письма', 'писем')} и ${countWords(week.meetings, 'встреча', 'встречи', 'встреч')}.`}
           </p>
         </>
@@ -890,7 +894,7 @@ function Goals({ control }: { control: Cabinet['control'] | undefined }) {
         ))}
       </ul>
       {control.holes.length ? (
-        <p className="mt-3 text-sm">Дыры: {control.holes.map((hole) => `${hole.kind} — ${hole.text}`).join('; ')}.</p>
+        <p className="mt-3 text-sm">{cleanDots(`Дыры: ${control.holes.map((hole) => `${hole.kind} — ${hole.text.replace(/\.+$/, '')}`).join('; ')}.`)}</p>
       ) : (
         <p className="mt-3 text-sm text-[#5d6878]">Дыр нет: у каждой цели есть владелец, у людей и задач есть цель.</p>
       )}
@@ -997,6 +1001,10 @@ function whenWords(value: string): string {
   const compact = /^(\d{4})(\d{2})(\d{2})/.exec(value);
   const iso = compact ? `${compact[1]}-${compact[2]}-${compact[3]}` : value;
   return dayWords(iso);
+}
+
+function cleanDots(text: string): string {
+  return text.replace(/\s+\./g, '.').replace(/\.{2,}/g, '.').trim();
 }
 
 function countWords(n: number, one: string, few: string, many: string): string {
