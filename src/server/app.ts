@@ -12,7 +12,7 @@ import { hashToken, newSessionToken, verifyPassword } from '../auth.ts';
 import type { Db } from '../db/client.ts';
 import { agentRuns, emails, flowReports, leaders, meetings, people, revisions, sessions, tasks, telegramClicks } from '../db/schema.ts';
 import { departmentForLeader } from '../agents/k1.ts';
-import { applyClick, pullInbox, requestFeed, saveEditText } from '../agents/intake.ts';
+import { applyClick, applyLeaderAction, pullInbox, requestFeed, saveEditText } from '../agents/intake.ts';
 import { acceptWeek, acceptWeekByChat, weekScene } from '../agents/week.ts';
 import { focusForLeader, sendFocus } from '../agents/focus-run.ts';
 import { mirrorForLeader, sendWeeklyNote, setSeriesFate } from '../agents/mirror-run.ts';
@@ -204,6 +204,17 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       createdAt: new Date(),
     });
     return { ok: true };
+  });
+
+  app.post('/api/decisions', async (request, reply) => {
+    const leader = await currentLeader(request);
+    if (!leader) return reply.code(401).send({ error: 'Нужен вход' });
+    const parsed = z
+      .object({ id: z.string().trim().min(1).max(64), action: z.enum(['approve', 'reject', 'defer']) })
+      .safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: 'Нужны решение и действие' });
+    const notice = await applyLeaderAction(deps.db, leader.id, parsed.data.action, parsed.data.id);
+    return { notice };
   });
 
   app.post('/api/rules/accept', async (request, reply) => {

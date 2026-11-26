@@ -71,11 +71,22 @@ interface WeekScene {
   askPercent: number;
   waitingHours: number;
   staff: StaffCard | null;
+  waiting: WaitingDecision[];
+}
+
+interface WaitingDecision {
+  id: string;
+  summary: string;
+  recommendation: string;
+  basis: string;
+  risks: string;
+  ifNot: string;
+  context: string;
 }
 
 interface FocusScene {
   text: string;
-  matrix: { name: string; basis: string; quiet: boolean }[];
+  matrix: { name: string; basis: string; quiet: boolean; cell?: string }[];
   share: { percent: number; onGoal: number; total: number };
 }
 
@@ -100,6 +111,16 @@ interface Cabinet {
   lastAudit: { status: string; mode: string; at: string } | null;
 }
 
+type Section = 'home' | 'department' | 'flow' | 'feed' | 'settings';
+
+const SECTIONS: { id: Section; label: string }[] = [
+  { id: 'home', label: 'Главная' },
+  { id: 'department', label: 'Отдел' },
+  { id: 'flow', label: 'Поток' },
+  { id: 'feed', label: 'Лента' },
+  { id: 'settings', label: 'Настройки' },
+];
+
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     ...init,
@@ -118,6 +139,7 @@ export function App() {
   const [pending, setPending] = useState(false);
   const [job, setJob] = useState('');
   const [mailNote, setMailNote] = useState('');
+  const [section, setSection] = useState<Section>('home');
 
   useEffect(() => {
     api<{ user: User | null }>('/api/me')
@@ -194,6 +216,23 @@ export function App() {
       setCabinet((prev) => (prev ? { ...prev, focus: { ...prev.focus, text: result.text } } : prev));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Не удалось отправить');
+    } finally {
+      setPending(false);
+    }
+  }
+
+  async function decide(id: string, action: 'approve' | 'reject' | 'defer') {
+    setError('');
+    setPending(true);
+    try {
+      const result = await api<{ notice: string }>('/api/decisions', {
+        method: 'POST',
+        body: JSON.stringify({ id, action }),
+      });
+      setJob(result.notice);
+      setCabinet(await api<Cabinet>('/api/cabinet'));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось записать решение');
     } finally {
       setPending(false);
     }
@@ -328,47 +367,70 @@ export function App() {
 
   const counts = cabinet?.counts;
   return (
-    <main className="mx-auto max-w-3xl px-4 py-10">
-      <div className="mb-6 flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold">{cabinet?.name ?? user.name}</h1>
-          <p className="text-[#5d6878]">Каталог загружен в базу. Профиль правится файлом, здесь только просмотр.</p>
-        </div>
+    <main className="mx-auto max-w-3xl px-4 py-8">
+      <div className="mb-4 flex items-start justify-between gap-4">
+        <h1 className="text-2xl font-semibold">{cabinet?.name ?? user.name}</h1>
         <Button type="button" variant="outline" onClick={logout}>
           Выйти
         </Button>
       </div>
+      <nav className="mb-6 flex flex-wrap gap-2">
+        {SECTIONS.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            className={`rounded-full px-3 py-1 text-sm ${section === item.id ? 'bg-[#1f5fbf] text-white' : 'bg-white text-[#1c2430]'}`}
+            onClick={() => setSection(item.id)}
+          >
+            {item.label}
+          </button>
+        ))}
+      </nav>
       {error ? <p className="mb-4 text-sm text-[#a3302a]">{error}</p> : null}
-      <Week week={cabinet?.week} pending={pending} onAccept={acceptRules} />
-      <Revisions
-        rows={cabinet?.revisions ?? []}
-        onSaved={async () => {
-          const fresh = await api<Cabinet>('/api/cabinet');
-          setCabinet(fresh);
-        }}
-      />
-      <Focus focus={cabinet?.focus} pending={pending} onSend={sendFocusNow} />
-      <Mirror mirror={cabinet?.mirror} pending={pending} onSend={sendNote} onSeries={seriesAction} />
-      <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Stat label="Люди" value={counts?.people} />
-        <Stat label="Письма" value={counts?.emails} />
-        <Stat label="Встречи" value={counts?.meetings} />
-        <Stat label="Задачи" value={counts?.tasks} />
-      </div>
-      <Department department={cabinet?.department} />
+      {section === 'home' ? (
+        <>
+          <Week
+            week={cabinet?.week}
+            mode="home"
+            pending={pending}
+            onAccept={acceptRules}
+            onDecision={decide}
+          />
+          <Focus focus={cabinet?.focus} pending={pending} onSend={sendFocusNow} />
+        </>
+      ) : null}
+      {section === 'department' ? (
+        <>
+          <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <Stat label="Люди" value={counts?.people} />
+            <Stat label="Письма" value={counts?.emails} />
+            <Stat label="Встречи" value={counts?.meetings} />
+            <Stat label="Задачи" value={counts?.tasks} />
+          </div>
+          <Department department={cabinet?.department} />
+          <Matrix rows={cabinet?.focus.matrix ?? []} />
+          <Mirror mirror={cabinet?.mirror} part="notes" pending={pending} onSend={sendNote} onSeries={seriesAction} />
+        </>
+      ) : null}
+      {section === 'flow' ? (
+        <>
+          <Week week={cabinet?.week} mode="flow" pending={pending} onAccept={acceptRules} />
+          <Mirror mirror={cabinet?.mirror} part="series" pending={pending} onSend={sendNote} onSeries={seriesAction} />
+          <p className="text-sm">
+            <a className="text-[#1f5fbf] underline" href="/audit/">
+              Полный аудит потока
+            </a>
+          </p>
+        </>
+      ) : null}
+      {section === 'feed' ? (
       <Card className="mb-4">
-        <h2 className="mb-2 text-lg font-semibold">Лента просьб</h2>
-        <div className="mb-3 flex flex-wrap items-center gap-3">
-          <Button type="button" onClick={pullMail} disabled={pending}>
-            {pending ? 'Разбор…' : 'Разобрать новые письма'}
-          </Button>
-          {mailNote ? <span className="text-sm text-[#1b7a45]">{mailNote}</span> : null}
-        </div>
+        <h2 className="mb-2 text-lg font-semibold">Что помощник сделал сам</h2>
         {cabinet?.feed.length ? (
           <ul className="grid gap-2 text-sm">
             {cabinet.feed.map((item) => (
               <li key={item.id}>
-                <b>{kindLabel(item.kind)}</b> · {item.category}
+                <b>{kindLabel(item.kind)}</b> · {categoryWords(item.category)}
                 <span className="block">{item.summary}</span>
                 <span className="block text-[#5d6878]">{item.basis}</span>
               </li>
@@ -378,6 +440,16 @@ export function App() {
           <p className="text-sm text-[#5d6878]">Пока пусто. Письма подчинённых читаются из ящика, не из файла.</p>
         )}
       </Card>
+      ) : null}
+      {section === 'settings' ? (
+        <>
+      <Revisions
+        rows={cabinet?.revisions ?? []}
+        onSaved={async () => {
+          const fresh = await api<Cabinet>('/api/cabinet');
+          setCabinet(fresh);
+        }}
+      />
       <Card className="mb-4">
         <h2 className="mb-2 text-lg font-semibold">Подключения</h2>
         <ul className="grid gap-1 text-sm">
@@ -386,6 +458,10 @@ export function App() {
           <li>Код для бота: <code>{cabinet?.linkCode || '…'}</code> — сообщение <code>/start {cabinet?.linkCode}</code></li>
         </ul>
         <div className="mt-4 flex flex-wrap items-center gap-3">
+          <Button type="button" onClick={pullMail} disabled={pending}>
+            {pending ? 'Разбор…' : 'Разобрать новые письма'}
+          </Button>
+          {mailNote ? <span className="text-sm text-[#1b7a45]">{mailNote}</span> : null}
           <Button type="button" onClick={rebuildAudit} disabled={pending}>
             {pending ? 'Задание…' : 'Пересобрать отчёт аудита'}
           </Button>
@@ -400,56 +476,65 @@ export function App() {
       </Card>
       <Card className="mb-4">
         <h2 className="mb-2 text-lg font-semibold">Профиль</h2>
-        <pre className="whitespace-pre-wrap font-sans text-sm leading-relaxed">{cabinet?.profile}</pre>
+        <div className="whitespace-pre-wrap font-sans text-sm leading-relaxed">{plainProfile(cabinet?.profile ?? '')}</div>
       </Card>
       <p className="text-sm text-[#5d6878]">
-        <a className="text-[#1f5fbf] underline" href="/audit/">
-          Аудит потока
-        </a>
-        {' · '}
         <a className="text-[#1f5fbf] underline" href="/form/">
           Форма сдачи
         </a>
       </p>
+        </>
+      ) : null}
     </main>
   );
 }
 
 function Mirror({
   mirror,
+  part,
   pending,
   onSend,
   onSeries,
 }: {
   mirror: MirrorScene | undefined;
+  part: 'notes' | 'series';
   pending: boolean;
   onSend: () => void;
   onSeries: (key: string, action: 'продлить' | 'отпустить') => void;
 }) {
   if (!mirror) return null;
+  if (part === 'notes') {
+    return (
+      <Card className="mb-4">
+        <h2 className="mb-2 text-lg font-semibold">Записки</h2>
+        <p className="mb-2 text-sm text-[#5d6878]">В ящик уходит одна записка. Остальные видны здесь.</p>
+        <ul className="grid gap-2 text-sm">
+          {mirror.notes.map((note) => (
+            <li key={note.email}>
+              <b>{note.name}</b>
+              {note.quiet ? ' · тихая проблема' : ''}
+              <span className="block whitespace-pre-wrap text-[#5d6878]">{note.text}</span>
+            </li>
+          ))}
+        </ul>
+        <Button className="mt-3" type="button" variant="outline" onClick={onSend} disabled={pending}>
+          {pending ? 'Отправка…' : 'Отправить одну записку'}
+        </Button>
+      </Card>
+    );
+  }
   return (
     <Card className="mb-4">
-      <h2 className="mb-2 text-lg font-semibold">Записки и серии встреч</h2>
-      <p className="mb-2 text-sm text-[#5d6878]">Календарь не подключён: «продлить» и «отпустить» только записывают решение. Рассылка всем подчинённым — нет, в ящик уходит одна записка.</p>
-      <ul className="grid gap-2 text-sm">
-        {mirror.notes.map((note) => (
-          <li key={note.email}>
-            <b>{note.name}</b>
-            {note.quiet ? ' · тихая проблема' : ''}
-            <span className="block whitespace-pre-wrap text-[#5d6878]">{note.text}</span>
-          </li>
-        ))}
-      </ul>
-      <Button className="mt-3" type="button" variant="outline" onClick={onSend} disabled={pending}>
-        {pending ? 'Отправка…' : 'Отправить одну записку'}
-      </Button>
+      <h2 className="mb-2 text-lg font-semibold">Серии встреч</h2>
+      <p className="mb-2 text-sm text-[#5d6878]">Календарь не подключён: «продлить» и «отпустить» только записывают решение.</p>
       <ul className="mt-4 grid gap-3 text-sm">
         {mirror.series.map((item) => (
           <li key={item.title}>
             <b>{item.title}</b>
             {item.kind ? <span className="text-[#5d6878]"> · {item.kind}</span> : null}
+            <span className="text-[#5d6878]"> · {verdictWords(item.verdict)}</span>
             <span className="block text-[#5d6878]">
-              {item.verdict}, {item.hours} ч. {item.change}
+              {item.hours} ч. {item.change}
               {item.action ? ` Записано: ${item.action}${item.reason ? ` — ${item.reason}` : ''}.` : ''}
             </span>
             <span className="mt-1 flex gap-2">
@@ -469,10 +554,30 @@ function Mirror({
 
 function Focus({ focus, pending, onSend }: { focus: FocusScene | undefined; pending: boolean; onSend: () => void }) {
   if (!focus) return null;
+  const [lead, rest] = focus.text.split('\n\nНе сегодня:');
   return (
     <Card className="mb-4">
-      <h2 className="mb-2 text-lg font-semibold">Утро и матрица</h2>
-      <pre className="whitespace-pre-wrap font-sans text-sm leading-relaxed">{focus.text}</pre>
+      <h2 className="mb-2 text-lg font-semibold">Три дела на сегодня</h2>
+      {taskLines(lead).length === 0 ? <div className="whitespace-pre-wrap text-sm leading-relaxed">{lead}</div> : null}
+      <ul className="grid gap-2 text-sm">
+        {taskLines(lead).map((item) => (
+          <li key={item.short}>
+            <p>{item.short}</p>
+            {item.rest ? (
+              <details className="text-[#5d6878]">
+                <summary>подробнее</summary>
+                <p className="mt-1">{item.rest}</p>
+              </details>
+            ) : null}
+          </li>
+        ))}
+      </ul>
+      {rest ? (
+        <details className="mt-3 text-sm text-[#5d6878]">
+          <summary>Не сегодня</summary>
+          <div className="mt-2 whitespace-pre-wrap">Не сегодня:{rest}</div>
+        </details>
+      ) : null}
       <p className="mt-2 text-sm text-[#5d6878]">
         Расписание: 8:30 каждый день и пятница в 17:00, часовой пояс Москвы. Кнопка отправляет то же сообщение сейчас.
       </p>
@@ -527,56 +632,111 @@ function Revisions({ rows, onSaved }: { rows: { id: string; category: string; in
   );
 }
 
-function Week({ week, pending, onAccept }: { week: WeekScene | undefined; pending: boolean; onAccept: () => void }) {
+function Week({
+  week,
+  mode,
+  pending,
+  onAccept,
+  onDecision,
+}: {
+  week: WeekScene | undefined;
+  mode: 'home' | 'flow';
+  pending: boolean;
+  onAccept: () => void;
+  onDecision?: (id: string, action: 'approve' | 'reject' | 'defer') => void;
+}) {
   if (!week) return null;
   const staff = week.staff;
   return (
     <Card className="mb-4">
-      <p className="text-sm text-[#5d6878]">Доля потока, которая всё ещё требует руководителя</p>
-      <p className="text-5xl font-semibold tabular-nums">{week.current}%</p>
-      <p className="mt-2 text-sm text-[#5d6878]">
-        {week.accepted
-          ? `Было ${week.before}% писем и встреч. После правил руководителю остаются ${week.stillLetters} писем и ${week.stillMeetings} встреч из ${week.letters} и ${week.meetings}. Не доходят ${week.stoppedLetters} писем и ${week.stoppedMeetings} встреч. Сводкой: ${week.digestLetters} писем и ${week.digestMeetings} встреч. Повторы склеены: ${week.gluedLetters} писем и ${week.gluedMeetings} встреч. Оставшееся: ${week.remaining.join('; ') || 'нет'}. Среди разобранных просьб руководителя просят ${week.askPercent}%. Ждут решения ${week.waitingHours} ч.`
-          : `Сейчас на руководителя приходится весь поток: ${week.letters} писем и ${week.meetings} встреч. Правила ещё не приняты.`}
-      </p>
-      {week.offers.map((offer) => (
-        <p key={offer} className="mt-3 text-sm">
-          {offer}
-        </p>
-      ))}
-      {week.accepted ? (
-        <p className="mt-3 text-sm text-[#1b7a45]">Правила приняты, записаны в базу ({week.rules}).</p>
+      {mode === 'home' ? (
+        <>
+          <p className="text-sm text-[#5d6878]">Доля потока, которая всё ещё требует руководителя</p>
+          <p className="text-5xl font-semibold tabular-nums">{week.current}%</p>
+          <p className="mt-2 text-sm text-[#5d6878]">
+            {week.accepted
+              ? `Было ${week.before}%. Стало ${week.after}%. До руководителя не доходят ${week.stoppedLetters} писем (около ${letterHours(week.stoppedLetters)} ч) и ${week.stoppedMeetings} встреч. Остаются ${week.stillLetters} писем и ${week.stillMeetings} встреч.`
+              : `Сейчас на руководителя приходится весь поток: ${week.letters} писем и ${week.meetings} встреч.`}
+          </p>
+        </>
       ) : (
-        <Button className="mt-3" type="button" onClick={onAccept} disabled={pending}>
-          {pending ? 'Запись…' : 'Принять правила недели'}
-        </Button>
+        <p className="text-sm text-[#5d6878]">
+          {week.accepted
+            ? `Повторы склеены: ${week.gluedLetters} писем и ${week.gluedMeetings} встреч. Сводкой: ${week.digestLetters} писем и ${week.digestMeetings} встреч. Оставшееся: ${week.remaining.join('; ') || 'нет'}.`
+            : 'Правила недели ещё не приняты.'}
+        </p>
       )}
-      {staff ? (
+      {mode === 'flow'
+        ? week.offers.map((offer) => (
+            <p key={offer} className="mt-3 text-sm">
+              {offer}
+            </p>
+          ))
+        : null}
+      {mode === 'flow' ? (
+        week.accepted ? (
+          <p className="mt-3 text-sm text-[#1b7a45]">Правила приняты ({week.rules}).</p>
+        ) : (
+          <Button className="mt-3" type="button" onClick={onAccept} disabled={pending}>
+            {pending ? 'Запись…' : 'Принять правила недели'}
+          </Button>
+        )
+      ) : null}
+      {mode === 'home'
+        ? (week.waiting ?? []).map((item) => (
+            <div key={item.id} className="mt-4 border-t border-[#e6ebf2] pt-3 text-sm">
+              <p className="font-semibold">Ждёт решения</p>
+              <p className="mt-1">{item.summary}</p>
+              <details className="mt-2 text-[#5d6878]">
+                <summary>подробнее</summary>
+                <p className="mt-2">{item.recommendation}</p>
+                <p className="mt-1">{item.basis}</p>
+              </details>
+              <span className="mt-2 flex flex-wrap gap-2">
+                <Button type="button" disabled={pending} onClick={() => onDecision?.(item.id, 'approve')}>
+                  Утвердить
+                </Button>
+                <Button type="button" variant="outline" disabled={pending} onClick={() => onDecision?.(item.id, 'reject')}>
+                  Отклонить
+                </Button>
+                <Button type="button" variant="outline" disabled={pending} onClick={() => onDecision?.(item.id, 'defer')}>
+                  Отложить
+                </Button>
+              </span>
+            </div>
+          ))
+        : null}
+      {mode === 'home' && staff && (week.waiting ?? []).length === 0 ? (
         <dl className="mt-4 grid gap-2 text-sm">
           <div>
             <dt className="font-semibold">Вывод</dt>
             <dd>{staff.вывод}</dd>
           </div>
-          <div>
-            <dt className="font-semibold">Рекомендация</dt>
-            <dd>{staff.рекомендация}</dd>
-          </div>
-          <div>
-            <dt className="font-semibold">Основание</dt>
-            <dd>{staff.основание}</dd>
-          </div>
-          <div>
-            <dt className="font-semibold">Риски</dt>
-            <dd>{staff.риски}</dd>
-          </div>
-          <div>
-            <dt className="font-semibold">Если не решить</dt>
-            <dd>{staff.если_не_решить}</dd>
-          </div>
-          <div>
-            <dt className="font-semibold">Контекст</dt>
-            <dd>{staff.контекст}</dd>
-          </div>
+          <details className="text-[#5d6878]">
+            <summary>подробнее</summary>
+            <div className="mt-2 grid gap-2">
+              <div>
+                <dt className="font-semibold text-[#1c2430]">Рекомендация</dt>
+                <dd>{staff.рекомендация}</dd>
+              </div>
+              <div>
+                <dt className="font-semibold text-[#1c2430]">Основание</dt>
+                <dd>{staff.основание}</dd>
+              </div>
+              <div>
+                <dt className="font-semibold text-[#1c2430]">Риски</dt>
+                <dd>{staff.риски}</dd>
+              </div>
+              <div>
+                <dt className="font-semibold text-[#1c2430]">Если не решить</dt>
+                <dd>{staff.если_не_решить}</dd>
+              </div>
+              <div>
+                <dt className="font-semibold text-[#1c2430]">Контекст</dt>
+                <dd>{staff.контекст}</dd>
+              </div>
+            </div>
+          </details>
         </dl>
       ) : null}
     </Card>
@@ -620,8 +780,14 @@ function Department({ department }: { department: Cabinet['department'] | undefi
                   KPI: {kpi.name}, {kpi.unit}, лучше когда {kpi.better}
                   {kpi.quarter ? ` · квартал ${kpi.quarter.fact} из ${kpi.quarter.plan}` : ''}
                 </p>
+                <div className="mt-1 h-2 rounded bg-[#e6ebf2]">
+                  <div
+                    className={`h-2 rounded ${kpi.quarter && kpiBehind(kpi.quarter.fact, kpi.quarter.plan, kpi.better) ? 'bg-[#a3302a]' : 'bg-[#1f5fbf]'}`}
+                    style={{ width: `${barWidth(kpi.quarter?.fact, kpi.quarter?.plan, kpi.better)}%` }}
+                  />
+                </div>
                 <p className="text-[#5d6878]">
-                  {kpi.weeks.map((week) => `${week.week.slice(5)} ${week.fact}/${week.plan} ${week.status}`).join(' · ')}
+                  {kpi.weeks.map((week) => `${dayWords(week.week)} ${week.fact}/${week.plan} ${week.status}`).join(' · ')}
                 </p>
               </div>
             ))}
@@ -632,11 +798,98 @@ function Department({ department }: { department: Cabinet['department'] | undefi
   );
 }
 
+function taskLines(text: string): { short: string; rest: string }[] {
+  return text
+    .split('\n')
+    .filter((line) => /^\d+\./.test(line))
+    .map((line) => {
+      const body = line.replace(/^\d+\.\s*/, '');
+      const dot = body.indexOf('. ');
+      if (dot < 0) return { short: body, rest: '' };
+      return { short: body.slice(0, dot), rest: body.slice(dot + 2) };
+    });
+}
+
+function letterHours(letters: number): number {
+  return Math.round((letters * 4) / 60);
+}
+
+function barWidth(fact: string | undefined, plan: string | undefined, better: string): number {
+  const left = Number(fact);
+  const right = Number(plan);
+  if (!Number.isFinite(left) || !Number.isFinite(right) || right <= 0) return 0;
+  const ratio = better === 'меньше' ? right / Math.max(left, 0.01) : left / right;
+  return Math.max(0, Math.min(100, Math.round(ratio * 100)));
+}
+
+function kpiBehind(fact: string, plan: string, better: string): boolean {
+  return better === 'меньше' ? Number(fact) > Number(plan) : Number(fact) < Number(plan);
+}
+
+function plainProfile(text: string): string {
+  return text.replace(/^#{1,6}\s+/gm, '').replace(/\*\*/g, '');
+}
+
+const MATRIX_CELLS = [
+  { id: 'один_на_один', title: 'Один на один', hint: 'отстаёт и пишет мало' },
+  { id: 'помочь', title: 'Помочь', hint: 'отстаёт и пишет много' },
+  { id: 'не_трогать', title: 'Не трогать', hint: 'в норме, пишет мало' },
+  { id: 'расширить', title: 'Расширить полномочия', hint: 'в норме, пишет много' },
+];
+
+function Matrix({ rows }: { rows: { name: string; cell?: string; quiet: boolean }[] }) {
+  if (!rows.length) return null;
+  return (
+    <section className="mb-4">
+      <h2 className="mb-2 text-lg font-semibold">Матрица отдела</h2>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        {MATRIX_CELLS.map((cell) => (
+          <Card key={cell.id}>
+            <p className="font-semibold">{cell.title}</p>
+            <p className="text-sm text-[#5d6878]">{cell.hint}</p>
+            <ul className="mt-2 text-sm">
+              {rows
+                .filter((row) => row.cell === cell.id)
+                .map((row) => (
+                  <li key={row.name}>
+                    {row.name}
+                    {row.quiet ? ' · тихая проблема' : ''}
+                  </li>
+                ))}
+            </ul>
+          </Card>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function kindLabel(kind: string): string {
-  if (kind === 'нужен_руководитель') return 'Нужен руководитель';
+  if (kind === 'нужен_руководитель') return 'Нужно ваше решение';
   if (kind === 'вернуть') return 'Вернул';
   if (kind === 'повтор') return 'Повтор, не спрашиваю';
+  if (kind === 'не_из_отдела') return 'Не из отдела';
   return kind;
+}
+
+function categoryWords(category: string): string {
+  if (category === 'обязательства_клиентам') return 'обязательства клиентам';
+  if (category === 'не_из_отдела') return 'не из отдела';
+  return category;
+}
+
+function dayWords(iso: string): string {
+  const months = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+  if (!match) return iso;
+  return `${Number(match[3])} ${months[Number(match[2]) - 1] ?? ''}`.trim();
+}
+
+function verdictWords(verdict: string): string {
+  if (verdict === 'не_должно') return 'убрать из потока';
+  if (verdict === 'в_другом_виде') return 'изменить форму';
+  if (verdict === 'должно') return 'оставить';
+  return verdict;
 }
 
 function Stat({ label, value }: { label: string; value: number | undefined }) {

@@ -277,10 +277,14 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
 export async function applyClick(db: Db, action: string, decisionId: string, chatId: string): Promise<string> {
   const [leader] = await db.select().from(leaders).where(eq(leaders.telegramChatId, chatId)).limit(1);
   if (!leader) return 'Чат не привязан';
+  return applyLeaderAction(db, leader.id, action, decisionId);
+}
+
+export async function applyLeaderAction(db: Db, leaderId: string, action: string, decisionId: string): Promise<string> {
   const [decision] = await db
     .select()
     .from(decisions)
-    .where(and(eq(decisions.id, decisionId), eq(decisions.leaderId, leader.id)))
+    .where(and(eq(decisions.id, decisionId), eq(decisions.leaderId, leaderId)))
     .limit(1);
   if (!decision) return 'Решение не найдено';
   if (decision.status !== 'ждёт') return `Уже ${decision.status}`;

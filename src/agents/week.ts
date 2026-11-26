@@ -90,6 +90,20 @@ export async function weekScene(db: Db, leaderId: string) {
     askPercent: askShare(verdictRows.map((row) => row.kind)),
     waitingHours: waitingHours(decisionRows, new Date()),
     staff,
+    waiting: decisionRows
+      .filter((row) => row.status === 'ждёт')
+      .map((row) => {
+        const verdict = verdictRows.find((item) => item.id === `v-${row.id}`);
+        return {
+          id: row.id,
+          summary: row.summary,
+          recommendation: verdict?.recommendation ?? '',
+          basis: verdict?.basis ?? '',
+          risks: verdict?.risks ?? '',
+          ifNot: verdict?.ifNot ?? '',
+          context: verdict?.context ?? '',
+        };
+      }),
   };
 }
 
