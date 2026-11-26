@@ -13,10 +13,11 @@ import type { Db } from '../db/client.ts';
 import { agentRuns, emails, leaders, meetings, people, sessions, tasks, telegramClicks } from '../db/schema.ts';
 import { departmentForLeader } from '../agents/k1.ts';
 import { applyClick, pullInbox, requestFeed } from '../agents/intake.ts';
+import { acceptWeek, acceptWeekByChat, weekScene } from '../agents/week.ts';
 import { checkMail, mailConfig, readSyntheticInbox } from '../mail.ts';
 import { applyOrigin, formOrigin } from '../http/origin.ts';
 import { FLOW_AUDIT_QUEUE, type FlowAuditJob } from '../jobs/flow-audit-job.ts';
-import { answerCallback, parseCallback, parseStart, sendMessage, telegramConfigured } from '../telegram.ts';
+import { answerCallback, parseCallback, parseRuleCallback, parseStart, sendMessage, sendRulesCard, telegramConfigured } from '../telegram.ts';
 
 const COOKIE = 'sid';
 const SESSION_MS = 14 * 24 * 60 * 60 * 1000;
@@ -74,6 +75,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
         id: leaders.id,
         login: leaders.login,
         name: leaders.name,
+        telegramChatId: leaders.telegramChatId,
         expiresAt: sessions.expiresAt,
       })
       .from(sessions)
@@ -178,8 +180,26 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       telegram: telegramConfigured() ? 'configured' : 'missing',
       department,
       feed: await requestFeed(deps.db, leader.id),
+      week: await weekScene(deps.db, leader.id),
       lastAudit: last[0] ? { status: last[0].status, mode: last[0].reason, at: last[0].startedAt.toISOString() } : null,
     };
+  });
+
+  app.post('/api/rules/accept', async (request, reply) => {
+    const leader = await currentLeader(request);
+    if (!leader) return reply.code(401).send({ error: 'Нужен вход' });
+    const scene = await acceptWeek(deps.db, leader.id);
+    if (leader.telegramChatId && telegramConfigured()) {
+      try {
+        await sendRulesCard(
+          `Правила недели приняты на стенде. Индекс ${scene.before}% → ${scene.after}%. Кнопка повторяет то же действие.`,
+          leader.telegramChatId,
+        );
+      } catch (err) {
+        console.error('Карточка правил в Telegram не ушла', err);
+      }
+    }
+    return scene;
   });
 
   app.post('/api/mail/check', async (request, reply) => {
@@ -235,16 +255,23 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     const update = parsed.data;
     if (update.callback_query?.data) {
       const parsedClick = parseCallback(update.callback_query.data);
+      const ruleClick = parseRuleCallback(update.callback_query.data);
       const chatId = String(update.callback_query.message?.chat.id ?? '');
       await deps.db.insert(telegramClicks).values({
         updateId: update.update_id,
         chatId,
         data: update.callback_query.data,
-        action: parsedClick?.action ?? null,
+        action: parsedClick?.action ?? (ruleClick ? 'accept' : null),
         receivedAt: new Date(),
       });
-      let notice = parsedClick ? 'Кнопка получена' : 'Неизвестная кнопка';
-      if (parsedClick && chatId) {
+      let notice = parsedClick || ruleClick ? 'Кнопка получена' : 'Неизвестная кнопка';
+      if (chatId && ruleClick) {
+        try {
+          notice = await acceptWeekByChat(deps.db, chatId);
+        } catch (err) {
+          notice = err instanceof Error ? err.message.slice(0, 180) : 'Не удалось выполнить';
+        }
+      } else if (parsedClick && chatId) {
         try {
           notice = await applyClick(deps.db, parsedClick.action, parsedClick.decisionId, chatId);
         } catch (err) {

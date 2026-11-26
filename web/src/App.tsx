@@ -41,6 +41,31 @@ interface FeedItem {
   basis: string;
 }
 
+interface StaffCard {
+  вывод: string;
+  рекомендация: string;
+  основание: string;
+  риски: string;
+  если_не_решить: string;
+  контекст: string;
+}
+
+interface WeekScene {
+  accepted: boolean;
+  before: number;
+  after: number;
+  current: number;
+  flowHours: number;
+  stillHours: number;
+  stoppedLetters: number;
+  stoppedMeetings: number;
+  digestLetters: number;
+  digestMeetings: number;
+  offer: string;
+  rules: number;
+  staff: StaffCard | null;
+}
+
 interface Cabinet {
   name: string;
   profile: string;
@@ -50,6 +75,7 @@ interface Cabinet {
   telegram: 'configured' | 'missing';
   department: { errors: string[]; people: DepartmentPerson[] };
   feed: FeedItem[];
+  week: WeekScene;
   lastAudit: { status: string; mode: string; at: string } | null;
 }
 
@@ -107,6 +133,19 @@ export function App() {
     await api('/api/logout', { method: 'POST' });
     setUser(null);
     setCabinet(null);
+  }
+
+  async function acceptRules() {
+    setError('');
+    setPending(true);
+    try {
+      const week = await api<WeekScene>('/api/rules/accept', { method: 'POST', body: '{}' });
+      setCabinet((prev) => (prev ? { ...prev, week } : prev));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось принять правила');
+    } finally {
+      setPending(false);
+    }
   }
 
   async function pullMail() {
@@ -205,6 +244,7 @@ export function App() {
         </Button>
       </div>
       {error ? <p className="mb-4 text-sm text-[#a3302a]">{error}</p> : null}
+      <Week week={cabinet?.week} pending={pending} onAccept={acceptRules} />
       <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Stat label="Люди" value={counts?.people} />
         <Stat label="Письма" value={counts?.emails} />
@@ -263,6 +303,58 @@ export function App() {
         </a>
       </p>
     </main>
+  );
+}
+
+function Week({ week, pending, onAccept }: { week: WeekScene | undefined; pending: boolean; onAccept: () => void }) {
+  if (!week) return null;
+  const staff = week.staff;
+  return (
+    <Card className="mb-4">
+      <p className="text-sm text-[#5d6878]">Доля потока, которая всё ещё требует руководителя</p>
+      <p className="text-5xl font-semibold tabular-nums">{week.current}%</p>
+      <p className="mt-2 text-sm text-[#5d6878]">
+        {week.accepted
+          ? `Было ${week.before}%. После правил остаётся ${week.stillHours} ч из ${week.flowHours}. Не приходят ${week.stoppedLetters} писем и ${week.stoppedMeetings} встречи. Ещё ${week.digestLetters} писем и ${week.digestMeetings} встреч — только сводкой.`
+          : `Сейчас на руководителя приходится весь поток: ${week.flowHours} ч в неделю. Правила аудита ещё не приняты.`}
+      </p>
+      {week.offer ? <p className="mt-3 text-sm">{week.offer}</p> : null}
+      {week.accepted ? (
+        <p className="mt-3 text-sm text-[#1b7a45]">Правила приняты, записаны в базу ({week.rules}).</p>
+      ) : (
+        <Button className="mt-3" type="button" onClick={onAccept} disabled={pending}>
+          {pending ? 'Запись…' : 'Принять правила недели'}
+        </Button>
+      )}
+      {staff ? (
+        <dl className="mt-4 grid gap-2 text-sm">
+          <div>
+            <dt className="font-semibold">Вывод</dt>
+            <dd>{staff.вывод}</dd>
+          </div>
+          <div>
+            <dt className="font-semibold">Рекомендация</dt>
+            <dd>{staff.рекомендация}</dd>
+          </div>
+          <div>
+            <dt className="font-semibold">Основание</dt>
+            <dd>{staff.основание}</dd>
+          </div>
+          <div>
+            <dt className="font-semibold">Риски</dt>
+            <dd>{staff.риски}</dd>
+          </div>
+          <div>
+            <dt className="font-semibold">Если не решить</dt>
+            <dd>{staff.если_не_решить}</dd>
+          </div>
+          <div>
+            <dt className="font-semibold">Контекст</dt>
+            <dd>{staff.контекст}</dd>
+          </div>
+        </dl>
+      ) : null}
+    </Card>
   );
 }
 

@@ -175,6 +175,18 @@ export const decisions = pgTable('decisions', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
 });
 
+export const rules = pgTable('rules', {
+  id: text('id').primaryKey(),
+  leaderId: text('leader_id').notNull(),
+  kind: text('kind').notNull(),
+  title: text('title').notNull(),
+  personId: text('person_id').notNull().default(''),
+  area: text('area').notNull().default(''),
+  limitValue: text('limit_value').notNull().default(''),
+  cause: text('cause').notNull().default(''),
+  acceptedAt: timestamp('accepted_at', { withTimezone: true }).notNull(),
+});
+
 export const llmCalls = pgTable('llm_calls', {
   id: bigserial('id', { mode: 'number' }).primaryKey(),
   leaderId: text('leader_id'),

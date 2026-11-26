@@ -65,7 +65,13 @@ it.append(tabs,list);show();app.append(it);
 const et=el('section');et.append(el('h2','','Сравнение с эталоном заказчика'),el('p','small mut','Эталон модели не отдавался. По строкам — вердикт аудитора, по столбцам — что заказчик в синтетике считает правильным действием с письмом.'));
 const t2=el('table'),h2=el('tr');h2.append(el('th','','Аудитор \\ эталон'));s.etalon.actions.forEach(a=>h2.append(el('th','n',a.replace(/_/g,' '))));t2.append(h2);
 s.etalon.rows.forEach(rw=>{const tr=el('tr');tr.append(el('td','',rw.label));rw.cells.forEach(c=>tr.append(el('td','n',c)));t2.append(tr)});et.append(t2);app.append(et);
-app.append(el('footer','',`Допущения: ${s.assumptions} Агент — аудитор потока, модель ${s.model}, ${s.calls} вызовов, ≈ ${s.costUsd.toLocaleString('ru-RU')} USD. Отчёт от ${when(s.at)}. Подготовил ИИ-помощник.`))}
+app.append(el('footer','',`Допущения: ${s.assumptions} Агент — аудитор потока, модель ${s.model}, ${s.calls} вызовов, ≈ ${s.costUsd.toLocaleString('ru-RU')} USD. Отчёт от ${when(s.at)}. Подготовил ИИ-помощник.`));
+const act=el('section');act.append(el('h2','','Принять эти правила'));
+const note=el('p','small mut','Кнопка записывает оргизменения аудита и право Ольги на скидку до 10%. Новых вызовов модели нет. Нужен вход на стенде.');
+const btn=el('button','','Принять правила недели');btn.type='button';btn.style.cssText='margin-top:12px;font:inherit;padding:8px 14px;border-radius:8px;border:0;background:var(--acc);color:#fff;cursor:pointer';
+const out=el('p','small','');
+btn.onclick=async()=>{btn.disabled=true;out.textContent='Запись…';try{const res=await fetch('/api/rules/accept',{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json'},body:'{}'});const data=await res.json();if(res.status===401){out.textContent='Сначала войдите на главной странице стенда.';return}if(!res.ok)throw Error(data.error||res.status);out.textContent=`Принято. Индекс ${data.before}% → ${data.after}%. В кабинете цифра уже новая.`}catch(e){out.textContent='Не удалось: '+e.message}finally{btn.disabled=false}};
+act.append(note,btn,out);app.append(act)}
 fetch('/reports/flow-audit.json',{cache:'no-store'}).then(r=>{if(!r.ok)throw Error(r.status);return r.json()}).then(draw).catch(e=>{document.getElementById('app').replaceChildren(el('p','','Не удалось загрузить отчёт: '+e.message))});
 </script>
 </body>

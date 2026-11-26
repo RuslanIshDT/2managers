@@ -2,6 +2,16 @@
 import { z } from 'zod';
 import { callJson, type JsonSchema } from '../llm.ts';
 
+const FINISH = 'Доделайте просьбу: какое решение предлагаете, какой срок и что нужно от руководителя. Пока возвращаю вам.';
+
+export function hasProposal(text: string): boolean {
+  return /предлага|вариант|план\b|прошу согласовать|замен/i.test(text);
+}
+
+export function finishTemplate(): string {
+  return FINISH;
+}
+
 export const VERDICT_KINDS = ['нужен_руководитель', 'вернуть'] as const;
 export const CATEGORIES = ['деньги', 'кадры', 'обязательства_клиентам', 'руководство', 'иное'] as const;
 export type RequestCategory = (typeof CATEGORIES)[number];
@@ -148,36 +158,56 @@ export function enforce(model: ModelVerdict, letterText: string, limit: number |
     reasons.push(`скидка ${signal.discountPercent}% выше полномочия ${limit}%`);
   }
   const mustAsk = N1.has(category) || boss;
-  const kind = mustAsk ? 'нужен_руководитель' : model.вердикт;
+  const noProposal = !hasProposal(letterText);
+  const kind = mustAsk ? 'нужен_руководитель' : noProposal ? 'вернуть' : model.вердикт;
   const basis = reasons.length ? `Код: ${reasons.join('; ')}. ${model.основание}` : model.основание;
+  const draft = !mustAsk && noProposal ? finishTemplate() : model.черновик_ответа;
   return {
     kind,
     category,
     summary: model.суть,
-    draft: model.черновик_ответа,
-    basis,
+    draft,
+    basis: !mustAsk && noProposal ? `Нет предложения. ${basis}` : basis,
     context: model.контекст,
     recommendation: kind === 'нужен_руководитель' ? model.рекомендация : '',
-    authorityOffer: kind === 'вернуть' ? model.предложение_полномочия : '',
+    authorityOffer: kind === 'вернуть' ? model.предложение_полномочия || 'Вернуть просьбу, пока нет предложения решения' : '',
     ask: kind === 'нужен_руководитель',
     send: kind === 'вернуть',
   };
 }
 
-export function cardText(input: { who: string; summary: string; context: string; recommendation: string; draft: string }): string {
+export function cardText(input: {
+  who: string;
+  вывод: string;
+  рекомендация: string;
+  основание: string;
+  риски: string;
+  если_не_решить: string;
+  контекст: string;
+  draft: string;
+}): string {
   const lines = [
     '<b>ИИ-помощник</b>',
     '',
     escapeHtml(input.who),
     '',
-    '<b>Суть</b>',
-    escapeHtml(input.summary),
-    '',
-    '<b>Контекст</b>',
-    escapeHtml(input.context || '—'),
+    '<b>Вывод</b>',
+    escapeHtml(input.вывод),
     '',
     '<b>Рекомендация</b>',
-    escapeHtml(input.recommendation || '—'),
+    escapeHtml(input.рекомендация),
+    '',
+    '<b>Основание</b>',
+    escapeHtml(input.основание),
+    '',
+    '<b>Риски</b>',
+    escapeHtml(input.риски),
+    '',
+    '<b>Если не решить</b>',
+    escapeHtml(input.если_не_решить),
+    '',
+    '<b>Контекст</b>',
+    escapeHtml(input.контекст),
     '',
     '<b>Черновик ответа</b>',
     escapeHtml(input.draft || '—'),

@@ -4,8 +4,10 @@ import type { Db } from '../db/client.ts';
 import { authorities, decisions, kpis, leaders, mailIn, people, tasks, verdicts } from '../db/schema.ts';
 import { mailConfig, sendMail, type MailboxLetter } from '../mail.ts';
 import { sendDecisionCard } from '../telegram.ts';
+import { authorityBlocks, staffFromVerdict } from './dependence.ts';
 import { kpiStatus } from './k1.ts';
 import { cardText, chainKey, discountLimit, enforce, judgeLetter, letterPrompt, type ModelVerdict, type Ruled } from './k2.ts';
+import { listAuthorityRules } from './week.ts';
 
 const REPEAT_ID = 'm079';
 const DUMMY: ModelVerdict = {
@@ -56,6 +58,7 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
   const authRows = await db.select().from(authorities).where(eq(authorities.leaderId, leaderId));
   const taskRows = await db.select().from(tasks).where(eq(tasks.leaderId, leaderId));
   const decisionRows = await db.select().from(decisions).where(eq(decisions.leaderId, leaderId));
+  const authority = await listAuthorityRules(db, leaderId);
   const lines: string[] = [];
   let calls = 0;
   let deferred = 0;
@@ -69,8 +72,22 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
     const prior = decisionRows.find((row) => row.chainKey === key || row.id === letter.id) ?? null;
     const ownAuth = authRows.filter((row) => row.personId === person.externalId);
     const limit = discountLimit(ownAuth.map((row) => ({ area: row.area, limit: row.limitValue })));
+    const covered = authorityBlocks(letter, authority);
     let ruled: Ruled;
-    if (prior) {
+    if (covered) {
+      ruled = {
+        kind: 'вернуть',
+        category: 'деньги',
+        summary: `Скидка в пределах права ${covered.limit}%`,
+        draft: `Это ваше право: скидка до ${covered.limit}%. Решите сами и напишите клиенту.`,
+        basis: `Правило уже принято: ${covered.area} до ${covered.limit}%. Руководителю не спрашиваю`,
+        context: '',
+        recommendation: '',
+        authorityOffer: '',
+        ask: false,
+        send: true,
+      };
+    } else if (prior) {
       ruled = enforce(DUMMY, `${letter.subject}\n${letter.body}`, limit, prior, false);
     } else if (calls >= modelBudget) {
       deferred += 1;
@@ -108,12 +125,18 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
         createdAt: new Date(),
       });
       try {
+        const staff = staffFromVerdict({
+          summary: ruled.summary || letter.subject,
+          recommendation: ruled.recommendation,
+          basis: ruled.basis,
+          context: ruled.context,
+          category: ruled.category,
+        });
+        if (!staff) throw new Error('Карточка без вывода и рекомендации');
         await sendDecisionCard(
           cardText({
             who: `${letter.fromName}: ${letter.subject}`,
-            summary: ruled.summary,
-            context: ruled.context,
-            recommendation: ruled.recommendation,
+            ...staff,
             draft: ruled.draft,
           }),
           letter.id,

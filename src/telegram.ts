@@ -67,6 +67,16 @@ export function parseCallback(data: string): { action: ButtonAction; decisionId:
   return { action: match[1] as ButtonAction, decisionId: match[2] };
 }
 
+export function parseRuleCallback(data: string): 'week' | null {
+  return data === 'r:accept:week' ? 'week' : null;
+}
+
+export async function sendRulesCard(text: string, chatId: string) {
+  return sendMessage(text, chatId, {
+    reply_markup: { inline_keyboard: [[{ text: 'Принять правила недели', callback_data: 'r:accept:week' }]] },
+  });
+}
+
 export function parseStart(text: string): string | null {
   const match = /^\/start(?:@\w+)?(?:\s+(\S+))?\s*$/.exec(text.trim());
   if (!match) return null;

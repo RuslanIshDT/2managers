@@ -7,7 +7,9 @@ import { loadSynthetic } from '../src/data/synthetic.ts';
 import { parseMailboxSource, syntheticSource } from '../src/mail.ts';
 import { applyOrigin, formOrigin, requestOrigin } from '../src/http/origin.ts';
 import { mailConfig } from '../src/mail.ts';
-import { decisionCallback, parseCallback, parseStart } from '../src/telegram.ts';
+import { authorityBlocks, dependenceIndex, dependenceOf, staffCard, trustOffer, type AuditTotals } from '../src/agents/dependence.ts';
+import { finishTemplate, hasProposal } from '../src/agents/k2.ts';
+import { decisionCallback, parseCallback, parseRuleCallback, parseStart } from '../src/telegram.ts';
 
 describe('синтетика D2', () => {
   it('загружает профиль, людей, письма, встречи и задачи', async () => {
@@ -108,6 +110,8 @@ describe('почта и кнопки', () => {
     expect(parseStart('/start abc12')).toBe('abc12');
     expect(parseStart('/start')).toBe('');
     expect(parseStart('привет')).toBeNull();
+    expect(parseRuleCallback('r:accept:week')).toBe('week');
+    expect(parseRuleCallback('d:approve:m062')).toBeNull();
   });
 });
 
@@ -174,4 +178,59 @@ describe('просьба подчинённого', () => {
     expect(parsed?.subject).toBe(first?.subject);
     expect(parsed?.body).toContain('12%');
   });
+
+  it('просьба без предложения возвращается с шаблоном', () => {
+    const text = 'Клиент недоволен временем ответа, разберитесь.';
+    expect(hasProposal(text)).toBe(false);
+    const ruled = enforce({ ...modelReturn, суть: 'Жалоба без предложения' }, text, null, null, false);
+    expect(ruled.kind).toBe('вернуть');
+    expect(ruled.send).toBe(true);
+    expect(ruled.draft).toBe(finishTemplate());
+  });
 });
+
+const AUDIT: AuditTotals = {
+  flowHours: 22.58,
+  freedHours: 13.91,
+  letters: 80,
+  meetings: 50,
+  stoppedLetters: 40,
+  stoppedMeetings: 4,
+  digestLetters: 40,
+  digestMeetings: 35,
+};
+
+describe('индекс и правила недели', () => {
+  it('до правил индекс 100, после — доля оставшихся часов', () => {
+    expect(dependenceIndex(22.58, 22.58)).toBe(100);
+    expect(dependenceIndex(22.58, 22.58 - 13.91)).toBe(38);
+    const before = dependenceOf(AUDIT, false);
+    const after = dependenceOf(AUDIT, true);
+    expect(before.before).toBe(100);
+    expect(after.after).toBe(38);
+    expect(before.stoppedLetters).toBe(0);
+    expect(after.stoppedLetters).toBe(40);
+    expect(after.digestMeetings).toBe(35);
+  });
+
+  it('пять утверждений подряд дают Ольге скидку до 10%, 8% закрывает правило, 12% нет', () => {
+    const rows = [
+      { personId: 'p02', area: 'скидка', subject: 'старая', outcome: 'с_правкой', at: '2026-10-20' },
+      { personId: 'p02', area: 'скидка', subject: '1', outcome: 'утверждено', at: '2026-11-03' },
+      { personId: 'p02', area: 'скидка', subject: '2', outcome: 'утверждено', at: '2026-11-10' },
+      { personId: 'p02', area: 'скидка', subject: '3', outcome: 'утверждено', at: '2026-11-17' },
+      { personId: 'p02', area: 'скидка', subject: '4', outcome: 'утверждено', at: '2026-11-24' },
+      { personId: 'p02', area: 'скидка', subject: '5', outcome: 'утверждено', at: '2026-12-01' },
+    ];
+    const offer = trustOffer(rows, 'p02', 'скидка');
+    expect(offer.ready).toBe(true);
+    expect(offer.streak).toBe(5);
+    expect(offer.limit).toBe(10);
+    const rules = [{ personId: 'p02', email: 'p02@company.example', area: 'скидка', limit: 10 }];
+    expect(authorityBlocks({ fromEmail: 'p02@company.example', subject: 'Скидка', body: 'Скидка 8% для «Поле»' }, rules)?.limit).toBe(10);
+    expect(authorityBlocks({ fromEmail: 'p02@company.example', subject: 'Скидка', body: 'Скидка 12% для «Ромашка»' }, rules)).toBeNull();
+    expect(staffCard({ вывод: '', рекомендация: 'да', основание: '', риски: '', если_не_решить: '', контекст: '' })).toBeNull();
+    expect(staffCard({ вывод: 'Скидка', рекомендация: 'Утвердить', основание: 'лимит', риски: 'маржа', если_не_решить: 'клиент ждёт', контекст: 'письмо' })?.вывод).toBe('Скидка');
+  });
+});
+
