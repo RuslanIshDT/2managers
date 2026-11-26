@@ -307,15 +307,43 @@ function stripHtml(html: string): string {
     .trim();
 }
 
+function encodedWordBytes(encoding: string, data: string): Buffer {
+  if (encoding.toUpperCase() === 'B') return Buffer.from(data, 'base64');
+  return decodeQuotedPrintable(data.replaceAll('_', ' '));
+}
+
 function decodeHeader(value: string): string {
-  return value
-    .replace(/=\?([^?]+)\?([BbQq])\?([^?]*)\?=/g, (_all, charset: string, encoding: string, data: string) => {
-      const bytes =
-        encoding.toUpperCase() === 'B' ? Buffer.from(data, 'base64') : decodeQuotedPrintable(data.replaceAll('_', ' '));
-      return decodeBytes(bytes, charset);
-    })
-    .replace(/\s{2,}/g, ' ')
-    .trim();
+  const words = [...value.matchAll(/=\?([^?]+)\?([BbQq])\?([^?]*)\?=/g)].map((match) => ({
+    charset: match[1] ?? '',
+    encoding: match[2] ?? 'B',
+    data: match[3] ?? '',
+    start: match.index ?? 0,
+    end: (match.index ?? 0) + match[0].length,
+  }));
+  if (!words.length) return value.replace(/[ \t]{2,}/g, ' ').trim();
+  let out = '';
+  let cursor = 0;
+  let previousWord = false;
+  for (let i = 0; i < words.length; ) {
+    const gap = value.slice(cursor, words[i]?.start ?? cursor);
+    out += previousWord && /^[ \t]*$/.test(gap) ? '' : gap;
+    let j = i + 1;
+    while (
+      j < words.length &&
+      words[j]?.charset.toLowerCase() === words[i]?.charset.toLowerCase() &&
+      /^[ \t]*$/.test(value.slice(words[j - 1]?.end ?? 0, words[j]?.start ?? 0))
+    ) {
+      j += 1;
+    }
+    const group = words.slice(i, j);
+    const head = group[0];
+    if (head) out += decodeBytes(Buffer.concat(group.map((word) => encodedWordBytes(word.encoding, word.data))), head.charset);
+    cursor = group.at(-1)?.end ?? cursor;
+    previousWord = true;
+    i = j;
+  }
+  out += value.slice(cursor);
+  return out.replace(/[ \t]{2,}/g, ' ').trim();
 }
 
 function encoded(value: string): string {

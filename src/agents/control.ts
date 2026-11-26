@@ -78,14 +78,13 @@ function goalsOf(person: PersonGoal, goals: GoalRef[]): GoalRef[] {
   return goals.filter((goal) => person.leaderGoal === goal.n || overlap(person.goal, goal.text));
 }
 
-function linkedGoal(task: TaskRow, person: PersonGoal | undefined, goals: GoalRef[]): { text: string; profile: boolean } {
-  if (!person) return { text: '', profile: false };
-  if (overlap(task.title, person.goal)) return { text: person.goal, profile: false };
-  const profile = goalsOf(person, goals).find((goal) => overlap(task.title, goal.text));
-  return profile ? { text: profile.text, profile: true } : { text: '', profile: false };
+function assigneeGoal(person: PersonGoal | undefined, goals: GoalRef[], off: boolean): { text: string; profile: boolean } {
+  if (!person || off || person.goal.trim() === '') return { text: '', profile: false };
+  return { text: person.goal, profile: goalsOf(person, goals).length > 0 };
 }
 
-export function goalCascade(input: { goals: GoalRef[]; people: PersonGoal[]; tasks: TaskRow[] }): { goals: CascadeGoal[]; holes: Hole[] } {
+export function goalCascade(input: { goals: GoalRef[]; people: PersonGoal[]; tasks: TaskRow[]; offGoal?: string[] }): { goals: CascadeGoal[]; holes: Hole[] } {
+  const off = new Set(input.offGoal ?? []);
   const goals = input.goals.map((goal) => {
     const owners = input.people.filter((person) => person.leaderGoal === goal.n || overlap(person.goal, goal.text));
     const covered = new Set(owners.map((person) => person.name));
@@ -98,8 +97,7 @@ export function goalCascade(input: { goals: GoalRef[]; people: PersonGoal[]; tas
         .filter((task) => {
           if (!covered.has(task.owner)) return false;
           const person = input.people.find((row) => row.name === task.owner);
-          const link = linkedGoal(task, person, input.goals);
-          return link.text === goal.text || link.text === person?.goal;
+          return assigneeGoal(person, input.goals, off.has(task.title)).text !== '';
         })
         .map((task) => task.title),
     };
@@ -114,12 +112,13 @@ export function goalCascade(input: { goals: GoalRef[]; people: PersonGoal[]; tas
   }
   for (const task of input.tasks) {
     const person = input.people.find((row) => row.name === task.owner);
-    if (!linkedGoal(task, person, input.goals).text) holes.push({ kind: 'задача без цели', text: task.title });
+    if (!assigneeGoal(person, input.goals, off.has(task.title)).text) holes.push({ kind: 'задача без цели', text: task.title });
   }
   return { goals, holes };
 }
 
-export function reviewTasks(input: { goals: GoalRef[]; people: PersonGoal[]; tasks: TaskRow[] }): TaskReview[] {
+export function reviewTasks(input: { goals: GoalRef[]; people: PersonGoal[]; tasks: TaskRow[]; offGoal?: string[] }): TaskReview[] {
+  const off = new Set(input.offGoal ?? []);
   const open = input.tasks.filter((task) => task.status !== 'сделана' && task.status !== 'закрыта');
   const byOwner = new Map<string, number>();
   for (const task of open) byOwner.set(task.owner, (byOwner.get(task.owner) ?? 0) + 1);
@@ -127,7 +126,7 @@ export function reviewTasks(input: { goals: GoalRef[]; people: PersonGoal[]; tas
   const median = loads.length ? loads[Math.floor((loads.length - 1) / 2)] ?? 0 : 0;
   return input.tasks.map((task) => {
     const person = input.people.find((row) => row.name === task.owner);
-    const link = linkedGoal(task, person, input.goals);
+    const link = assigneeGoal(person, input.goals, off.has(task.title));
     const goal = link.text;
     const effect = link.profile ? 'высокий' : goal ? 'средний' : 'низкий';
     const deadline = task.status === 'просрочена' ? 'нет' : 'да';
@@ -138,7 +137,7 @@ export function reviewTasks(input: { goals: GoalRef[]; people: PersonGoal[]; tas
     else if (deadline === 'нет') recommendation = 'перенести';
     else if (overload && effect === 'низкий') recommendation = 'передать';
     const basis = [
-      goal ? `Двигает «${goal}».` : 'Ни с одной целью слов не совпало.',
+      goal ? `Двигает цель исполнителя «${goal}».` : person ? 'У исполнителя нет цели.' : 'Исполнитель не найден в отделе.',
       `Эффект ${effect}.`,
       deadline === 'нет' ? 'Срок уже сорван.' : 'Срок в данных не сорван.',
       overload ? `У ${task.owner} открытых задач ${count}, это выше середины (${median}).` : `Нагрузка ${task.owner}: ${count}, не выше середины (${median}).`,
@@ -161,6 +160,11 @@ export function kpiOutlook(weeks: { fact: string; status: string }[]): { behind:
   const trend = step > 0.01 ? 'растёт' : step < -0.01 ? 'падает' : 'ровно';
   const forecast = Math.round((last + step) * 10) / 10;
   return { behind, trend, forecast: String(forecast) };
+}
+
+export function withLeader(profile: string, leaderName: string, people: PersonGoal[]): PersonGoal[] {
+  if (people.some((person) => person.name === leaderName)) return people;
+  return [...people, { name: leaderName, goal: profileGoals(profile).map((goal) => goal.text).join('. '), leaderGoal: '', emails: 0, kpis: [] }];
 }
 
 export function controlOf(profile: string, people: PersonGoal[], tasks: TaskRow[]) {

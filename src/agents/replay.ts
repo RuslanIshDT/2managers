@@ -106,7 +106,7 @@ export function trustOffers(rows: HistoryRow[]): TrustOffer[] {
       limit,
       streak: streakRows.length,
       ready,
-      title: ready ? `Отдать право самому решать «${sample.area}» ${limitText}: ${streakRows.length} утверждений подряд без правок` : '',
+      title: ready ? `Дать право решать самостоятельно «${sample.area}» ${limitText}: ${streakRows.length} утверждений подряд без правок` : '',
     });
   }
   return offers.filter((offer) => offer.ready);

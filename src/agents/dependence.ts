@@ -3,9 +3,6 @@ import { readFile } from 'node:fs/promises';
 import { textSignals } from './k2.ts';
 import { parseCsv } from '../data/synthetic.ts';
 
-export const TRUST_STREAK = 5;
-export const OLGA_DISCOUNT_LIMIT = 10;
-
 export interface HistoryRow {
   personId: string;
   area: string;
@@ -34,15 +31,6 @@ export interface Dependence {
   stoppedMeetings: number;
   digestLetters: number;
   digestMeetings: number;
-}
-
-export interface TrustOffer {
-  personId: string;
-  area: string;
-  limit: number;
-  streak: number;
-  ready: boolean;
-  title: string;
 }
 
 export interface StaffCard {
@@ -77,28 +65,6 @@ export function dependenceOf(audit: AuditTotals, accepted: boolean): Dependence 
     stoppedMeetings: accepted ? audit.stoppedMeetings : 0,
     digestLetters: accepted ? audit.digestLetters : 0,
     digestMeetings: accepted ? audit.digestMeetings : 0,
-  };
-}
-
-export function trustOffer(rows: HistoryRow[], personId: string, area: string, limit = OLGA_DISCOUNT_LIMIT): TrustOffer {
-  const mine = rows
-    .filter((row) => row.personId === personId && row.area === area)
-    .sort((a, b) => b.at.localeCompare(a.at));
-  let streak = 0;
-  for (const row of mine) {
-    if (row.outcome !== 'утверждено') break;
-    streak += 1;
-  }
-  const ready = streak >= TRUST_STREAK;
-  return {
-    personId,
-    area,
-    limit,
-    streak,
-    ready,
-    title: ready
-      ? `Отдать право самой решать «${area}» до ${limit}%: ${streak} утверждений подряд без правок`
-      : '',
   };
 }
 

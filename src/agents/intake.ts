@@ -12,7 +12,6 @@ import { letterHits } from './replay.ts';
 import { applyRevision, revisionPrompt } from './revisions.ts';
 import { listFlowRules } from './week.ts';
 
-const REPEAT_ID = 'm079';
 const DUMMY: ModelVerdict = {
   вердикт: 'вернуть',
   в_полномочиях: 'неясно',
@@ -37,6 +36,27 @@ export interface SeedLetter {
   subject: string;
   body: string;
   received: string;
+  repeat?: boolean;
+}
+
+export function isOwnAddress(from: string, mailbox: string): boolean {
+  const own = mailbox.trim().toLowerCase();
+  return own.length > 0 && from.trim().toLowerCase() === own;
+}
+
+export async function dropOwnMailbox(db: Db, leaderId: string): Promise<number> {
+  const mailbox = mailConfig()?.user ?? '';
+  if (!mailbox) return 0;
+  const rows = await db
+    .select({ messageId: mailIn.messageId, fromEmail: mailIn.fromEmail })
+    .from(mailIn)
+    .where(eq(mailIn.leaderId, leaderId));
+  const ids = rows.filter((row) => isOwnAddress(row.fromEmail, mailbox)).map((row) => row.messageId);
+  for (const messageId of ids) {
+    await db.delete(verdicts).where(and(eq(verdicts.leaderId, leaderId), eq(verdicts.messageId, messageId)));
+    await db.delete(mailIn).where(and(eq(mailIn.leaderId, leaderId), eq(mailIn.messageId, messageId)));
+  }
+  return ids.length;
 }
 
 export function lettersForMailbox(emails: SeedLetter[], subordinateEmails: Set<string>): SeedLetter[] {
@@ -46,7 +66,7 @@ export function lettersForMailbox(emails: SeedLetter[], subordinateEmails: Set<s
   for (const email of sorted) {
     if (!subordinateEmails.has(email.fromEmail.toLowerCase())) continue;
     const key = chainKey(email.fromEmail, email.subject);
-    if (seen.has(key) && email.id !== REPEAT_ID) continue;
+    if (seen.has(key) && !email.repeat) continue;
     seen.add(key);
     picked.push(email);
   }
@@ -70,8 +90,10 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
   let calls = 0;
   let deferred = 0;
 
+  const mailbox = mailConfig()?.user ?? '';
   const pending = [...letters].sort((a, b) => a.received.localeCompare(b.received) || a.id.localeCompare(b.id));
   for (const letter of pending) {
+    if (isOwnAddress(letter.fromEmail, mailbox)) continue;
     if (seen.has(letter.messageId)) continue;
     const person = persons.find((row) => row.email.toLowerCase() === letter.fromEmail.toLowerCase());
     const boss = person?.role === 'руководитель руководителя';
@@ -331,6 +353,7 @@ export async function saveEditText(db: Db, chatId: string, text: string): Promis
 }
 
 export async function requestFeed(db: Db, leaderId: string) {
+  await dropOwnMailbox(db, leaderId);
   const rows = await db.select().from(verdicts).where(eq(verdicts.leaderId, leaderId)).orderBy(desc(verdicts.createdAt)).limit(20);
   return rows.map((row) => ({
     id: row.id,

@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { hashPassword, hashToken, verifyPassword } from '../src/auth.ts';
 import { checkDepartment, readDepartment } from '../src/agents/k1.ts';
-import { controlOf, kpiOutlook, reviewTasks, type PersonGoal } from '../src/agents/control.ts';
+import { controlOf, kpiOutlook, reviewTasks, withLeader, type PersonGoal } from '../src/agents/control.ts';
 import { readFile } from 'node:fs/promises';
 import { chainKey, discountLimit, enforce, textSignals, type ModelVerdict } from '../src/agents/k2.ts';
-import { lettersForMailbox } from '../src/agents/intake.ts';
+import { isOwnAddress, lettersForMailbox } from '../src/agents/intake.ts';
+import { freshVerdictKind } from '../src/agents/week.ts';
 import { applyRevision, revisionPrompt } from '../src/agents/revisions.ts';
 import { loadSynthetic } from '../src/data/synthetic.ts';
 import { parseMailboxSource, syntheticSource } from '../src/mail.ts';
@@ -199,8 +200,23 @@ describe('просьба подчинённого', () => {
       ['m007', 'm008', 'm009', 'm020', 'm022', 'm044', 'm046', 'm062', 'm079'].sort(),
     );
     const first = letters.find((letter) => letter.id === 'm062');
-    const repeat = letters.find((letter) => letter.id === 'm079');
+    const repeat = letters.find((letter) => letter.repeat);
     expect(chainKey(first?.fromEmail ?? '', first?.subject ?? '')).toBe(chainKey(repeat?.fromEmail ?? '', repeat?.subject ?? ''));
+    const intake = await readFile('src/agents/intake.ts', 'utf8');
+    const dependence = await readFile('src/agents/dependence.ts', 'utf8');
+    expect(intake).not.toMatch(/m079/);
+    expect(dependence).not.toMatch(/OLGA_DISCOUNT_LIMIT|trustOffer/);
+    const kept = lettersForMailbox(
+      [
+        { id: 'a', fromName: 'А', fromEmail: 'a@example.com', subject: 'Одна тема', body: '', received: '2026-12-01 10:00', repeat: false },
+        { id: 'b', fromName: 'А', fromEmail: 'a@example.com', subject: 'Одна тема', body: '', received: '2026-12-02 10:00', repeat: true },
+        { id: 'c', fromName: 'А', fromEmail: 'a@example.com', subject: 'Одна тема', body: '', received: '2026-12-03 10:00' },
+      ],
+      new Set(['a@example.com']),
+    );
+    expect(kept.map((letter) => letter.id)).toEqual(['a', 'b']);
+    expect(isOwnAddress('Box@Example.com', 'box@example.com')).toBe(true);
+    expect(isOwnAddress('other@example.com', 'box@example.com')).toBe(false);
     expect(discountLimit([{ area: 'скидка', limit: '10' }])).toBe(10);
     const source = syntheticSource(
       { id: 'm062', fromName: 'Ольга Смирнова', fromEmail: 'p02@company.example', subject: first?.subject ?? '', body: first?.body ?? '', received: '2026-12-10 15:52' },
@@ -227,6 +243,13 @@ describe('просьба подчинённого', () => {
     expect(human?.marked).toBe(false);
     expect(human?.fromEmail).toBe('person@example.com');
     expect(human?.subject).toBe('Вопрос');
+    const split = Buffer.from('Облако Плюс', 'utf8');
+    const cut = split.indexOf(Buffer.from('ю', 'utf8')) + 1;
+    const splitSubject = `=?UTF-8?B?${split.subarray(0, cut).toString('base64')}?= =?UTF-8?B?${split.subarray(cut).toString('base64')}?=`;
+    const splitLetter = parseMailboxSource(
+      ['From: А <a@example.com>', `Subject: ${splitSubject}`, 'Message-ID: <split@example.com>', 'Content-Type: text/plain; charset=utf-8', '', 'Текст.'].join('\n'),
+    );
+    expect(splitLetter?.subject).toBe('Облако Плюс');
     expect(human?.body).toContain('решение');
     const plain = 'Нужно решение по сроку, без разметки.';
     const qp = [...Buffer.from(plain, 'utf8')].map((byte) => `=${byte.toString(16).toUpperCase().padStart(2, '0')}`).join('');
@@ -525,6 +548,13 @@ describe('протокол', () => {
     expect(morningOpenItems(['Кто ведёт понедельник'])).toContain('прошлого протокола');
     expect(parseProtocolCallback('p:approve:ab12cd34')).toBe('ab12cd34');
     expect(parseProtocolCallback('d:approve:ab12cd34')).toBeNull();
+    const now = new Date('2026-11-26T12:00:00Z');
+    const earlier = new Date('2026-11-26T09:00:00Z');
+    expect(freshVerdictKind('d1', [
+      { id: 'v-d1', messageId: 'd1', kind: 'нужен_руководитель', createdAt: earlier },
+      { id: 'v-d1-2', messageId: 'd1', kind: 'вернуть', createdAt: now },
+    ])).toBe('вернуть');
+    expect(freshVerdictKind('d2', [{ id: 'v-d2', messageId: 'd2', kind: 'нужен_руководитель', createdAt: now }])).toBe('нужен_руководитель');
   });
 });
 
@@ -538,19 +568,29 @@ describe('цели, задачи и KPI', () => {
     expect(outlook).toEqual({ behind: 2, trend: 'падает', forecast: '70' });
   });
 
-  it('сорванный срок с целью предлагает перенести, задачу без цели — снять', () => {
-    const people: PersonGoal[] = [{ name: 'Пётр', goal: 'Сдать линию', leaderGoal: '1', emails: 1, kpis: [] }];
+  it('задача относится к цели исполнителя, без цели — только если цели нет или модель так сказала', () => {
+    const people: PersonGoal[] = [
+      { name: 'Пётр', goal: 'Сдать линию', leaderGoal: '1', emails: 1, kpis: [] },
+      { name: 'Кира', goal: '', leaderGoal: '', emails: 0, kpis: [] },
+    ];
     const goals = [{ n: '1', text: 'Сдать линию' }];
     const reviews = reviewTasks({
       goals,
       people,
+      offGoal: ['Купить кружки'],
       tasks: [
         { title: 'Сдать линию к среде', owner: 'Пётр', due: '2026-12-01', status: 'просрочена' },
         { title: 'Купить кружки', owner: 'Пётр', due: '2026-12-20', status: 'новая' },
+        { title: 'Принять оснастку', owner: 'Пётр', due: '2026-12-20', status: 'новая' },
+        { title: 'Закрыть смену', owner: 'Кира', due: '2026-12-20', status: 'новая' },
       ],
     });
     expect(reviews[0]?.recommendation).toBe('перенести');
+    expect(reviews[0]?.goal).toBe('Сдать линию');
     expect(reviews[1]?.recommendation).toBe('снять');
+    expect(reviews[2]?.goal).toBe('Сдать линию');
+    expect(reviews[2]?.recommendation).toBe('оставить');
+    expect(reviews[3]?.recommendation).toBe('снять');
   });
 
   it('собирает каскад, разбор задач и ранний сигнал из файлов, без имён в коде', async () => {
@@ -561,13 +601,9 @@ describe('цели, задачи и KPI', () => {
     expect(synthetic.goals.length).toBeGreaterThan(0);
     expect(synthetic.goals.every((goal) => goal.owners.length > 0)).toBe(true);
     expect(synthetic.tasks).toHaveLength(12);
-    expect(synthetic.tasks.every((task) => task.basis.length > 10)).toBe(true);
-    expect(synthetic.tasks.some((task) => task.recommendation === 'снять')).toBe(true);
-    for (const task of synthetic.tasks) {
-      if (task.effect !== 'высокий') continue;
-      const goal = synthetic.goals.find((row) => row.text === task.goal);
-      expect(goal?.owners).toContain(task.owner);
-    }
+    expect(synthetic.tasks.every((task) => task.goal.length > 0)).toBe(true);
+    expect(synthetic.holes.some((hole) => hole.kind === 'задача без цели')).toBe(false);
+    expect(synthetic.tasks.some((task) => task.recommendation === 'перенести')).toBe(true);
     expect(synthetic.tasks.some((task) => task.deadline === 'нет')).toBe(true);
     const quiet = synthetic.signals.filter((item) => item.early);
     expect(quiet.length).toBeGreaterThan(0);
@@ -603,6 +639,7 @@ async function scene(dir: string) {
     })),
   }));
   const tasks = data.tasks.map((task) => ({ title: task.task, owner: task.owner, due: task.due, status: task.status }));
-  return controlOf(data.profile, people, tasks);
+  const leader = data.people.find((person) => person.role === 'руководитель');
+  return controlOf(data.profile, withLeader(data.profile, leader?.name ?? '', people), tasks);
 }
 

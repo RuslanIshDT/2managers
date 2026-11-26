@@ -21,6 +21,7 @@ export interface Email {
   to: string;
   subject: string;
   body: string;
+  repeat: boolean;
 }
 
 export interface EmailEtalon {
@@ -96,6 +97,7 @@ export async function loadSynthetic(dir = 'data/synthetic'): Promise<Synthetic> 
     to: r.to,
     subject: r.subject,
     body: r.body,
+    repeat: r.repeat === 'да',
   }));
   const emailEtalon = new Map(
     inbox.map((r) => [r.id, { id: r.id, category: r.category, expectedAction: r.expected_action, reason: r.reason }]),

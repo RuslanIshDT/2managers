@@ -13,7 +13,7 @@ import type { Db } from '../db/client.ts';
 import { agentRuns, emails, flowReports, leaders, meetings, people, revisions, sessions, tasks, telegramClicks } from '../db/schema.ts';
 import { departmentForLeader } from '../agents/k1.ts';
 import { accuracyView } from '../agents/accuracy.ts';
-import { controlOf } from '../agents/control.ts';
+import { controlOf, withLeader } from '../agents/control.ts';
 import { approveProtocol, parseProtocolCallback, protocolCard } from '../agents/protocol.ts';
 import { applyClick, applyLeaderAction, pullInbox, requestFeed, saveEditText } from '../agents/intake.ts';
 import { acceptWeek, acceptWeekByChat, weekScene } from '../agents/week.ts';
@@ -202,22 +202,18 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
           .from(meetings)
           .where(eq(meetings.leaderId, leader.id)),
       },
-      control: controlOf(
-        profileRow[0]?.profile ?? '',
-        department.people.map((person) => ({
-          name: person.name,
-          goal: person.goal,
-          leaderGoal: person.leaderGoal,
-          emails: person.emails,
-          kpis: person.kpis.map((kpi) => ({
-            name: kpi.name,
-            unit: kpi.unit,
-            better: kpi.better,
-            weeks: kpi.weeks.map((week) => ({ fact: week.fact, status: week.status })),
-          })),
+      control: controlOf(profileRow[0]?.profile ?? '', withLeader(profileRow[0]?.profile ?? '', leader.name, department.people.map((person) => ({
+        name: person.name,
+        goal: person.goal,
+        leaderGoal: person.leaderGoal,
+        emails: person.emails,
+        kpis: person.kpis.map((kpi) => ({
+          name: kpi.name,
+          unit: kpi.unit,
+          better: kpi.better,
+          weeks: kpi.weeks.map((week) => ({ fact: week.fact, status: week.status })),
         })),
-        taskRows,
-      ),
+      }))), taskRows),
       revisions: await deps.db.select().from(revisions).where(eq(revisions.leaderId, leader.id)).orderBy(asc(revisions.createdAt)),
       lastAudit: last[0] ? { status: last[0].status, mode: last[0].reason, at: last[0].startedAt.toISOString() } : null,
     };

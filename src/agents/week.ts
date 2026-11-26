@@ -56,6 +56,7 @@ export async function weekScene(db: Db, leaderId: string) {
     ruleRows,
     accepted,
   );
+  await closeReturned(db, decisionRows, verdictRows);
   const offers = trustOffers(history);
   const asks = verdictRows.filter((row) => row.kind === 'нужен_руководитель');
   const asked = [...asks].reverse().find((row) => row.recommendation.trim()) ?? asks.at(-1);
@@ -105,6 +106,29 @@ export async function weekScene(db: Db, leaderId: string) {
         };
       }),
   };
+}
+
+export function freshVerdictKind(
+  decisionId: string,
+  rows: { id: string; messageId: string; kind: string; createdAt: Date }[],
+): string | null {
+  const fresh = rows
+    .filter((row) => row.id === `v-${decisionId}` || row.messageId === decisionId)
+    .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0];
+  return fresh?.kind ?? null;
+}
+
+async function closeReturned(
+  db: Db,
+  decisionRows: { id: string; status: string }[],
+  verdictRows: { id: string; messageId: string; kind: string; createdAt: Date }[],
+) {
+  for (const decision of decisionRows) {
+    if (decision.status !== 'ждёт') continue;
+    if (freshVerdictKind(decision.id, verdictRows) !== 'вернуть') continue;
+    await db.update(decisions).set({ status: 'закрыто', awaitingEdit: false }).where(eq(decisions.id, decision.id));
+    decision.status = 'закрыто';
+  }
 }
 
 export async function acceptWeek(db: Db, leaderId: string) {

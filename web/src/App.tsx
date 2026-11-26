@@ -667,7 +667,7 @@ function Mirror({
             {item.kind ? <span className="text-[#5d6878]"> · {item.kind}</span> : null}
             <span className="text-[#5d6878]"> · {verdictWords(item.verdict)}</span>
             <span className="block text-[#5d6878]">
-              {item.hours} ч. {item.change}
+              {durationWords(item.hours)}. {item.change}
               {item.action ? ` Записано: ${item.action}${item.reason ? ` — ${item.reason}` : ''}.` : ''}
             </span>
             <span className="mt-1 flex gap-2">
@@ -788,14 +788,14 @@ function Week({
           <p className="text-5xl font-semibold tabular-nums">{week.current}%</p>
           <p className="mt-2 text-sm text-[#5d6878]">
             {week.accepted
-              ? `Было ${week.before}%. Стало ${week.after}%. До руководителя не доходят ${week.stoppedLetters} писем (около ${letterHours(week.stoppedLetters)} ч) и ${week.stoppedMeetings} встреч. Остаются ${week.stillLetters} писем и ${week.stillMeetings} встреч.`
-              : `Сейчас на руководителя приходится весь поток: ${week.letters} писем и ${week.meetings} встреч.`}
+              ? `Было ${week.before}%. Стало ${week.after}%. До руководителя не доходят ${countWords(week.stoppedLetters, 'письмо', 'письма', 'писем')} (около ${countWords(week.stoppedLetters * 4, 'минута', 'минуты', 'минут')}) и ${countWords(week.stoppedMeetings, 'встреча', 'встречи', 'встреч')}. Остаются ${countWords(week.stillLetters, 'письмо', 'письма', 'писем')} и ${countWords(week.stillMeetings, 'встреча', 'встречи', 'встреч')}.`
+              : `Сейчас на руководителя приходится весь поток: ${countWords(week.letters, 'письмо', 'письма', 'писем')} и ${countWords(week.meetings, 'встреча', 'встречи', 'встреч')}.`}
           </p>
         </>
       ) : (
         <p className="text-sm text-[#5d6878]">
           {week.accepted
-            ? `Повторы склеены: ${week.gluedLetters} писем и ${week.gluedMeetings} встреч. Сводкой: ${week.digestLetters} писем и ${week.digestMeetings} встреч. Оставшееся: ${week.remaining.join('; ') || 'нет'}.`
+            ? `Повторы склеены: ${countWords(week.gluedLetters, 'письмо', 'письма', 'писем')} и ${countWords(week.gluedMeetings, 'встреча', 'встречи', 'встреч')}. Сводкой: ${countWords(week.digestLetters, 'письмо', 'письма', 'писем')} и ${countWords(week.digestMeetings, 'встреча', 'встречи', 'встреч')}. Оставшееся: ${week.remaining.join('; ') || 'нет'}.`
             : 'Правила недели ещё не приняты.'}
         </p>
       )}
@@ -951,7 +951,7 @@ function Department({ department }: { department: Cabinet['department'] | undefi
                 </p>
                 <div className="mt-1 h-2 rounded bg-[#e6ebf2]">
                   <div
-                    className={`h-2 rounded ${kpi.quarter && kpiBehind(kpi.quarter.fact, kpi.quarter.plan, kpi.better) ? 'bg-[#a3302a]' : 'bg-[#1f5fbf]'}`}
+                    className={`h-2 rounded ${kpi.weeks.at(-1)?.status === 'отстаёт' ? 'bg-[#a3302a]' : 'bg-[#1f5fbf]'}`}
                     style={{ width: `${barWidth(kpi.quarter?.fact, kpi.quarter?.plan, kpi.better)}%` }}
                   />
                 </div>
@@ -999,8 +999,21 @@ function whenWords(value: string): string {
   return dayWords(iso);
 }
 
-function letterHours(letters: number): number {
-  return Math.round((letters * 4) / 60);
+function countWords(n: number, one: string, few: string, many: string): string {
+  const abs = Math.abs(n);
+  const tail = abs % 10;
+  const hundred = abs % 100;
+  const word = tail === 1 && hundred !== 11 ? one : tail >= 2 && tail <= 4 && (hundred < 12 || hundred > 14) ? few : many;
+  return `${n} ${word}`;
+}
+
+function durationWords(hours: number): string {
+  const minutes = Math.max(0, Math.round(hours * 60));
+  if (minutes < 60) return countWords(minutes, 'минута', 'минуты', 'минут');
+  const whole = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  const hoursText = countWords(whole, 'час', 'часа', 'часов');
+  return rest === 0 ? hoursText : `${hoursText} ${countWords(rest, 'минута', 'минуты', 'минут')}`;
 }
 
 function barWidth(fact: string | undefined, plan: string | undefined, better: string): number {
@@ -1009,10 +1022,6 @@ function barWidth(fact: string | undefined, plan: string | undefined, better: st
   if (!Number.isFinite(left) || !Number.isFinite(right) || right <= 0) return 0;
   const ratio = better === 'меньше' ? right / Math.max(left, 0.01) : left / right;
   return Math.max(0, Math.min(100, Math.round(ratio * 100)));
-}
-
-function kpiBehind(fact: string, plan: string, better: string): boolean {
-  return better === 'меньше' ? Number(fact) > Number(plan) : Number(fact) < Number(plan);
 }
 
 function plainProfile(text: string): string {

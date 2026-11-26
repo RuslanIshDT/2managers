@@ -149,7 +149,7 @@ export function enforce(model: ModelVerdict, letterText: string, limit: number |
       category: 'иное',
       summary: `Повтор. Решение «${prior.status}»: ${prior.summary}`,
       draft: '',
-      basis: `По этой цепочке уже есть решение ${prior.id}, второй раз не спрашиваю`,
+      basis: 'По этой цепочке уже есть решение, второй раз не спрашиваю',
       context: '',
       recommendation: '',
       risks: '',
