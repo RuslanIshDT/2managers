@@ -226,6 +226,81 @@ describe('просьба подчинённого', () => {
     expect(human?.fromEmail).toBe('person@example.com');
     expect(human?.subject).toBe('Вопрос');
     expect(human?.body).toContain('решение');
+    const plain = 'Нужно решение по сроку, без разметки.';
+    const qp = [...Buffer.from(plain, 'utf8')].map((byte) => `=${byte.toString(16).toUpperCase().padStart(2, '0')}`).join('');
+    const html = Buffer.from(`<html><body><p>${plain}</p><p>лишний html</p></body></html>`, 'utf8').toString('base64');
+    const multipart = [
+      'From: =?UTF-8?Q?=D0=98=D0=B2=D0=B0=D0=BD?= <person@example.com>',
+      'To: <leader@example.com>',
+      'Subject: =?UTF-8?Q?=D0=92=D0=BE=D0=BF=D1=80=D0=BE=D1=81?=',
+      'Date: Thu, 26 Nov 2026 12:00:00 +0300',
+      'Message-ID: <hand.multipart@example.com>',
+      'MIME-Version: 1.0',
+      'Content-Type: multipart/alternative; boundary="----client"',
+      '',
+      '------client',
+      'Content-Type: text/plain; charset=utf-8',
+      'Content-Transfer-Encoding: quoted-printable',
+      '',
+      qp,
+      '------client',
+      'Content-Type: text/html; charset=utf-8',
+      'Content-Transfer-Encoding: base64',
+      '',
+      html,
+      '------client--',
+      '',
+    ].join('\r\n');
+    const fromClient = parseMailboxSource(multipart);
+    expect(fromClient?.marked).toBe(false);
+    expect(fromClient?.fromName).toBe('Иван');
+    expect(fromClient?.subject).toBe('Вопрос');
+    expect(fromClient?.body).toBe(plain);
+    expect(fromClient?.body).not.toContain('<p>');
+    expect(fromClient?.body).not.toContain('boundary');
+    const htmlOnly = [
+      'From: <person@example.com>',
+      'Subject: html',
+      'Message-ID: <hand.html@example.com>',
+      'MIME-Version: 1.0',
+      'Content-Type: text/html; charset=utf-8',
+      'Content-Transfer-Encoding: quoted-printable',
+      '',
+      '<p>=D0=9D=D1=83=D0=B6=D0=BD=D0=BE =D1=80=D0=B5=D1=88=D0=B5=D0=BD=D0=B8=D0=B5</p>',
+    ].join('\n');
+    expect(parseMailboxSource(htmlOnly)?.body).toBe('Нужно решение');
+    const nested = [
+      'From: <person@example.com>',
+      'Subject: nested',
+      'Message-ID: <hand.nested@example.com>',
+      'MIME-Version: 1.0',
+      'Content-Type: multipart/mixed; boundary="mix"',
+      '',
+      '--mix',
+      'Content-Type: multipart/alternative; boundary="alt"',
+      '',
+      '--alt',
+      'Content-Type: text/plain; charset=utf-8',
+      'Content-Transfer-Encoding: quoted-printable',
+      '',
+      qp,
+      '--alt',
+      'Content-Type: text/html; charset=utf-8',
+      '',
+      `<p>${plain}</p>`,
+      '--alt--',
+      '--mix',
+      'Content-Type: application/octet-stream',
+      'Content-Disposition: attachment; filename="a.bin"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      Buffer.from('not-the-letter').toString('base64'),
+      '--mix--',
+      '',
+    ].join('\n');
+    const nestedParsed = parseMailboxSource(nested);
+    expect(nestedParsed?.body).toBe(plain);
+    expect(nestedParsed?.body).not.toContain('not-the-letter');
   });
 
   it('просьба без предложения возвращается с шаблоном', () => {

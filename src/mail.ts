@@ -99,12 +99,8 @@ export function parseMailboxSource(source: string): MailboxLetter | null {
   const text = source.replace(/\r\n/g, '\n');
   const splitAt = text.indexOf('\n\n');
   if (splitAt < 0) return null;
-  const rawBody = text.slice(splitAt + 2);
-  const encoding = headerValue(text.slice(0, splitAt), 'content-transfer-encoding');
-  const body = encoding.toLowerCase().includes('base64')
-    ? Buffer.from(rawBody.replace(/\s/g, ''), 'base64').toString('utf8')
-    : rawBody;
   const headers = text.slice(0, splitAt);
+  const body = readableText(text);
   const lines = body.split('\n');
   const marker = /^синтетика\s+([A-Za-z0-9_-]+)\s*$/.exec(lines[0] ?? '');
   const fromLine = /^От:\s*(.+?)\s*<([^>]+)>\s*$/.exec(lines[1] ?? '');
@@ -219,8 +215,107 @@ function headerValue(headers: string, name: string): string {
   return match?.[1]?.trim() ?? '';
 }
 
+function readableText(source: string): string {
+  const found = collectText(source);
+  const plain = found.find((part) => part.kind === 'plain');
+  const html = found.find((part) => part.kind === 'html');
+  return (plain ?? html)?.text.trim() ?? '';
+}
+
+function collectText(chunk: string): { kind: 'plain' | 'html'; text: string }[] {
+  const splitAt = chunk.indexOf('\n\n');
+  if (splitAt < 0) return [];
+  const headers = chunk.slice(0, splitAt);
+  const raw = chunk.slice(splitAt + 2).replace(/\n$/, '');
+  const typeHeader = headerValue(headers, 'content-type') || 'text/plain; charset=utf-8';
+  const mime = typeHeader.split(';')[0]?.trim().toLowerCase() ?? 'text/plain';
+  if (mime.startsWith('multipart/')) {
+    const boundary = /boundary="?([^";]+)"?/i.exec(typeHeader)?.[1];
+    if (!boundary) return [];
+    return splitByBoundary(raw, boundary).flatMap((part) => collectText(part));
+  }
+  if (headerValue(headers, 'content-disposition').toLowerCase().startsWith('attachment')) return [];
+  const charset = /charset="?([^";]+)"?/i.exec(typeHeader)?.[1] ?? 'utf-8';
+  const text = decodeTransfer(raw, headerValue(headers, 'content-transfer-encoding'), charset);
+  if (mime === 'text/plain') return [{ kind: 'plain', text }];
+  if (mime === 'text/html') return [{ kind: 'html', text: stripHtml(text) }];
+  return [];
+}
+
+function splitByBoundary(body: string, boundary: string): string[] {
+  const marker = `--${boundary}`;
+  const parts: string[] = [];
+  let current: string[] | null = null;
+  for (const line of body.split('\n')) {
+    const trimmed = line.trimEnd();
+    if (trimmed === marker || trimmed === `${marker}--`) {
+      if (current) parts.push(current.join('\n'));
+      current = trimmed.endsWith('--') && trimmed !== marker ? null : [];
+      if (trimmed === `${marker}--`) break;
+      continue;
+    }
+    if (current) current.push(line);
+  }
+  return parts.filter((part) => part.trim().length > 0);
+}
+
+function decodeTransfer(raw: string, encoding: string, charset: string): string {
+  const enc = encoding.toLowerCase();
+  if (enc.includes('base64')) return decodeBytes(Buffer.from(raw.replace(/\s/g, ''), 'base64'), charset);
+  if (enc.includes('quoted-printable')) return decodeBytes(decodeQuotedPrintable(raw), charset);
+  return raw.trim();
+}
+
+function decodeQuotedPrintable(raw: string): Buffer {
+  const unfolded = raw.replace(/=\n/g, '');
+  const bytes: number[] = [];
+  for (let i = 0; i < unfolded.length; i += 1) {
+    if (unfolded[i] === '=' && /[0-9A-Fa-f]{2}/.test(unfolded.slice(i + 1, i + 3))) {
+      bytes.push(Number.parseInt(unfolded.slice(i + 1, i + 3), 16));
+      i += 2;
+      continue;
+    }
+    bytes.push(unfolded.charCodeAt(i) & 0xff);
+  }
+  return Buffer.from(bytes);
+}
+
+function decodeBytes(bytes: Buffer, charset: string): string {
+  const name = charset.toLowerCase().replaceAll('_', '-');
+  try {
+    return new TextDecoder(name === 'utf8' ? 'utf-8' : name).decode(bytes);
+  } catch {
+    return new TextDecoder('utf-8').decode(bytes);
+  }
+}
+
+function stripHtml(html: string): string {
+  return html
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&#(\d+);/g, (_, code: string) => String.fromCodePoint(Number(code)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, code: string) => String.fromCodePoint(Number.parseInt(code, 16)))
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 function decodeHeader(value: string): string {
-  return value.replace(/=\?UTF-8\?B\?([^?]+)\?=/gi, (_, b64: string) => Buffer.from(b64, 'base64').toString('utf8'));
+  return value
+    .replace(/=\?([^?]+)\?([BbQq])\?([^?]*)\?=/g, (_all, charset: string, encoding: string, data: string) => {
+      const bytes =
+        encoding.toUpperCase() === 'B' ? Buffer.from(data, 'base64') : decodeQuotedPrintable(data.replaceAll('_', ' '));
+      return decodeBytes(bytes, charset);
+    })
+    .replace(/\s{2,}/g, ' ')
+    .trim();
 }
 
 function encoded(value: string): string {
