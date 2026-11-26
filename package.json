@@ -1,0 +1,12 @@
+{
+  "name": "ecompras",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "flow-audit": "node --env-file=.env src/scripts/flow-audit.ts",
+    "flow-audit:dry": "node src/scripts/flow-audit.ts --dry-run"
+  }
+}
