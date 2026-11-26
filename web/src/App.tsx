@@ -110,10 +110,14 @@ interface Cabinet {
   revisions: { id: string; category: string; instead: string }[];
   accuracy: { total: number; hit: number; calls: number; forced: number; misses: { pair: string; count: number }[] } | null;
   protocol: { status: string; open: number } | null;
+  stubs: {
+    tasks: { title: string; owner: string; due: string; status: string }[];
+    meetings: { summary: string; starts: string }[];
+  };
   lastAudit: { status: string; mode: string; at: string } | null;
 }
 
-type Section = 'home' | 'department' | 'flow' | 'feed' | 'settings';
+type Section = 'home' | 'department' | 'flow' | 'feed' | 'settings' | 'tasks' | 'calendar' | 'mailing';
 
 const SECTIONS: { id: Section; label: string }[] = [
   { id: 'home', label: 'Главная' },
@@ -501,6 +505,15 @@ export function App() {
         )}
       </Card>
       ) : null}
+      {section === 'tasks' ? <StubList title="Задачи" note="Заглушка. Трекер не подключён, список из файла синтетики." rows={(cabinet?.stubs.tasks ?? []).map((item) => `${item.title} — ${item.owner}, срок ${whenWords(item.due)}, ${item.status}`)} /> : null}
+      {section === 'calendar' ? <StubList title="Календарь" note="Заглушка. Календарь не подключён, встречи не создаются и не переносятся." rows={(cabinet?.stubs.meetings ?? []).map((item) => `${whenWords(item.starts)} — ${item.summary}`)} /> : null}
+      {section === 'mailing' ? (
+        <StubList
+          title="Рассылка протокола"
+          note="Заглушка. После утверждения письма участникам не уходят."
+          rows={['Кнопка «Утвердить» в Telegram меняет только статус. Почтовой рассылки нет.']}
+        />
+      ) : null}
       {section === 'settings' ? (
         <>
       <Revisions
@@ -558,6 +571,17 @@ export function App() {
               ? `Протокол в Telegram: ${cabinet.protocol.status}. Открытых вопросов: ${cabinet.protocol.open}. Рассылка участникам — заглушка, письма не уходят.`
               : 'Расшифровка читается с диска стенда и в репозиторий не входит. Рассылка — заглушка.'}
           </p>
+          <span className="mt-3 flex flex-wrap gap-2">
+            <Button type="button" variant="outline" onClick={() => setSection('tasks')}>
+              Задачи, заглушка
+            </Button>
+            <Button type="button" variant="outline" onClick={() => setSection('calendar')}>
+              Календарь, заглушка
+            </Button>
+            <Button type="button" variant="outline" onClick={() => setSection('mailing')}>
+              Рассылка, заглушка
+            </Button>
+          </span>
         </div>
       </Card>
       <Card className="mb-4">
@@ -894,6 +918,26 @@ function taskLines(text: string): { short: string; rest: string }[] {
       if (dot < 0) return { short: body, rest: '' };
       return { short: body.slice(0, dot), rest: body.slice(dot + 2) };
     });
+}
+
+function StubList({ title, note, rows }: { title: string; note: string; rows: string[] }) {
+  return (
+    <Card className="mb-4">
+      <h2 className="mb-2 text-lg font-semibold">{title}</h2>
+      <p className="mb-3 text-sm text-[#a3302a]">{note}</p>
+      <ul className="grid gap-1 text-sm">
+        {rows.map((row) => (
+          <li key={row}>{row}</li>
+        ))}
+      </ul>
+    </Card>
+  );
+}
+
+function whenWords(value: string): string {
+  const compact = /^(\d{4})(\d{2})(\d{2})/.exec(value);
+  const iso = compact ? `${compact[1]}-${compact[2]}-${compact[3]}` : value;
+  return dayWords(iso);
 }
 
 function letterHours(letters: number): number {

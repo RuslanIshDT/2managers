@@ -190,6 +190,16 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       mirror: await mirrorForLeader(deps.db, leader.id),
       accuracy: await accuracyView(deps.db, leader.id),
       protocol: await protocolCard(deps.db, leader.id),
+      stubs: {
+        tasks: await deps.db
+          .select({ title: tasks.title, owner: tasks.ownerName, due: tasks.dueOn, status: tasks.status })
+          .from(tasks)
+          .where(eq(tasks.leaderId, leader.id)),
+        meetings: await deps.db
+          .select({ summary: meetings.summary, starts: meetings.startsAt })
+          .from(meetings)
+          .where(eq(meetings.leaderId, leader.id)),
+      },
       revisions: await deps.db.select().from(revisions).where(eq(revisions.leaderId, leader.id)).orderBy(asc(revisions.createdAt)),
       lastAudit: last[0] ? { status: last[0].status, mode: last[0].reason, at: last[0].startedAt.toISOString() } : null,
     };
