@@ -15,4 +15,12 @@ npm run flow-audit:dry   # без модели: цепочки, серии и п
 npm run flow-audit       # аудит: reports/flow-audit.md и reports/flow-audit.json
 ```
 
-Последний отчёт — [reports/flow-audit.md](reports/flow-audit.md).
+Последний отчёт — [reports/flow-audit.md](reports/flow-audit.md); на стенде — страница `/audit/` ([web/audit/index.html](web/audit/index.html) читает `reports/flow-audit.json`).
+
+Итог в Telegram: в `.env` — `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `STAND_ORIGIN` (образец — `.env.example`).
+
+```
+npm run tg:chats             # после /start боту: какие чаты ему писали — отсюда TELEGRAM_CHAT_ID
+npm run audit:telegram:dry   # показать сообщение
+npm run audit:telegram       # отправить
+```

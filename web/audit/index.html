@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Аудит потока руководителя</title>
+<style>
+:root{color-scheme:light dark;--bg:#f4f5f7;--card:#fff;--tx:#1c2430;--mut:#5d6878;--line:#dde1e7;--acc:#1f5fbf;--ok:#1b7a45;--okb:#e2f4e9;--pt:#8a5a00;--ptb:#fdf0d5;--no:#a3302a;--nob:#fbe5e3}
+@media(prefers-color-scheme:dark){:root{--bg:#14181e;--card:#1d232b;--tx:#e6eaf0;--mut:#9aa6b6;--line:#333c48;--acc:#7fb0ff;--ok:#7fdca5;--okb:#173526;--pt:#f0c46a;--ptb:#3a2d10;--no:#ff9d96;--nob:#40201e}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:920px;margin:0 auto;padding:32px 16px 64px}h1{font-size:26px;line-height:1.25;margin:0 0 8px}h2{font-size:19px;margin:0 0 12px}
+.mut{color:var(--mut)}.small{font-size:14px}
+section{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px;margin:0 0 14px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin:18px 0}
+.kpi{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+.kpi b{display:block;font-size:30px;line-height:1.15;font-variant-numeric:tabular-nums}.kpi span{font-size:14px;color:var(--mut)}
+.split{display:flex;height:14px;border-radius:7px;overflow:hidden;margin:10px 0 8px;background:var(--line)}
+.split i{display:block;height:100%}.c0{background:var(--no)}.c1{background:var(--pt)}.c2{background:var(--ok)}
+.legend{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:14px;color:var(--mut)}.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:baseline}
+table{width:100%;border-collapse:collapse;font-size:15px}th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:13px;color:var(--mut);font-weight:600}td.n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.bar{height:6px;border-radius:3px;background:var(--acc);margin-top:6px;min-width:2px}
+.tabs{display:flex;gap:8px;margin:0 0 12px}.tabs button{font:inherit;font-size:15px;padding:6px 14px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--tx);cursor:pointer}
+.tabs button[aria-selected=true]{border-color:var(--acc);color:var(--acc);font-weight:600}
+details{border-top:1px solid var(--line);padding:10px 0}details:first-of-type{border-top:0}
+summary{cursor:pointer;list-style:none;display:grid;grid-template-columns:1fr auto;gap:4px 12px;align-items:start}summary::-webkit-details-marker{display:none}
+summary .t{font-weight:600}summary .m{font-size:14px;color:var(--mut);grid-column:1}summary .r{grid-row:1/3;grid-column:2;text-align:right;white-space:nowrap}
+.chip{display:inline-block;font-size:13px;font-weight:600;padding:1px 9px;border-radius:99px}.v0{color:var(--no);background:var(--nob)}.v1{color:var(--pt);background:var(--ptb)}.v2{color:var(--ok);background:var(--okb)}
+.hrs{display:block;font-size:14px;color:var(--mut);margin-top:4px;font-variant-numeric:tabular-nums}
+dl{margin:10px 0 0;font-size:15px}dt{font-size:13px;font-weight:600;color:var(--mut);margin-top:8px}dd{margin:2px 0 0}
+button:focus-visible,summary:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+footer{font-size:14px;color:var(--mut);margin-top:18px}
+@media(max-width:560px){.kpis{grid-template-columns:1fr 1fr}.kpi b{font-size:24px}table{font-size:14px}th:nth-child(3),td:nth-child(3){display:none}}
+</style>
+</head>
+<body>
+<main id="app"><p class="mut">Загрузка…</p></main>
+<script>
+const el=(t,c,s)=>{const e=document.createElement(t);if(c)e.className=c;if(s!=null)e.textContent=s;return e};
+const hh=x=>x.toLocaleString('ru-RU',{minimumFractionDigits:1,maximumFractionDigits:1});
+const VC={не_должно:'v0',в_другом_виде:'v1',должно:'v2'},SC={не_должно:'c0',в_другом_виде:'c1',должно:'c2'};
+const when=d=>new Date(d).toLocaleString('ru-RU',{timeZone:'Europe/Moscow',day:'numeric',month:'long',hour:'2-digit',minute:'2-digit'})+' МСК';
+let tab='письма';
+function kpi(big,small){const k=el('div','kpi');k.append(el('b','',big),el('span','',small));return k}
+function draw(r){const s=r.summary,v=r.view,app=document.getElementById('app');app.replaceChildren();
+const gone=s.byVerdict.find(x=>x.verdict==='не_должно');
+app.append(el('h1','','Аудит потока руководителя'),el('p','mut','Каких писем и встреч в потоке руководителя не должно быть, почему и что поменять в отделе, чтобы они перестали появляться. Данные — синтетика заказчика: письма за неделю 7–11 декабря и календарь 7–18 декабря.'));
+const k=el('div','kpis');k.append(kpi(hh(s.freedHours)+' ч','освобождается в неделю из '+hh(s.flowHours)+' ч на почту и встречи'),kpi(gone.letters+' из '+s.letters,'писем не должно быть вовсе'),kpi(gone.meetings+' из '+s.meetings,'встреч не должно быть вовсе'),kpi(s.byChange.length+'','оргизменений, которые убирают поток'));app.append(k);
+const sp=el('section');sp.append(el('h2','','Куда уходит время руководителя сейчас'));const bar=el('div','split');
+s.byVerdict.forEach(x=>{const i=el('i',SC[x.verdict]);i.style.width=(100*x.hours/s.flowHours)+'%';i.title=x.label+': '+hh(x.hours)+' ч';bar.append(i)});
+const lg=el('div','legend');s.byVerdict.forEach(x=>{const d=el('span');d.append(el('i',SC[x.verdict]),document.createTextNode(`${x.label}: ${hh(x.hours)} ч (писем ${x.letters}, встреч ${x.meetings})`));lg.append(d)});
+sp.append(bar,lg);app.append(sp);
+const oc=el('section');oc.append(el('h2','','Что поменять в отделе'));const t=el('table'),th=el('tr');['Оргизменение','Убрать писем / встреч','Изменить форму','Часов в неделю'].forEach((x,i)=>th.append(el('th',i?'n':'',x)));t.append(th);
+const max=Math.max(...s.byChange.map(x=>x.freedHours));s.byChange.forEach(x=>{const tr=el('tr'),a=el('td');a.append(el('div','',x.change),el('div','small mut',x.label));const b=el('div','bar');b.style.width=(100*x.freedHours/max)+'%';a.append(b);
+tr.append(a,el('td','n',x.letters+' / '+x.meetings),el('td','n',x.otherLetters+' / '+x.otherMeetings),el('td','n',hh(x.freedHours)));t.append(tr)});oc.append(t);app.append(oc);
+const it=el('section');it.append(el('h2','','По каждому письму и встрече'));const tabs=el('div','tabs');tabs.setAttribute('role','tablist');
+const list=el('div');const show=()=>{list.replaceChildren();v.filter(x=>x.kind===tab).forEach(x=>{const d=el('details'),sm=el('summary');
+sm.append(el('span','t',(x.from?x.from+': ':'')+x.title),el('span','m',`${x.count} ${x.kind==='письма'?'писем':'встреч'} · ${x.causeLabel}`));
+const rr=el('span','r');rr.append(el('span','chip '+VC[x.verdict],x.verdictLabel),el('span','hrs',x.freedHours>0?'−'+hh(x.freedHours)+' ч из '+hh(x.hours):hh(x.hours)+' ч, оставить'));sm.append(rr);
+const dl=el('dl');[['Что изменить',x.change],['Что вместо',x.instead],['Основание',x.basis],['Уверенность аудитора',Math.round(x.confidence*100)+'%']].forEach(([a,b])=>{if(b)dl.append(el('dt','',a),el('dd','',b))});
+d.append(sm,dl);list.append(d)})};
+['письма','встречи'].forEach(k=>{const b=el('button','',k==='письма'?`Письма (${s.threads} цепочек)`:`Встречи (${s.series} серий)`);b.type='button';b.setAttribute('role','tab');b.setAttribute('aria-selected',tab===k);b.onclick=()=>{tab=k;[...tabs.children].forEach(c=>c.setAttribute('aria-selected',c===b));show()};tabs.append(b)});
+it.append(tabs,list);show();app.append(it);
+const et=el('section');et.append(el('h2','','Сравнение с эталоном заказчика'),el('p','small mut','Эталон модели не отдавался. По строкам — вердикт аудитора, по столбцам — что заказчик в синтетике считает правильным действием с письмом.'));
+const t2=el('table'),h2=el('tr');h2.append(el('th','','Аудитор \\ эталон'));s.etalon.actions.forEach(a=>h2.append(el('th','n',a.replace(/_/g,' '))));t2.append(h2);
+s.etalon.rows.forEach(rw=>{const tr=el('tr');tr.append(el('td','',rw.label));rw.cells.forEach(c=>tr.append(el('td','n',c)));t2.append(tr)});et.append(t2);app.append(et);
+app.append(el('footer','',`Допущения: ${s.assumptions} Агент — аудитор потока, модель ${s.model}, ${s.calls} вызовов, ≈ ${s.costUsd.toLocaleString('ru-RU')} USD. Отчёт от ${when(s.at)}. Подготовил ИИ-помощник.`))}
+fetch('/reports/flow-audit.json',{cache:'no-store'}).then(r=>{if(!r.ok)throw Error(r.status);return r.json()}).then(draw).catch(e=>{document.getElementById('app').replaceChildren(el('p','','Не удалось загрузить отчёт: '+e.message))});
+</script>
+</body>
+</html>

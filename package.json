@@ -7,6 +7,9 @@
   },
   "scripts": {
     "flow-audit": "node --env-file=.env src/scripts/flow-audit.ts",
-    "flow-audit:dry": "node src/scripts/flow-audit.ts --dry-run"
+    "flow-audit:dry": "node src/scripts/flow-audit.ts --dry-run",
+    "audit:telegram": "node --env-file=.env src/scripts/audit-telegram.ts",
+    "audit:telegram:dry": "node --env-file=.env src/scripts/audit-telegram.ts --dry-run",
+    "tg:chats": "node --env-file=.env src/scripts/audit-telegram.ts --chats"
   }
 }
