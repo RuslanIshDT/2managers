@@ -1,0 +1,14 @@
+server {
+  listen 8443 ssl;
+  server_name ${STAND_HOST};
+  ssl_certificate /tls/site.crt;
+  ssl_certificate_key /tls/site.key;
+  ssl_protocols TLSv1.2 TLSv1.3;
+  include /etc/nginx/inc/locations.inc;
+}
+
+server {
+  listen 8090;
+  server_name _;
+  include /etc/nginx/inc/locations.inc;
+}

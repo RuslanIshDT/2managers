@@ -28,6 +28,33 @@ export async function sendMessage(text: string, chatId = telegramConfig().chatId
   });
 }
 
+export function telegramConfigured(): boolean {
+  return Boolean(process.env.TELEGRAM_BOT_TOKEN);
+}
+
+const ACTIONS = ['approve', 'edit', 'reject', 'defer'] as const;
+export type ButtonAction = (typeof ACTIONS)[number];
+
+export function decisionCallback(action: ButtonAction, decisionId: string): string {
+  return `d:${action}:${decisionId}`;
+}
+
+export function parseCallback(data: string): { action: ButtonAction; decisionId: string } | null {
+  const match = /^d:(approve|edit|reject|defer):([A-Za-z0-9_-]{1,64})$/.exec(data);
+  if (!match) return null;
+  return { action: match[1] as ButtonAction, decisionId: match[2] };
+}
+
+export function parseStart(text: string): string | null {
+  const match = /^\/start(?:@\w+)?(?:\s+(\S+))?\s*$/.exec(text.trim());
+  if (!match) return null;
+  return match[1] ?? '';
+}
+
+export async function answerCallback(callbackId: string, text: string) {
+  return api<boolean>('answerCallbackQuery', { callback_query_id: callbackId, text });
+}
+
 // Чаты, которые писали боту: чтобы узнать TELEGRAM_CHAT_ID руководителя.
 export async function recentChats() {
   const me = await api<{ username: string }>('getMe');

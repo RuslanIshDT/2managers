@@ -1,0 +1,19 @@
+import { readFile } from 'node:fs/promises';
+import { drizzle } from 'drizzle-orm/node-postgres';
+import pg from 'pg';
+import * as schema from './schema.ts';
+
+export type Db = ReturnType<typeof drizzle<typeof schema>>;
+
+export function createPool(connectionString: string) {
+  return new pg.Pool({ connectionString, max: 10 });
+}
+
+export function createDb(pool: pg.Pool): Db {
+  return drizzle(pool, { schema });
+}
+
+export async function migrate(pool: pg.Pool) {
+  const sql = await readFile(new URL('../../drizzle/0001_init.sql', import.meta.url), 'utf8');
+  await pool.query(sql);
+}

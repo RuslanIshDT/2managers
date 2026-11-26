@@ -1,0 +1,66 @@
+services:
+  db:
+    image: postgres:17-alpine@sha256:f9cf3e1f0066f0eb0c48707d864f0ac5941e9ff454a072077d97a4d278d07d73
+    environment:
+      POSTGRES_USER: ecompras
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?задайте POSTGRES_PASSWORD}
+      POSTGRES_DB: ecompras
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ecompras -d ecompras']
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
+  app:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://ecompras:${POSTGRES_PASSWORD}@db:5432/ecompras
+      PORT: '3000'
+      LLM_LOG: /app/files/llm-calls.jsonl
+    volumes:
+      - ./data:/app/data:ro
+      - ./form:/app/form:ro
+      - ./reports:/app/reports
+      - ./web/audit:/app/web/audit:ro
+      - files:/app/files
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    restart: unless-stopped
+
+  nginx:
+    image: nginxinc/nginx-unprivileged:1.27-alpine@sha256:65e3e85dbaed8ba248841d9d58a899b6197106c23cb0ff1a132b7bfe0547e4c0
+    environment:
+      STAND_HOST: ${STAND_HOST:?задайте STAND_HOST}
+      NGINX_ENVSUBST_FILTER: ^STAND_
+    ports:
+      - '127.0.0.1:${HTTP_PORT:-8090}:8090'
+      - '${PUBLIC_BIND:?задайте PUBLIC_BIND}:${HTTPS_PORT:-8443}:8443'
+    volumes:
+      - ./nginx/default.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ./nginx/locations.inc:/etc/nginx/inc/locations.inc:ro
+      - ${TLS_DIR:?задайте TLS_DIR}:/tls:ro
+    depends_on:
+      app:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  files:

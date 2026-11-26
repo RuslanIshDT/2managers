@@ -94,6 +94,14 @@ function stripFence(s: string): string {
   return (m ? m[1] : s).trim();
 }
 
+export type LlmSink = (purpose: string, r: Omit<LlmResult<unknown>, 'data'>) => Promise<void>;
+
+let sink: LlmSink | null = null;
+
+export function setLlmSink(fn: LlmSink | null) {
+  sink = fn;
+}
+
 async function log(path: string, purpose: string, r: Omit<LlmResult<unknown>, 'data'>) {
   await mkdir(dirname(path), { recursive: true });
   const line = {
@@ -107,4 +115,11 @@ async function log(path: string, purpose: string, r: Omit<LlmResult<unknown>, 'd
     cost_usd: r.costUsd,
   };
   await appendFile(path, JSON.stringify(line) + '\n');
+  if (sink) {
+    try {
+      await sink(purpose, r);
+    } catch (err) {
+      console.error('Журнал модели в базе не записался', err);
+    }
+  }
 }

@@ -1,0 +1,9 @@
+node_modules
+web/dist
+.git
+_not_in_git
+.env
+.env.*
+*.log
+coverage
+.cursor
