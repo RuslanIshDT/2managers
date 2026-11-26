@@ -8,6 +8,31 @@ interface User {
   login: string;
 }
 
+interface KpiWeek {
+  week: string;
+  plan: string;
+  fact: string;
+  status: string;
+}
+
+interface DepartmentPerson {
+  id: string;
+  name: string;
+  position: string;
+  zone: string;
+  goal: string;
+  leaderGoal: string;
+  emails: number;
+  kpis: {
+    name: string;
+    unit: string;
+    better: string;
+    weeks: KpiWeek[];
+    quarter: { plan: string; fact: string; status: string } | null;
+  }[];
+  authorities: { area: string; limit: string; unit: string; note: string }[];
+}
+
 interface Cabinet {
   name: string;
   profile: string;
@@ -15,6 +40,7 @@ interface Cabinet {
   counts: { people: number; emails: number; meetings: number; tasks: number };
   mail: 'configured' | 'missing';
   telegram: 'configured' | 'missing';
+  department: { errors: string[]; people: DepartmentPerson[] };
   lastAudit: { status: string; mode: string; at: string } | null;
 }
 
@@ -155,6 +181,7 @@ export function App() {
         <Stat label="Встречи" value={counts?.meetings} />
         <Stat label="Задачи" value={counts?.tasks} />
       </div>
+      <Department department={cabinet?.department} />
       <Card className="mb-4">
         <h2 className="mb-2 text-lg font-semibold">Подключения</h2>
         <ul className="grid gap-1 text-sm">
@@ -184,6 +211,55 @@ export function App() {
         </a>
       </p>
     </main>
+  );
+}
+
+function Department({ department }: { department: Cabinet['department'] | undefined }) {
+  const people = department?.people ?? [];
+  return (
+    <section className="mb-4">
+      <h2 className="mb-2 text-lg font-semibold">Отдел</h2>
+      {department?.errors.length ? (
+        <Card className="mb-3">
+          <p className="text-sm text-[#a3302a]">{department.errors.join(' ')}</p>
+        </Card>
+      ) : null}
+      <div className="grid gap-3">
+        {people.map((person) => (
+          <Card key={person.id}>
+            <h3 className="font-semibold">
+              {person.name} <span className="font-normal text-[#5d6878]">{person.position}</span>
+            </h3>
+            <p className="mt-1 text-sm">Зона: {person.zone || '—'}</p>
+            <p className="text-sm">
+              Цель: {person.goal || '—'}
+              {person.leaderGoal ? ` · цель профиля ${person.leaderGoal}` : ''}
+            </p>
+            <p className="text-sm">Писем от человека: {person.emails}</p>
+            <ul className="mt-2 grid gap-1 text-sm">
+              {person.authorities.map((item) => (
+                <li key={item.area}>
+                  Полномочие: {item.area} — {item.limit}
+                  {item.unit === '—' ? '' : ` ${item.unit}`}
+                  {item.note ? ` (${item.note})` : ''}
+                </li>
+              ))}
+            </ul>
+            {person.kpis.map((kpi) => (
+              <div key={kpi.name} className="mt-2 text-sm">
+                <p>
+                  KPI: {kpi.name}, {kpi.unit}, лучше когда {kpi.better}
+                  {kpi.quarter ? ` · квартал ${kpi.quarter.fact} из ${kpi.quarter.plan}` : ''}
+                </p>
+                <p className="text-[#5d6878]">
+                  {kpi.weeks.map((week) => `${week.week.slice(5)} ${week.fact}/${week.plan} ${week.status}`).join(' · ')}
+                </p>
+              </div>
+            ))}
+          </Card>
+        ))}
+      </div>
+    </section>
   );
 }
 

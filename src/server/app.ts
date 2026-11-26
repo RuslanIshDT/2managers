@@ -11,6 +11,7 @@ import { z } from 'zod';
 import { hashToken, newSessionToken, verifyPassword } from '../auth.ts';
 import type { Db } from '../db/client.ts';
 import { agentRuns, emails, leaders, meetings, people, sessions, tasks, telegramClicks } from '../db/schema.ts';
+import { departmentForLeader } from '../agents/k1.ts';
 import { applyOrigin, formOrigin } from '../http/origin.ts';
 import { FLOW_AUDIT_QUEUE, type FlowAuditJob } from '../jobs/flow-audit-job.ts';
 import { checkMail, mailConfig } from '../mail.ts';
@@ -148,12 +149,13 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   app.get('/api/cabinet', async (request, reply) => {
     const leader = await currentLeader(request);
     if (!leader) return reply.code(401).send({ error: 'Нужен вход' });
-    const [peopleN, emailN, meetingN, taskN, profileRow] = await Promise.all([
+    const [peopleN, emailN, meetingN, taskN, profileRow, department] = await Promise.all([
       deps.db.select({ n: count() }).from(people).where(eq(people.leaderId, leader.id)),
       deps.db.select({ n: count() }).from(emails).where(eq(emails.leaderId, leader.id)),
       deps.db.select({ n: count() }).from(meetings).where(eq(meetings.leaderId, leader.id)),
       deps.db.select({ n: count() }).from(tasks).where(eq(tasks.leaderId, leader.id)),
       deps.db.select({ profile: leaders.profile, linkCode: leaders.linkCode }).from(leaders).where(eq(leaders.id, leader.id)),
+      departmentForLeader(deps.db, leader.id),
     ]);
     const last = await deps.db
       .select({ status: agentRuns.status, reason: agentRuns.reason, startedAt: agentRuns.startedAt })
@@ -173,6 +175,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       },
       mail: mailConfig() ? 'configured' : 'missing',
       telegram: telegramConfigured() ? 'configured' : 'missing',
+      department,
       lastAudit: last[0] ? { status: last[0].status, mode: last[0].reason, at: last[0].startedAt.toISOString() } : null,
     };
   });

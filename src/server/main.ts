@@ -1,7 +1,8 @@
 import { setLlmSink } from '../llm.ts';
 import { createDb, createPool, migrate } from '../db/client.ts';
 import { llmCalls } from '../db/schema.ts';
-import { seedIfEmpty } from '../db/seed.ts';
+import { loadDepartment } from '../agents/k1.ts';
+import { LEADER_ID, seedIfEmpty } from '../db/seed.ts';
 import { startBoss } from '../jobs/flow-audit-job.ts';
 import { buildApp } from './app.ts';
 
@@ -13,6 +14,9 @@ await migrate(pool);
 const db = createDb(pool);
 const seeded = await seedIfEmpty(db);
 if (seeded.seeded) console.log(`Каталог руководителя загружен. Вход: ${seeded.login}`);
+const department = await loadDepartment(db, LEADER_ID);
+if (department.errors.length) console.error(`K1: ${department.errors.join('; ')}`);
+else console.log(`K1: отдел загружен, подчинённых ${department.loaded}`);
 
 const boss = await startBoss(connectionString, db);
 

@@ -27,6 +27,9 @@ export const people = pgTable(
     role: text('role').notNull(),
     reportsTo: text('reports_to').notNull(),
     email: text('email').notNull(),
+    zone: text('zone').notNull().default(''),
+    goal: text('goal').notNull().default(''),
+    leaderGoal: text('leader_goal').notNull().default(''),
   },
   (t) => [primaryKey({ columns: [t.leaderId, t.externalId] })],
 );
@@ -96,6 +99,35 @@ export const tasks = pgTable(
     source: text('source').notNull(),
   },
   (t) => [primaryKey({ columns: [t.leaderId, t.externalId] })],
+);
+
+export const kpis = pgTable(
+  'kpis',
+  {
+    leaderId: text('leader_id').notNull(),
+    personId: text('person_id').notNull(),
+    kpiId: text('kpi_id').notNull(),
+    name: text('name').notNull(),
+    unit: text('unit').notNull(),
+    better: text('better').notNull(),
+    week: text('week').notNull(),
+    plan: text('plan').notNull(),
+    fact: text('fact').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.leaderId, t.personId, t.kpiId, t.week] })],
+);
+
+export const authorities = pgTable(
+  'authorities',
+  {
+    leaderId: text('leader_id').notNull(),
+    personId: text('person_id').notNull(),
+    area: text('area').notNull(),
+    limitValue: text('limit_value').notNull(),
+    unit: text('unit').notNull(),
+    note: text('note').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.leaderId, t.personId, t.area] })],
 );
 
 export const llmCalls = pgTable('llm_calls', {
