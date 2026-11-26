@@ -149,6 +149,18 @@ const modelReturn: ModelVerdict = {
 };
 
 describe('просьба подчинённого', () => {
+  it('категорию «руководство» ставит только код по оргструктуре', () => {
+    const text = 'Подтвердите участие в планёрке в пятницу.';
+    const fromTeam = enforce({ ...modelReturn, вердикт: 'нужен_руководитель', суть: 'Планёрка' }, text, null, null, false);
+    const forecast = enforce({ ...modelReturn, суть: 'Прогноз 94%' }, 'Прогноз выполнения плана: 94%.', null, null, false);
+    const fromBoss = enforce({ ...modelReturn, вердикт: 'вернуть', суть: 'Вопрос сверху' }, text, null, null, true);
+    expect(fromTeam.category).toBe('иное');
+    expect(fromTeam.kind).toBe('вернуть');
+    expect(forecast.category).toBe('иное');
+    expect(fromBoss.category).toBe('руководство');
+    expect(fromBoss.ask).toBe(true);
+  });
+
   it('скидка выше лимита идёт к руководителю, повтор не спрашивает, N1 само не уходит', () => {
     const text = 'Скидка 12% для «Ромашка-Ритейл», маржа 18%';
     expect(textSignals(text).discountPercent).toBe(12);

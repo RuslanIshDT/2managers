@@ -74,7 +74,8 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
   for (const letter of pending) {
     if (seen.has(letter.messageId)) continue;
     const person = persons.find((row) => row.email.toLowerCase() === letter.fromEmail.toLowerCase());
-    if (!person || person.role !== 'подчинённый') {
+    const boss = person?.role === 'руководитель руководителя';
+    if (!person || (person.role !== 'подчинённый' && !boss)) {
       if (letter.marked !== false) continue;
       await db.insert(mailIn).values({
         leaderId,
@@ -133,7 +134,7 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
         send: covered.effect === 'сам',
       };
     } else if (prior) {
-      ruled = enforce(DUMMY, `${letter.subject}\n${letter.body}`, limit, prior, false);
+      ruled = enforce(DUMMY, `${letter.subject}\n${letter.body}`, limit, prior, boss);
     } else if (calls >= modelBudget) {
       deferred += 1;
       continue;
@@ -153,7 +154,7 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
         }),
       });
       calls += 1;
-      ruled = enforce(model, `${letter.subject}\n${letter.body}`, limit, null, false);
+      ruled = enforce(model, `${letter.subject}\n${letter.body}`, limit, null, boss);
     }
     ruled = { ...ruled, draft: applyRevision(ruled.draft, ruled.category, edits) };
 

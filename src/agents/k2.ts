@@ -13,7 +13,8 @@ export function finishTemplate(): string {
 }
 
 export const VERDICT_KINDS = ['нужен_руководитель', 'вернуть'] as const;
-export const CATEGORIES = ['деньги', 'кадры', 'обязательства_клиентам', 'руководство', 'иное'] as const;
+export const MODEL_CATEGORIES = ['деньги', 'кадры', 'обязательства_клиентам', 'иное'] as const;
+export const CATEGORIES = [...MODEL_CATEGORIES, 'руководство'] as const;
 export type RequestCategory = (typeof CATEGORIES)[number];
 
 const N1 = new Set<RequestCategory>(['деньги', 'кадры', 'обязательства_клиентам', 'руководство']);
@@ -65,7 +66,7 @@ const modelZod = z.object({
   в_полномочиях: z.enum(['да', 'нет', 'неясно']),
   есть_предложение: z.enum(['да', 'нет']),
   только_руководитель: z.enum(['да', 'нет']),
-  категория: z.enum(CATEGORIES),
+  категория: z.enum(MODEL_CATEGORIES),
   суть: z.string().min(1).max(800),
   контекст: z.string().max(1200),
   рекомендация: z.string().max(1200),
@@ -101,7 +102,7 @@ const schema: JsonSchema = {
     в_полномочиях: { type: 'string', enum: ['да', 'нет', 'неясно'] },
     есть_предложение: { type: 'string', enum: ['да', 'нет'] },
     только_руководитель: { type: 'string', enum: ['да', 'нет'] },
-    категория: { type: 'string', enum: [...CATEGORIES] },
+    категория: { type: 'string', enum: [...MODEL_CATEGORIES] },
     суть: { type: 'string' },
     контекст: { type: 'string' },
     рекомендация: { type: 'string' },
@@ -120,7 +121,7 @@ const SYSTEM = `Ты — агент полномочий руководител�
 Скидка выше названного лимита полномочий — всегда "нужен_руководитель", категория "деньги".
 Для "нужен_руководитель" заполни контекст (полномочия, KPI, цель, что уже известно), рекомендацию (один вариант, основание, альтернатива), риски и если_не_решить. Поле предложение_полномочия оставь пустым.
 Для "вернуть" заполни предложение_полномочия: какое право дать, чтобы такие просьбы больше не приходили. Рекомендацию, риски и если_не_решить оставь пустыми.
-Каждое текстовое поле короче 400 знаков. Эталонных меток писем у тебя нет.`;
+Категорию «руководство» не ставь: её назначает код, если письмо от руководителя руководителя. Каждое текстовое поле короче 400 знаков. Эталонных меток писем у тебя нет.`;
 
 export function chainKey(fromEmail: string, subject: string): string {
   return `${fromEmail.trim().toLowerCase()}|${subject.trim().toLowerCase().replace(/\s+/g, ' ')}`;
@@ -159,7 +160,7 @@ export function enforce(model: ModelVerdict, letterText: string, limit: number |
     };
   }
   const signal = textSignals(letterText);
-  let category = model.категория;
+  let category: RequestCategory = model.категория;
   const reasons: string[] = [];
   if (boss) {
     category = 'руководство';
