@@ -15,6 +15,7 @@ import { departmentForLeader } from '../agents/k1.ts';
 import { accuracyView } from '../agents/accuracy.ts';
 import { controlOf, withLeader } from '../agents/control.ts';
 import { approveProtocol, parseProtocolCallback, protocolCard } from '../agents/protocol.ts';
+import { deskForLeader } from '../agents/desk.ts';
 import { applyClick, applyLeaderAction, hideMailbox, pullInbox, requestFeed, saveEditText } from '../agents/intake.ts';
 import { acceptWeek, acceptWeekByChat, weekScene } from '../agents/week.ts';
 import { focusForLeader, sendFocus } from '../agents/focus-run.ts';
@@ -176,6 +177,15 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       .where(eq(agentRuns.agent, 'flow-audit'))
       .orderBy(sql`${agentRuns.startedAt} desc`)
       .limit(1);
+    const mirror = await mirrorForLeader(deps.db, leader.id);
+    const ownAudit = await deps.db.select({ leaderId: flowReports.leaderId }).from(flowReports).where(eq(flowReports.leaderId, leader.id)).limit(1);
+    const desk = await deskForLeader(
+      deps.db,
+      leader.id,
+      ownAudit.length
+        ? mirror.series.map((item) => ({ title: item.title, open: item.action === '' }))
+        : [],
+    );
     return {
       name: leader.name,
       profile: hideMailbox((profileRow[0]?.profile ?? '').slice(0, 700), mailConfig()?.user ?? ''),
@@ -192,7 +202,8 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       feed: await requestFeed(deps.db, leader.id),
       week: await weekScene(deps.db, leader.id),
       focus: await focusForLeader(deps.db, leader.id, leader.name),
-      mirror: await mirrorForLeader(deps.db, leader.id),
+      mirror,
+      desk,
       accuracy: await accuracyView(deps.db, leader.id),
       protocol: await protocolCard(deps.db, leader.id),
       stubs: {

@@ -114,6 +114,7 @@ interface Cabinet {
     tasks: { title: string; owner: string; due: string; status: string }[];
     meetings: { summary: string; starts: string }[];
   };
+  desk: Desk;
   control: {
     goals: { n: string; text: string; owners: string[]; kpis: string[]; tasks: string[] }[];
     holes: { kind: string; text: string }[];
@@ -123,13 +124,45 @@ interface Cabinet {
   lastAudit: { status: string; mode: string; at: string } | null;
 }
 
-type Section = 'home' | 'department' | 'flow' | 'feed' | 'settings' | 'tasks' | 'calendar' | 'mailing';
+type Section = 'home' | 'department' | 'flow' | 'feed' | 'helper' | 'settings' | 'tasks' | 'calendar' | 'mailing';
+
+interface Origin {
+  helper: string;
+  who: string;
+  data: string;
+  how: string;
+  safety: string;
+  rows: string[];
+}
+
+interface WorkItem {
+  id: string;
+  title: string;
+  wait: string;
+  minutes: string;
+  kind: 'decision' | 'talk' | 'right' | 'series' | 'task';
+  origin: Origin;
+}
+
+interface Desk {
+  work: WorkItem[];
+  done: DoneLine[];
+  helpers: { id: string; name: string; mode: string; does: string; did: string; result: string; value: string }[];
+  people: { id: string; origin: Origin }[];
+  feed: { id: string; origin: Origin }[];
+}
+
+interface DoneLine {
+  text: string;
+  origin: Origin;
+}
 
 const SECTIONS: { id: Section; label: string }[] = [
   { id: 'home', label: 'Главная' },
   { id: 'department', label: 'Отдел' },
   { id: 'flow', label: 'Поток' },
   { id: 'feed', label: 'Лента' },
+  { id: 'helper', label: 'Помощник' },
   { id: 'settings', label: 'Настройки' },
 ];
 
@@ -219,6 +252,11 @@ export function App() {
     }
   }
 
+  function openHelper(helper: string) {
+    setSection('helper');
+    window.setTimeout(() => document.getElementById(`helper-${helper}`)?.scrollIntoView({ block: 'start' }), 0);
+  }
+
   async function sendFocusNow() {
     setError('');
     setPending(true);
@@ -254,8 +292,8 @@ export function App() {
     setError('');
     setPending(true);
     try {
-      const week = await api<WeekScene>('/api/rules/accept', { method: 'POST', body: '{}' });
-      setCabinet((prev) => (prev ? { ...prev, week } : prev));
+      await api<WeekScene>('/api/rules/accept', { method: 'POST', body: '{}' });
+      setCabinet(await api<Cabinet>('/api/cabinet'));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Не удалось принять правила');
     } finally {
@@ -458,17 +496,19 @@ export function App() {
       </nav>
       {error ? <p className="mb-4 text-sm text-[#a3302a]">{error}</p> : null}
       {section === 'home' ? (
-        <>
-          <Week
-            week={cabinet?.week}
-            mode="home"
-            pending={pending}
-            onAccept={acceptRules}
-            onDecision={decide}
-          />
-          <Focus focus={cabinet?.focus} pending={pending} onSend={sendFocusNow} />
-          <Signals signals={(cabinet?.control.signals ?? []).filter((item) => item.early)} title="Ранний сигнал" />
-        </>
+        <HomeDesk
+          desk={cabinet?.desk}
+          pending={pending}
+          onDecision={decide}
+          onAccept={acceptRules}
+          onSeries={seriesAction}
+          onSend={sendFocusNow}
+          onOpen={(helper) => {
+            setSection('helper');
+            window.setTimeout(() => document.getElementById(`helper-${helper}`)?.scrollIntoView({ block: 'start' }), 0);
+          }}
+          onTalk={() => setSection('department')}
+        />
       ) : null}
       {section === 'department' ? (
         <>
@@ -478,17 +518,17 @@ export function App() {
             <Stat label="Встречи" value={counts?.meetings} />
             <Stat label="Задачи" value={counts?.tasks} />
           </div>
-          <Department department={cabinet?.department} />
-          <Goals control={cabinet?.control} />
-          <Signals signals={cabinet?.control.signals ?? []} title="Сигналы KPI" />
-          <Matrix rows={cabinet?.focus.matrix ?? []} />
-          <Mirror mirror={cabinet?.mirror} part="notes" pending={pending} onSend={sendNote} onSeries={seriesAction} />
+          <Department department={cabinet?.department} origins={cabinet?.desk.people ?? []} onOpen={openHelper} />
+          <Goals control={cabinet?.control} onOpen={openHelper} />
+          <Signals signals={cabinet?.control.signals ?? []} title="Сигналы KPI" onOpen={openHelper} />
+          <Matrix rows={cabinet?.focus.matrix ?? []} onOpen={openHelper} />
+          <Mirror mirror={cabinet?.mirror} part="notes" pending={pending} onSend={sendNote} onSeries={seriesAction} onOpen={openHelper} origins={cabinet?.desk.people ?? []} />
         </>
       ) : null}
       {section === 'flow' ? (
         <>
           <Week week={cabinet?.week} mode="flow" pending={pending} onAccept={acceptRules} />
-          <Mirror mirror={cabinet?.mirror} part="series" pending={pending} onSend={sendNote} onSeries={seriesAction} />
+          <Mirror mirror={cabinet?.mirror} part="series" pending={pending} onSend={sendNote} onSeries={seriesAction} onOpen={openHelper} origins={cabinet?.desk.work ?? []} />
           <p className="text-sm">
             <a className="text-[#1f5fbf] underline" href="/audit/">
               Полный аудит потока
@@ -507,6 +547,7 @@ export function App() {
                 <b>{kindLabel(item.kind)}</b> · {categoryWords(item.category)}
                 <span className="block">{cleanDots(item.summary)}</span>
                 <span className="block text-[#5d6878]">{cleanDots(item.basis)}</span>
+                <Origin origin={cabinet.desk.feed.find((row) => row.id === item.id)?.origin} onOpen={openHelper} />
               </li>
             ))}
           </ul>
@@ -515,6 +556,7 @@ export function App() {
         )}
       </Card>
       ) : null}
+      {section === 'helper' ? <Helpers cards={cabinet?.desk.helpers ?? []} /> : null}
       {section === 'tasks' ? (
         <Card className="mb-4">
           <h2 className="text-lg font-semibold">Задачи</h2>
@@ -629,12 +671,16 @@ function Mirror({
   pending,
   onSend,
   onSeries,
+  onOpen,
+  origins,
 }: {
   mirror: MirrorScene | undefined;
   part: 'notes' | 'series';
   pending: boolean;
   onSend: () => void;
   onSeries: (key: string, action: 'продлить' | 'отпустить') => void;
+  onOpen: (helper: string) => void;
+  origins: { id: string; origin: Origin }[];
 }) {
   if (!mirror) return null;
   if (part === 'notes') {
@@ -650,6 +696,7 @@ function Mirror({
                 <b>{note.name}</b>
                 {note.quiet ? ' · тихая проблема' : ''}
                 <span className="block whitespace-pre-wrap text-[#5d6878]">{cleanDots(note.text)}</span>
+                <Origin origin={origins.find((row) => row.origin.data.startsWith(`${note.name}:`))?.origin ?? rowOrigin('k14', 'Записка человеку', note.text, [])} onOpen={onOpen} />
               </li>
             ))}
           </ul>
@@ -671,9 +718,10 @@ function Mirror({
             {item.kind ? <span className="text-[#5d6878]"> · {item.kind}</span> : null}
             <span className="text-[#5d6878]"> · {verdictWords(item.verdict)}</span>
             <span className="block text-[#5d6878]">
-              {cleanDots(`${durationWords(item.hours)}. ${item.change}`)}
+              {cleanDots(item.change)}
               {item.action ? ` Записано: ${item.action}${item.reason ? ` — ${item.reason}` : ''}.` : ''}
             </span>
+            <Origin origin={origins.find((row) => row.id === `series:${item.title}`)?.origin ?? rowOrigin('k15', 'Календарь с нуля', item.title, item.change ? [item.change] : [])} onOpen={onOpen} />
             <span className="mt-1 flex gap-2">
               <Button type="button" variant="outline" disabled={pending} onClick={() => onSeries(item.title, 'продлить')}>
                 Продлить
@@ -769,6 +817,163 @@ function Revisions({ rows, onSaved }: { rows: { id: string; category: string; in
   );
 }
 
+function HomeDesk({
+  desk,
+  pending,
+  onDecision,
+  onAccept,
+  onSeries,
+  onSend,
+  onOpen,
+  onTalk,
+}: {
+  desk: Desk | undefined;
+  pending: boolean;
+  onDecision: (id: string, action: 'approve' | 'reject' | 'defer') => void;
+  onAccept: () => void;
+  onSeries: (key: string, action: 'продлить' | 'отпустить') => void;
+  onSend: () => void;
+  onOpen: (helper: string) => void;
+  onTalk: () => void;
+}) {
+  if (!desk) return null;
+  const tasks = desk.work.filter((item) => item.kind === 'task');
+  const rest = desk.work.filter((item) => item.kind !== 'task');
+  return (
+    <>
+      <section className="mb-6">
+        <h2 className="mb-3 text-lg font-semibold">Что нужно от вас</h2>
+        {rest.length + tasks.length === 0 ? <p className="text-sm text-[#5d6878]">Сейчас от вас ничего не ждут.</p> : null}
+        <div className="grid gap-3">
+          {rest.map((item) => (
+            <WorkCard key={item.id} item={item} pending={pending} onDecision={onDecision} onAccept={onAccept} onSeries={onSeries} onOpen={onOpen} onTalk={onTalk} />
+          ))}
+          {tasks.map((item) => (
+            <WorkCard key={item.id} item={item} pending={pending} onDecision={onDecision} onAccept={onAccept} onSeries={onSeries} onOpen={onOpen} onTalk={onTalk} />
+          ))}
+        </div>
+        {tasks.length ? (
+          <Button className="mt-3" type="button" variant="outline" disabled={pending} onClick={onSend}>
+            Прислать утром
+          </Button>
+        ) : null}
+      </section>
+      <section className="mb-6">
+        <h2 className="mb-3 text-lg font-semibold">Сделано без вас за неделю</h2>
+        <ul className="grid gap-3">
+          {desk.done.map((line) => (
+            <li key={line.text}>
+              <p className="text-sm">{line.text}</p>
+              <Origin origin={line.origin} onOpen={onOpen} />
+            </li>
+          ))}
+        </ul>
+      </section>
+    </>
+  );
+}
+
+function WorkCard({
+  item,
+  pending,
+  onDecision,
+  onAccept,
+  onSeries,
+  onOpen,
+  onTalk,
+}: {
+  item: WorkItem;
+  pending: boolean;
+  onDecision: (id: string, action: 'approve' | 'reject' | 'defer') => void;
+  onAccept: () => void;
+  onSeries: (key: string, action: 'продлить' | 'отпустить') => void;
+  onOpen: (helper: string) => void;
+  onTalk: () => void;
+}) {
+  return (
+    <Card>
+      <p className="font-semibold">{item.title}</p>
+      {item.wait ? <p className="mt-1 text-sm text-[#5d6878]">{item.wait}</p> : null}
+      {item.minutes ? <p className="text-sm text-[#5d6878]">{item.minutes}</p> : null}
+      <Origin origin={item.origin} onOpen={onOpen} />
+      <span className="mt-2 flex flex-wrap gap-2">
+        {item.kind === 'decision' ? (
+          <>
+            <Button type="button" disabled={pending} onClick={() => onDecision(item.id, 'approve')}>
+              Утвердить
+            </Button>
+            <Button type="button" variant="outline" disabled={pending} onClick={() => onDecision(item.id, 'reject')}>
+              Отклонить
+            </Button>
+            <Button type="button" variant="outline" disabled={pending} onClick={() => onDecision(item.id, 'defer')}>
+              Отложить
+            </Button>
+          </>
+        ) : null}
+        {item.kind === 'talk' ? (
+          <Button type="button" variant="outline" onClick={onTalk}>
+            Открыть в отделе
+          </Button>
+        ) : null}
+        {item.kind === 'right' ? (
+          <Button type="button" disabled={pending} onClick={onAccept}>
+            Принять
+          </Button>
+        ) : null}
+        {item.kind === 'series' ? (
+          <Button type="button" variant="outline" disabled={pending} onClick={() => onSeries(item.id.slice('series:'.length), 'отпустить')}>
+            Отпустить
+          </Button>
+        ) : null}
+      </span>
+    </Card>
+  );
+}
+
+function Origin({ origin, onOpen }: { origin: Origin | undefined; onOpen: (helper: string) => void }) {
+  if (!origin) return null;
+  return (
+    <details className="mt-2 text-sm text-[#5d6878]">
+      <summary>Откуда это и почему можно доверять</summary>
+      <div className="mt-2 grid gap-1">
+        <p>Кто подготовил: {origin.who}</p>
+        <p>Из каких данных: {origin.data}</p>
+        <p>Как получено: {origin.how}</p>
+        <p>Страховка: {origin.safety}</p>
+        {origin.rows.length ? (
+          <ul className="grid gap-1">
+            {origin.rows.map((row) => (
+              <li key={row}>{row}</li>
+            ))}
+          </ul>
+        ) : null}
+        <button type="button" className="w-fit text-[#1f5fbf] underline" onClick={() => onOpen(origin.helper)}>
+          Как это устроено
+        </button>
+      </div>
+    </details>
+  );
+}
+
+function Helpers({ cards }: { cards: Desk['helpers'] }) {
+  return (
+    <section className="grid gap-3">
+      <h2 className="text-lg font-semibold">Как работает помощник</h2>
+      {cards.map((card) => (
+        <Card key={card.id} id={`helper-${card.id}`}>
+          <h3 className="font-semibold">
+            {card.name} <span className="font-normal text-[#5d6878]">· {card.mode}</span>
+          </h3>
+          <p className="mt-1 text-sm">Что делает: {card.does}</p>
+          <p className="text-sm">Что сделал за неделю: {card.did}</p>
+          <p className="text-sm">Результат: {card.result}</p>
+          <p className="text-sm">Ценность: {card.value}</p>
+        </Card>
+      ))}
+    </section>
+  );
+}
+
 function Week({
   week,
   mode,
@@ -798,8 +1003,8 @@ function Week({
         </>
       ) : (
         <p className="text-sm text-[#5d6878]">
-          {week.accepted
-            ? `Повторы склеены: ${countWords(week.gluedLetters, 'письмо', 'письма', 'писем')} и ${countWords(week.gluedMeetings, 'встреча', 'встречи', 'встреч')}. Сводкой: ${countWords(week.digestLetters, 'письмо', 'письма', 'писем')} и ${countWords(week.digestMeetings, 'встреча', 'встречи', 'встреч')}. Оставшееся: ${week.remaining.join('; ') || 'нет'}.`
+            {week.accepted
+            ? `Повторы одной темы приходят один раз: ${countWords(week.gluedLetters, 'письмо', 'письма', 'писем')} и ${countWords(week.gluedMeetings, 'встреча', 'встречи', 'встреч')}. Сводкой: ${countWords(week.digestLetters, 'письмо', 'письма', 'писем')} и ${countWords(week.digestMeetings, 'встреча', 'встречи', 'встреч')}. Оставшееся: ${week.remaining.join('; ') || 'нет'}.`
             : 'Правила недели ещё не приняты.'}
         </p>
       )}
@@ -880,7 +1085,19 @@ function Week({
   );
 }
 
-function Goals({ control }: { control: Cabinet['control'] | undefined }) {
+function rowOrigin(helper: string, who: string, data: string, rows: string[]): Origin {
+  return {
+    helper,
+    who,
+    data,
+    how: 'Посчитано по данным',
+    safety:
+      'Деньги, кадры, обещания клиентам и письма руководства код всегда оставляет руководителю. Без его кнопки ничего не отправляется, кроме того, что он сам разрешил правилом.',
+    rows,
+  };
+}
+
+function Goals({ control, onOpen }: { control: Cabinet['control'] | undefined; onOpen: (helper: string) => void }) {
   if (!control) return null;
   return (
     <Card className="mb-4">
@@ -890,6 +1107,7 @@ function Goals({ control }: { control: Cabinet['control'] | undefined }) {
           <li key={goal.n}>
             <b>{goal.n}. {goal.text}</b>
             <span className="block text-[#5d6878]">{goal.owners.length ? goal.owners.join(', ') : 'владельца нет'}{goal.kpis.length ? ` · ${goal.kpis.join(', ')}` : ''}</span>
+            <Origin origin={rowOrigin('k6', 'Цели', `${goal.text}. ${goal.owners.join(', ') || 'владельца нет'}`, goal.kpis)} onOpen={onOpen} />
           </li>
         ))}
       </ul>
@@ -902,21 +1120,33 @@ function Goals({ control }: { control: Cabinet['control'] | undefined }) {
   );
 }
 
-function Signals({ signals, title }: { signals: { text: string; early: boolean }[]; title: string }) {
+function Signals({ signals, title, onOpen }: { signals: { text: string; early: boolean }[]; title: string; onOpen: (helper: string) => void }) {
   if (!signals.length) return null;
   return (
     <Card className="mb-4">
       <h2 className="mb-2 text-lg font-semibold">{title}</h2>
       <ul className="grid gap-2 text-sm">
         {signals.map((item) => (
-          <li key={item.text}>{item.early ? 'Раньше письма. ' : ''}{item.text}</li>
+          <li key={item.text}>
+            {item.early ? 'Раньше письма. ' : ''}
+            {item.text}
+            <Origin origin={rowOrigin('k8', 'Контроль KPI', item.text, [])} onOpen={onOpen} />
+          </li>
         ))}
       </ul>
     </Card>
   );
 }
 
-function Department({ department }: { department: Cabinet['department'] | undefined }) {
+function Department({
+  department,
+  origins,
+  onOpen,
+}: {
+  department: Cabinet['department'] | undefined;
+  origins: { id: string; origin: Origin }[];
+  onOpen: (helper: string) => void;
+}) {
   const people = department?.people ?? [];
   return (
     <section className="mb-4">
@@ -964,6 +1194,7 @@ function Department({ department }: { department: Cabinet['department'] | undefi
                 </p>
               </div>
             ))}
+            <Origin origin={origins.find((row) => row.id === person.id)?.origin} onOpen={onOpen} />
           </Card>
         ))}
       </div>
@@ -1043,7 +1274,7 @@ const MATRIX_CELLS = [
   { id: 'расширить', title: 'Расширить полномочия', hint: 'в норме, пишет много' },
 ];
 
-function Matrix({ rows }: { rows: { name: string; cell?: string; quiet: boolean }[] }) {
+function Matrix({ rows, onOpen }: { rows: { name: string; cell?: string; quiet: boolean; basis?: string }[]; onOpen: (helper: string) => void }) {
   if (!rows.length) return null;
   return (
     <section className="mb-4">
@@ -1060,6 +1291,7 @@ function Matrix({ rows }: { rows: { name: string; cell?: string; quiet: boolean 
                   <li key={row.name}>
                     {row.name}
                     {row.quiet ? ' · тихая проблема' : ''}
+                    <Origin origin={rowOrigin('k3', 'Матрица отдела', row.basis || row.name, [])} onOpen={onOpen} />
                   </li>
                 ))}
             </ul>
@@ -1071,7 +1303,7 @@ function Matrix({ rows }: { rows: { name: string; cell?: string; quiet: boolean 
 }
 
 function kindLabel(kind: string): string {
-  if (kind === 'нужен_руководитель') return 'Нужно ваше решение';
+  if (kind === 'нужен_руководитель') return 'Оставил вам';
   if (kind === 'вернуть') return 'Вернул';
   if (kind === 'повтор') return 'Повтор, не спрашиваю';
   if (kind === 'не_из_отдела') return 'Не из отдела';
@@ -1086,7 +1318,9 @@ function actionWords(pair: string): string {
 }
 
 function categoryWords(category: string): string {
-  if (category === 'обязательства_клиентам') return 'обязательства клиентам';
+  if (category === 'обязательства_клиентам') return 'обещание клиенту';
+  if (category === 'руководство') return 'письмо руководства';
+  if (category === 'иное') return 'рабочий вопрос';
   if (category === 'не_из_отдела') return 'не из отдела';
   return category;
 }

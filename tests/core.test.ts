@@ -6,6 +6,8 @@ import { readFile } from 'node:fs/promises';
 import { chainKey, discountLimit, enforce, textSignals, type ModelVerdict } from '../src/agents/k2.ts';
 import { hideMailbox, isOwnAddress, lettersForMailbox } from '../src/agents/intake.ts';
 import { pickDiscountAboveLimit } from '../src/agents/reset-stand.ts';
+import { buildDesk, type DeskInput } from '../src/agents/desk.ts';
+import { subjectKey, type FlowRule } from '../src/agents/replay.ts';
 import { freshVerdictKind } from '../src/agents/week.ts';
 import { applyRevision, revisionPrompt } from '../src/agents/revisions.ts';
 import { loadSynthetic } from '../src/data/synthetic.ts';
@@ -645,6 +647,73 @@ describe('лента и сброс стенда', () => {
     const source = await readFile('src/scripts/reset-stand.ts', 'utf8');
     const picker = await readFile('src/agents/reset-stand.ts', 'utf8');
     expect(source + picker).not.toMatch(/m062|Ольга|10%/);
+  });
+});
+
+describe('главная T34', () => {
+  it('собирает работу и цифры из переданных данных и не знает людей синтетики', async () => {
+    const rule: FlowRule = {
+      kind: 'письмо',
+      title: 'Статус закрыт',
+      personId: 'a',
+      area: '',
+      limitValue: '',
+      fromEmail: 'kira@example.com',
+      subjectKey: subjectKey('Статус сделки'),
+      seriesKey: '',
+      effect: 'стоп',
+      cause: '',
+    };
+    const meetingRule: FlowRule = {
+      kind: 'встреча',
+      title: 'Планёрка',
+      personId: '',
+      area: '',
+      limitValue: '',
+      fromEmail: '',
+      subjectKey: '',
+      seriesKey: 'Планёрка направления',
+      effect: 'стоп',
+      cause: '',
+    };
+    const input: DeskInput = {
+      accepted: true,
+      decisions: [{ id: 'd1', status: 'ждёт', summary: 'Скидка 15% клиенту, ответ до пятницы', replyName: 'Кира', createdAt: '2026-11-26T10:00:00.000Z', category: 'деньги' }],
+      verdicts: [{ id: 'v1', kind: 'вернуть', category: 'кадры', summary: 'Кира просит согласовать отпуск', basis: 'Это кадры', createdAt: '2026-11-20T10:00:00.000Z' }],
+      letters: [{ fromName: 'Кира', fromEmail: 'kira@example.com', subject: 'Статус сделки', body: '', received: '2026-11-25T10:00:00' }],
+      meetings: [{ summary: 'Планёрка направления', minutes: 40 }],
+      rules: [rule, meetingRule],
+      people: [{ id: 'a', name: 'Кира', emails: 0, laggingWeeks: [{ name: 'План', week: '2026-11-23' }] }],
+      authorities: [{ personId: 'a', area: 'скидка', limit: '9', unit: '%' }],
+      history: [],
+      series: [{ title: 'Планёрка направления', open: true }],
+      tasks: [{ title: 'Разобрать бюджет', minutes: 25, goal: 'План квартала' }],
+      calls: [],
+    };
+    const desk = buildDesk(input);
+    expect(desk.work[0]?.kind).toBe('decision');
+    expect(desk.work[0]?.title.startsWith('Решите:')).toBe(true);
+    expect(desk.work[0]?.origin.data).toContain('Кира');
+    expect(desk.work.some((item) => item.title === 'Поговорите: Кира')).toBe(true);
+    const letterLine = desk.done.find((line) => line.text.includes('письмо'));
+    const meetingLine = desk.done.find((line) => line.text.includes('встреч'));
+    expect(letterLine?.text).toContain('оценка');
+    expect(meetingLine?.text).toContain('40 минут');
+    expect(meetingLine?.text).not.toContain('оценка');
+    expect(desk.work[0]?.minutes).toBe('');
+    expect(desk.helpers.filter((card) => /^k\d+$/.test(card.id))).toHaveLength(15);
+    expect(desk.helpers.filter((card) => card.mode === 'заглушка').map((card) => card.id)).toEqual(['stub-tasks', 'stub-calendar', 'stub-mail']);
+    for (const item of [...desk.work, ...desk.done]) {
+      expect(item.origin.who).not.toBe('');
+      expect(item.origin.data).not.toBe('');
+      expect(item.origin.how).not.toBe('');
+      expect(item.origin.safety).toContain('кнопки');
+    }
+    const dump = JSON.stringify(desk);
+    expect(dump).toContain('Кира');
+    expect(dump).not.toMatch(/Ольга|Дмитрий|m062|Ромашка|вердикт|дайджест|склеен/);
+    const source = await readFile('src/agents/desk.ts', 'utf8');
+    expect(source).not.toMatch(/Ольга|Дмитрий|m062|Ромашка/);
   });
 });
 
