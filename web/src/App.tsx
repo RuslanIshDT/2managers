@@ -109,6 +109,7 @@ interface Cabinet {
   mirror: MirrorScene;
   revisions: { id: string; category: string; instead: string }[];
   accuracy: { total: number; hit: number; calls: number; forced: number; misses: { pair: string; count: number }[] } | null;
+  protocol: { status: string; open: number } | null;
   lastAudit: { status: string; mode: string; at: string } | null;
 }
 
@@ -267,6 +268,35 @@ export function App() {
       setMailNote(result.deferred ? `${head}. Осталось ещё ${result.deferred}` : head);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Не удалось разобрать почту');
+    } finally {
+      setPending(false);
+    }
+  }
+
+  async function sendProtocol() {
+    setJob('');
+    setError('');
+    const agreed = window.confirm('Один вызов модели по расшифровке и сообщение в Telegram. Рассылка писем не будет. Запустить?');
+    if (!agreed) return;
+    setPending(true);
+    try {
+      const created = await api<{ id: string }>('/api/jobs/protocol', {
+        method: 'POST',
+        body: JSON.stringify({ confirm: true }),
+      });
+      for (let i = 0; i < 20; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+        const state = await api<{ status: string; detail: string | null }>(`/api/jobs/${created.id}`);
+        if (state.status === 'done') {
+          setJob(state.detail || 'Протокол отправлен');
+          setCabinet(await api<Cabinet>('/api/cabinet'));
+          return;
+        }
+        if (state.status === 'failed') throw new Error(state.detail || 'Протокол не собрался');
+      }
+      setJob('Протокол ещё готовится.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось отправить протокол');
     } finally {
       setPending(false);
     }
@@ -518,6 +548,16 @@ export function App() {
           ) : (
             <p className="mt-2 text-sm text-[#5d6878]">Замера ещё нет. Один вызов на цепочку, не на каждое письмо.</p>
           )}
+        </div>
+        <div className="mt-4">
+          <Button type="button" variant="outline" onClick={sendProtocol} disabled={pending}>
+            {pending ? 'Задание…' : 'Протокол встречи в Telegram'}
+          </Button>
+          <p className="mt-2 text-sm text-[#5d6878]">
+            {cabinet?.protocol
+              ? `Протокол в Telegram: ${cabinet.protocol.status}. Открытых вопросов: ${cabinet.protocol.open}. Рассылка участникам — заглушка, письма не уходят.`
+              : 'Расшифровка читается с диска стенда и в репозиторий не входит. Рассылка — заглушка.'}
+          </p>
         </div>
       </Card>
       <Card className="mb-4">

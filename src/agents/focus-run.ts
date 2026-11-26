@@ -6,6 +6,7 @@ import { departmentForLeader } from './k1.ts';
 import { chooseFocus, classifySeries, renderPlan, type Candidate, type FocusPlan } from './conductor.ts';
 import { departmentMatrix, goalMinutes, morningLines } from './focus.ts';
 import { sendMessage } from '../telegram.ts';
+import { latestProtocol, morningOpenItems } from './protocol.ts';
 
 export async function focusForLeader(db: Db, leaderId: string, leaderName: string) {
   const scene = await sceneFor(db, leaderId, leaderName);
@@ -32,7 +33,8 @@ export async function sendFocus(db: Db, leaderId: string) {
     .insert(focusPlans)
     .values({ leaderId, plan: { text, today: plan.today, later: plan.later }, createdAt: new Date() })
     .onConflictDoUpdate({ target: focusPlans.leaderId, set: { plan: { text, today: plan.today, later: plan.later }, createdAt: new Date() } });
-  await sendMessage(text, leader.telegramChatId);
+  const protocol = await latestProtocol(db, leaderId);
+  await sendMessage(`${text}${protocol ? morningOpenItems(protocol.open) : ''}`, leader.telegramChatId);
   return { matrix: scene.matrix, share: scene.share, text };
 }
 

@@ -23,6 +23,7 @@ services:
       LLM_LOG: /app/files/llm-calls.jsonl
     volumes:
       - ./data:/app/data:ro
+      - ./_not_in_git/2managers/meetings:/app/meetings:ro
       - ./form:/app/form:ro
       - ./reports:/app/reports
       - ./web/audit:/app/web/audit:ro

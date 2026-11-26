@@ -15,6 +15,7 @@ import { burningSeries, noteToSend, weeklyNotes } from '../src/agents/mirror.ts'
 import { letterHits, replayWeek, ruleEffect, rulesFromAudit, trustOffers, waitingHours } from '../src/agents/replay.ts';
 import { finishTemplate, hasProposal } from '../src/agents/k2.ts';
 import { forceMailAction, mailScore } from '../src/agents/accuracy.ts';
+import { morningOpenItems, parseProtocolCallback, renderProtocol } from '../src/agents/protocol.ts';
 import { decisionCallback, parseCallback, parseRuleCallback, parseStart } from '../src/telegram.ts';
 
 describe('синтетика D2', () => {
@@ -428,6 +429,25 @@ describe('точность почты', () => {
       { expected: 'делегировать', action: 'в_сводку' },
     ]);
     expect(score).toEqual({ total: 3, hit: 2, misses: [{ pair: 'делегировать → в_сводку', count: 1 }] });
+  });
+});
+
+describe('протокол', () => {
+  it('собирает текст и узнаёт кнопку утверждения', () => {
+    const text = renderProtocol({
+      theme: 'План <недели>',
+      participants: ['Анна'],
+      notes: ['Срок сдвинули'],
+      decisions: ['Оставить две планёрки'],
+      next: ['Анна пишет список'],
+      proposals: ['Сводку вместо статуса'],
+      open: ['Кто ведёт понедельник'],
+    });
+    expect(text).toContain('План &lt;недели&gt;');
+    expect(text).toContain('Рассылка участникам — заглушка');
+    expect(morningOpenItems(['Кто ведёт понедельник'])).toContain('прошлого протокола');
+    expect(parseProtocolCallback('p:approve:ab12cd34')).toBe('ab12cd34');
+    expect(parseProtocolCallback('d:approve:ab12cd34')).toBeNull();
   });
 });
 

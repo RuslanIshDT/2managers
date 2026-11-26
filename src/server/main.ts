@@ -4,6 +4,7 @@ import { createDb, createPool, migrate } from '../db/client.ts';
 import { eq } from 'drizzle-orm';
 import { agentRuns, leaders, llmCalls } from '../db/schema.ts';
 import { accuracyView, measureAccuracy } from '../agents/accuracy.ts';
+import { writeProtocol } from '../agents/protocol.ts';
 import { loadDepartment } from '../agents/k1.ts';
 import { sendFocusAll } from '../agents/focus-run.ts';
 import { pullInbox } from '../agents/intake.ts';
@@ -57,6 +58,31 @@ await boss.work('inbox-poll', async () => {
   }
 });
 await boss.schedule('inbox-poll', '* * * * *', {}, { tz: 'Europe/Moscow' });
+await boss.createQueue('protocol');
+await boss.work<{ leaderId: string }>('protocol', async (jobs) => {
+  for (const job of jobs) {
+    await db.insert(agentRuns).values({
+      id: job.id,
+      leaderId: job.data.leaderId,
+      agent: 'protocol',
+      reason: 'model',
+      startedAt: new Date(),
+      status: 'running',
+    });
+    try {
+      const result = await writeProtocol(db, job.data.leaderId);
+      await db
+        .update(agentRuns)
+        .set({ status: 'done', finishedAt: new Date(), detail: `протокол ${result.id} в Telegram, рассылка — заглушка` })
+        .where(eq(agentRuns.id, job.id));
+    } catch (err) {
+      await db
+        .update(agentRuns)
+        .set({ status: 'failed', finishedAt: new Date(), detail: err instanceof Error ? err.message : 'сбой' })
+        .where(eq(agentRuns.id, job.id));
+    }
+  }
+});
 await boss.createQueue('mail-accuracy');
 await boss.work<{ leaderId: string }>('mail-accuracy', async (jobs) => {
   for (const job of jobs) {

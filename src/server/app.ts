@@ -13,6 +13,7 @@ import type { Db } from '../db/client.ts';
 import { agentRuns, emails, flowReports, leaders, meetings, people, revisions, sessions, tasks, telegramClicks } from '../db/schema.ts';
 import { departmentForLeader } from '../agents/k1.ts';
 import { accuracyView } from '../agents/accuracy.ts';
+import { approveProtocol, parseProtocolCallback, protocolCard } from '../agents/protocol.ts';
 import { applyClick, applyLeaderAction, pullInbox, requestFeed, saveEditText } from '../agents/intake.ts';
 import { acceptWeek, acceptWeekByChat, weekScene } from '../agents/week.ts';
 import { focusForLeader, sendFocus } from '../agents/focus-run.ts';
@@ -188,6 +189,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       focus: await focusForLeader(deps.db, leader.id, leader.name),
       mirror: await mirrorForLeader(deps.db, leader.id),
       accuracy: await accuracyView(deps.db, leader.id),
+      protocol: await protocolCard(deps.db, leader.id),
       revisions: await deps.db.select().from(revisions).where(eq(revisions.leaderId, leader.id)).orderBy(asc(revisions.createdAt)),
       lastAudit: last[0] ? { status: last[0].status, mode: last[0].reason, at: last[0].startedAt.toISOString() } : null,
     };
@@ -331,6 +333,18 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     return { id };
   });
 
+  app.post('/api/jobs/protocol', async (request, reply) => {
+    const leader = await currentLeader(request);
+    if (!leader) return reply.code(401).send({ error: 'Нужен вход' });
+    const parsed = z.object({ confirm: z.boolean() }).safeParse(request.body ?? {});
+    if (!parsed.success || parsed.data.confirm !== true) {
+      return reply.code(400).send({ error: 'Нужно подтверждение: один вызов модели и сообщение в Telegram' });
+    }
+    const id = await deps.boss.send('protocol', { leaderId: leader.id });
+    if (!id) return reply.code(503).send({ error: 'Очередь не приняла задание' });
+    return { id };
+  });
+
   app.post('/api/jobs/flow-audit', async (request, reply) => {
     const leader = await currentLeader(request);
     if (!leader) return reply.code(401).send({ error: 'Нужен вход' });
@@ -368,18 +382,25 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     if (update.callback_query?.data) {
       const parsedClick = parseCallback(update.callback_query.data);
       const ruleClick = parseRuleCallback(update.callback_query.data);
+      const protocolId = parseProtocolCallback(update.callback_query.data);
       const chatId = String(update.callback_query.message?.chat.id ?? '');
       await deps.db.insert(telegramClicks).values({
         updateId: update.update_id,
         chatId,
         data: update.callback_query.data,
-        action: parsedClick?.action ?? (ruleClick ? 'accept' : null),
+        action: parsedClick?.action ?? (ruleClick ? 'accept' : protocolId ? 'approve' : null),
         receivedAt: new Date(),
       });
-      let notice = parsedClick || ruleClick ? 'Кнопка получена' : 'Неизвестная кнопка';
+      let notice = parsedClick || ruleClick || protocolId ? 'Кнопка получена' : 'Неизвестная кнопка';
       if (chatId && ruleClick) {
         try {
           notice = await acceptWeekByChat(deps.db, chatId);
+        } catch (err) {
+          notice = err instanceof Error ? err.message.slice(0, 180) : 'Не удалось выполнить';
+        }
+      } else if (protocolId && chatId) {
+        try {
+          notice = await approveProtocol(deps.db, protocolId, chatId);
         } catch (err) {
           notice = err instanceof Error ? err.message.slice(0, 180) : 'Не удалось выполнить';
         }

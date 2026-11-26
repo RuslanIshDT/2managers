@@ -230,6 +230,16 @@ export const seriesKind = pgTable(
   (t) => [primaryKey({ columns: [t.leaderId, t.seriesKey] })],
 );
 
+export const protocols = pgTable('protocols', {
+  id: text('id').primaryKey(),
+  leaderId: text('leader_id').notNull(),
+  source: text('source').notNull(),
+  body: text('body').notNull(),
+  openItems: jsonb('open_items').notNull(),
+  status: text('status').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+});
+
 export const mailActions = pgTable(
   'mail_actions',
   {
