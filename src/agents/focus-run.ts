@@ -5,6 +5,7 @@ import { decisions, focusPlans, leaders, meetings, seriesKind, tasks } from '../
 import { departmentForLeader } from './k1.ts';
 import { chooseFocus, classifySeries, renderPlan, type Candidate, type FocusPlan } from './conductor.ts';
 import { departmentMatrix, goalMinutes, morningLines } from './focus.ts';
+import { withLlmScope } from '../llm.ts';
 import { sendMessage } from '../telegram.ts';
 import { latestProtocol, morningOpenItems } from './protocol.ts';
 
@@ -20,7 +21,10 @@ export async function sendFocus(db: Db, leaderId: string) {
   if (!leader) throw new Error('Руководитель не найден');
   if (!leader.telegramChatId) throw new Error('Telegram-чат руководителя не привязан');
   const scene = await sceneFor(db, leaderId, leader.name);
-  const plan = await chooseFocus({ purpose: `k4:${leaderId}`, profile: leader.profile, candidates: scene.candidates });
+  const plan = await withLlmScope(
+    { agent: 'k4', leaderId, operationId: `k4:${leaderId}:${Date.now()}`, title: 'Утреннее сообщение' },
+    () => chooseFocus({ purpose: `k4:${leaderId}`, profile: leader.profile, candidates: scene.candidates }),
+  );
   await classifyNewSeries(db, leaderId);
   const text = renderPlan({
     plan,
@@ -136,7 +140,10 @@ async function classifyNewSeries(db: Db, leaderId: string) {
     byTitle.set(row.summary, attendeeNames(row.attendees));
   }
   const fresh = [...byTitle.entries()].map(([title, attendees]) => ({ title, attendees }));
-  const classified = await classifySeries({ purpose: `k4:series:${leaderId}`, series: fresh });
+  const classified = await withLlmScope(
+    { agent: 'k15', leaderId, operationId: `k15:${leaderId}:${Date.now()}`, title: 'Вид встреч' },
+    () => classifySeries({ purpose: `k4:series:${leaderId}`, series: fresh }),
+  );
   if (!classified.length) return;
   await db.insert(seriesKind).values(classified.map((row) => ({ leaderId, seriesKey: row.title, kind: row.kind }))).onConflictDoNothing();
 }

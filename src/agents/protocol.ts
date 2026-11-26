@@ -7,7 +7,7 @@ import { desc, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import type { Db } from '../db/client.ts';
 import { leaders, protocols } from '../db/schema.ts';
-import { callJson, type JsonSchema } from '../llm.ts';
+import { callJson, withLlmScope, type JsonSchema } from '../llm.ts';
 import { sendMessage } from '../telegram.ts';
 
 const MAX_TRANSCRIPT = 12_000;
@@ -137,7 +137,9 @@ export async function writeProtocol(db: Db, leaderId: string, dir = process.env.
   const [leader] = await db.select().from(leaders).where(eq(leaders.id, leaderId)).limit(1);
   if (!leader?.telegramChatId) throw new Error('Telegram-чат руководителя не привязан');
   const source = await smallestTranscript(dir);
-  const result = await callJson<unknown>({
+  const result = await withLlmScope(
+    { agent: 'protocol', leaderId, operationId: `protocol:${leaderId}:${Date.now()}`, title: 'Протокол встречи' },
+    () => callJson<unknown>({
     purpose: `protocol:${leaderId}`,
     system: [
       'Ты пишешь протокол встречи по расшифровке.',
@@ -147,7 +149,8 @@ export async function writeProtocol(db: Db, leaderId: string, dir = process.env.
     user: source.text,
     schemaName: 'protocol',
     schema,
-  });
+  }),
+  );
   const parsed = draftZod.safeParse(result.data);
   if (!parsed.success) {
     const detail = parsed.error.issues.map((issue) => `${issue.path.join('.')}:${issue.code}`).join('; ');

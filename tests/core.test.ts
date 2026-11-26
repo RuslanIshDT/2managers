@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { costView, moscowStart, type OperationRow } from '../src/agents/cost.ts';
+import { modelsWithSchema, priceWords } from '../src/agents/models.ts';
+import { sendTrace } from '../src/langfuse.ts';
 import { hashPassword, hashToken, verifyPassword } from '../src/auth.ts';
 import { checkDepartment, readDepartment } from '../src/agents/k1.ts';
 import { controlOf, kpiOutlook, reviewTasks, withLeader, type PersonGoal } from '../src/agents/control.ts';
@@ -716,6 +719,99 @@ describe('главная T34', () => {
     expect(source).not.toMatch(/Ольга|Дмитрий|m062|Ромашка/);
   });
 });
+
+describe('модели и стоимость T35', () => {
+  it('в каталоге остаются только модели со схемой', () => {
+    const models = modelsWithSchema([
+      { id: 'a/one', name: 'Одна', supported_parameters: ['structured_outputs'], pricing: { prompt: '0.000003', completion: '0.000015' } },
+      { id: 'b/two', name: 'Две', supported_parameters: ['structured_outputs'], input_price_per_1m: 2, output_price_per_1m: 10 },
+      { id: 'a/two', name: 'Две', supported_parameters: ['response_format'], pricing: { prompt: '0.000001', completion: '0.000002' } },
+      { id: '', name: 'Пустая', supported_parameters: ['structured_outputs'] },
+      null,
+    ]);
+    expect(models.map((model) => model.id).sort()).toEqual(['a/one', 'b/two']);
+    const openrouter = models.find((model) => model.id === 'a/one');
+    const listed = models.find((model) => model.id === 'b/two');
+    expect(openrouter?.promptPerMillion).toBe(3);
+    expect(openrouter?.completionPerMillion).toBe(15);
+    expect(listed?.promptPerMillion).toBe(2);
+    expect(listed?.completionPerMillion).toBe(10);
+    expect(priceWords(0)).toBe('$0');
+    expect(priceWords(null)).toBe('нет цены');
+  });
+
+  it('итог по Москве не смешивает руководителей и ноль с пустой ценой', () => {
+    const now = new Date('2026-11-26T15:00:00Z');
+    expect(moscowStart(now, 'day').toISOString()).toBe('2026-11-25T21:00:00.000Z');
+    expect(moscowStart(now, 'week').toISOString()).toBe('2026-11-22T21:00:00.000Z');
+    const ivan = costView(
+      [
+        op('ivan', 'k2', 0.02, true, '2026-11-26T10:00:00Z'),
+        op('ivan', 'k2', null, false, '2026-11-26T11:00:00Z'),
+        op('ivan', 'k5', 0, true, '2026-11-24T10:00:00Z'),
+        op('ivan', 'k4', 1, true, '2026-10-31T20:00:00Z'),
+      ],
+      now,
+      'http://127.0.0.1:3001/project/ecompras',
+    );
+    const marina = costView([op('marina', 'k2', 0, true, '2026-11-26T10:00:00Z')], now, '');
+    expect(ivan.today).toBe('нет цены');
+    expect(ivan.week).toBe('нет цены');
+    expect(ivan.month).toBe('нет цены');
+    expect(ivan.byAgent.find((row) => row.agent === 'k5')?.total).toBe('$0');
+    expect(ivan.byAgent.find((row) => row.agent === 'k5')?.average).toContain('$0');
+    expect(ivan.recent.find((row) => row.price === '$0.02')?.trace).toContain('/traces/');
+    expect(marina.today).toBe('$0');
+    expect(marina.recent[0]?.trace).toBe('');
+    expect(JSON.stringify(ivan)).not.toContain('marina');
+  });
+
+  it('выключенный Langfuse не роняет вызов', async () => {
+    delete process.env.LANGFUSE_PUBLIC_KEY;
+    expect(await sendTrace(trace(), async () => { throw new Error('нет сети'); })).toBe('');
+    process.env.LANGFUSE_HOST = 'http://langfuse.invalid';
+    process.env.LANGFUSE_PUBLIC_KEY = 'pk';
+    process.env.LANGFUSE_SECRET_KEY = 'sk';
+    expect(await sendTrace(trace(), async () => { throw new Error('нет сети'); })).toBe('');
+    delete process.env.LANGFUSE_HOST;
+    delete process.env.LANGFUSE_PUBLIC_KEY;
+    delete process.env.LANGFUSE_SECRET_KEY;
+  });
+});
+
+function op(leaderId: string, agent: string, cost: number | null, priced: boolean, createdAt: string): OperationRow {
+  return {
+    id: `${leaderId}-${agent}-${createdAt}`,
+    leaderId,
+    agent,
+    title: 'Разбор',
+    model: 'model/test',
+    calls: 1,
+    tokensIn: 10,
+    tokensOut: 5,
+    ms: 100,
+    costUsd: cost,
+    priced,
+    traceId: priced ? 'trace-1' : '',
+    createdAt,
+  };
+}
+
+function trace() {
+  return {
+    agent: 'k2',
+    leaderId: 'leader',
+    operationId: 'op',
+    title: 'Разбор',
+    model: 'model/test',
+    tokensIn: 1,
+    tokensOut: 1,
+    costUsd: null,
+    ms: 10,
+    input: 'in',
+    output: 'out',
+  };
+}
 
 async function scene(dir: string) {
   const data = await loadSynthetic(dir);

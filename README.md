@@ -31,7 +31,9 @@ docker compose exec -T app npm run reset-stand -- --yes
 
 Агент смотрит на письма и встречи руководителя и говорит, каких из них не должно быть, почему и какое оргизменение их убирает. Работает на синтетике `data/synthetic`.
 
-Нужен Node.js 22.18 или новее и файл `.env` с `LLM_BASE_URL` и `LLM_API_KEY` (OpenAI-совместимый API; у нас Kodik Router). Модель — `LLM_MODEL`, по умолчанию `anthropic/claude-sonnet-5.5`.
+Нужен Node.js 22.18 или новее и файл `.env` с `LLM_BASE_URL` и `LLM_API_KEY` (OpenAI-совместимый API). Для OpenRouter адрес `https://openrouter.ai/api/v1` и отдельный ключ этого проекта. Модель по умолчанию — `LLM_MODEL`, `anthropic/claude-sonnet-5.5`. В настройках стенда у каждого помощника своя модель из каталога, если провайдер отдаёт список с ответом по схеме.
+
+Трассировка — Langfuse, если заданы `LANGFUSE_PUBLIC_KEY` и `LANGFUSE_SECRET_KEY`. Без ключей разбор идёт, в кабинете ссылки нет. `LANGFUSE_PROJECT_URL` — адрес проекта в браузере, например `http://127.0.0.1:3001/project/ecompras`. Контейнер приложения входит в сеть `langfuse_default` и пишет на `LANGFUSE_HOST`.
 
 ```
 npm run flow-audit:dry   # без модели: цепочки, серии и пример запроса

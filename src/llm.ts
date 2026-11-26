@@ -1,9 +1,24 @@
-// Единственный модуль вызова модели (S1, N2). Модель — настройка LLM_MODEL.
+// Единственный модуль вызова модели (S1, L1). Адрес провайдера — LLM_BASE_URL.
 // Каждый вызов пишется в журнал: задание, модель, токены, время, цена.
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { appendFile, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { sendTrace } from './langfuse.ts';
 
 export type JsonSchema = Record<string, unknown>;
+
+export interface LlmScope {
+  agent: string;
+  leaderId: string;
+  operationId: string;
+  title: string;
+}
+
+const scopes = new AsyncLocalStorage<LlmScope>();
+
+export function withLlmScope<T>(scope: LlmScope, run: () => Promise<T>): Promise<T> {
+  return scopes.run(scope, run);
+}
 
 export interface LlmCall {
   purpose: string;
@@ -22,6 +37,27 @@ export interface LlmResult<T> {
   costUsd: number | null;
 }
 
+export interface LlmMeta {
+  agent: string;
+  leaderId: string;
+  operationId: string;
+  title: string;
+  traceId: string;
+  priced: boolean;
+}
+
+type ModelResolver = (agent: string, leaderId: string) => Promise<string>;
+let resolveModel: ModelResolver = async () => llmConfig().model;
+
+export function setModelResolver(fn: ModelResolver) {
+  resolveModel = fn;
+}
+
+export function costFromUsage(usage: { cost?: unknown } | undefined): number | null {
+  const value = usage?.cost;
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
 const DEFAULT_MODEL = 'anthropic/claude-sonnet-5.5';
 
 export function llmConfig() {
@@ -38,12 +74,14 @@ export function llmConfig() {
 
 export async function callJson<T>(call: LlmCall, attempt = 1): Promise<LlmResult<T>> {
   const cfg = llmConfig();
+  const scope = scopes.getStore();
+  const model = await chosenModel(scope, cfg.model);
   const started = Date.now();
   const res = await fetch(`${cfg.baseUrl}/chat/completions`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${cfg.apiKey}` },
     body: JSON.stringify({
-      model: cfg.model,
+      model,
       temperature: 0,
       messages: [
         { role: 'system', content: call.system },
@@ -71,16 +109,35 @@ export async function callJson<T>(call: LlmCall, attempt = 1): Promise<LlmResult
     usage?: { prompt_tokens?: number; completion_tokens?: number; cost?: number };
   };
   const usage = body.usage ?? {};
+  const content = body.choices?.[0]?.message?.content ?? '';
   const result = {
-    model: body.model ?? cfg.model,
+    model: body.model ?? model,
     ms,
     tokensIn: usage.prompt_tokens ?? 0,
     tokensOut: usage.completion_tokens ?? 0,
-    costUsd: typeof usage.cost === 'number' ? usage.cost : null,
+    costUsd: costFromUsage(usage),
   };
-  await log(cfg.logPath, call.purpose, result);
-
-  const content = body.choices?.[0]?.message?.content ?? '';
+  const traceId = await sendTrace({
+    agent: scope?.agent ?? '',
+    leaderId: scope?.leaderId ?? '',
+    operationId: scope?.operationId ?? call.purpose,
+    title: scope?.title ?? call.purpose,
+    model: result.model,
+    tokensIn: result.tokensIn,
+    tokensOut: result.tokensOut,
+    costUsd: result.costUsd,
+    ms,
+    input: `${call.system}\n\n${call.user}`,
+    output: content,
+  });
+  await log(cfg.logPath, call.purpose, result, {
+    agent: scope?.agent ?? '',
+    leaderId: scope?.leaderId ?? '',
+    operationId: scope?.operationId ?? call.purpose,
+    title: scope?.title ?? call.purpose,
+    traceId,
+    priced: result.costUsd !== null,
+  });
   try {
     return { ...result, data: JSON.parse(stripFence(content)) as T };
   } catch {
@@ -94,7 +151,7 @@ function stripFence(s: string): string {
   return (m ? m[1] : s).trim();
 }
 
-export type LlmSink = (purpose: string, r: Omit<LlmResult<unknown>, 'data'>) => Promise<void>;
+export type LlmSink = (purpose: string, r: Omit<LlmResult<unknown>, 'data'>, meta?: LlmMeta) => Promise<void>;
 
 let sink: LlmSink | null = null;
 
@@ -102,7 +159,17 @@ export function setLlmSink(fn: LlmSink | null) {
   sink = fn;
 }
 
-async function log(path: string, purpose: string, r: Omit<LlmResult<unknown>, 'data'>) {
+async function chosenModel(scope: LlmScope | undefined, fallback: string): Promise<string> {
+  if (!scope?.agent || !scope.leaderId) return fallback;
+  try {
+    const model = (await resolveModel(scope.agent, scope.leaderId)).trim();
+    return model || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+async function log(path: string, purpose: string, r: Omit<LlmResult<unknown>, 'data'>, meta: LlmMeta) {
   await mkdir(dirname(path), { recursive: true });
   const line = {
     at: new Date().toISOString(),
@@ -113,11 +180,12 @@ async function log(path: string, purpose: string, r: Omit<LlmResult<unknown>, 'd
     in: r.tokensIn,
     out: r.tokensOut,
     cost_usd: r.costUsd,
+    agent: meta.agent,
   };
   await appendFile(path, JSON.stringify(line) + '\n');
   if (sink) {
     try {
-      await sink(purpose, r);
+      await sink(purpose, r, meta);
     } catch (err) {
       console.error('Журнал модели в базе не записался', err);
     }

@@ -4,7 +4,7 @@ import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import type { Db } from '../db/client.ts';
 import { emailEtalon, emails, leaders, mailActions } from '../db/schema.ts';
-import { callJson, type JsonSchema } from '../llm.ts';
+import { callJson, withLlmScope, type JsonSchema } from '../llm.ts';
 import { chainKey, textSignals } from './k2.ts';
 
 export const MAIL_ACTIONS = ['спросить_руководителя', 'делегировать', 'в_сводку', 'игнорировать', 'авто'] as const;
@@ -112,7 +112,10 @@ export async function measureAccuracy(db: Db, leaderId: string): Promise<{ calls
   }
   let calls = 0;
   for (const [key, thread] of threads) {
-    const chosen = await judgeMail({ purpose: `accuracy:${leaderId}`, profile: leader.profile, letter: thread.letter });
+    const chosen = await withLlmScope(
+      { agent: 'accuracy', leaderId, operationId: crypto.randomUUID(), title: 'Разбор письма для точности' },
+      () => judgeMail({ purpose: `accuracy:${leaderId}`, profile: leader.profile, letter: thread.letter }),
+    );
     const ruled = forceMailAction(`${thread.letter}`, thread.boss, chosen);
     await db.insert(mailActions).values({
       leaderId,

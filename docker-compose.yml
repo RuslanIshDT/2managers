@@ -21,6 +21,10 @@ services:
       DATABASE_URL: postgres://ecompras:${POSTGRES_PASSWORD}@db:5432/ecompras
       PORT: '3000'
       LLM_LOG: /app/files/llm-calls.jsonl
+      LANGFUSE_HOST: ${LANGFUSE_HOST:-http://langfuse-langfuse-web-1:3000}
+    networks:
+      - default
+      - langfuse
     volumes:
       - ./data:/app/data:ro
       - ./_not_in_git/2managers/meetings:/app/meetings:ro
@@ -65,3 +69,8 @@ services:
 volumes:
   pgdata:
   files:
+
+networks:
+  langfuse:
+    external: true
+    name: langfuse_default

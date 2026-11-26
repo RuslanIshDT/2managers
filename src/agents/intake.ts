@@ -8,6 +8,7 @@ import { sendDecisionCard } from '../telegram.ts';
 import { staffFromVerdict } from './dependence.ts';
 import { kpiStatus } from './k1.ts';
 import { cardText, chainKey, discountLimit, enforce, judgeLetter, letterPrompt, type ModelVerdict, type Ruled } from './k2.ts';
+import { withLlmScope } from '../llm.ts';
 import { letterHits } from './replay.ts';
 import { applyRevision, revisionPrompt } from './revisions.ts';
 import { listFlowRules } from './week.ts';
@@ -163,7 +164,9 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
     } else {
       const ownKpi = kpiRows.filter((row) => row.personId === person.externalId);
       const ownTasks = taskRows.filter((row) => row.ownerName === person.name);
-      const model = await judgeLetter({
+      const model = await withLlmScope(
+        { agent: 'k2', leaderId, operationId: `k2:${letter.id}`, title: letter.subject.slice(0, 180) || 'Разбор письма' },
+        () => judgeLetter({
         purpose: `k2:${letter.id}`,
         prompt: letterPrompt({
           profile: leaderRow.profile,
@@ -174,7 +177,8 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
           limit,
           revisions: revisionPrompt(edits),
         }),
-      });
+      }),
+      );
       calls += 1;
       ruled = enforce(model, `${letter.subject}\n${letter.body}`, limit, null, boss);
     }

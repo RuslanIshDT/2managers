@@ -270,6 +270,35 @@ export const llmCalls = pgTable('llm_calls', {
   tokensIn: integer('tokens_in').notNull(),
   tokensOut: integer('tokens_out').notNull(),
   costUsd: numeric('cost_usd'),
+  agent: text('agent').notNull().default(''),
+  operationId: text('operation_id').notNull().default(''),
+  traceId: text('trace_id').notNull().default(''),
+});
+
+export const agentModels = pgTable(
+  'agent_models',
+  {
+    leaderId: text('leader_id').notNull(),
+    agent: text('agent').notNull(),
+    model: text('model').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.leaderId, t.agent] })],
+);
+
+export const operations = pgTable('operations', {
+  id: text('id').primaryKey(),
+  leaderId: text('leader_id').notNull().default(''),
+  agent: text('agent').notNull(),
+  title: text('title').notNull(),
+  model: text('model').notNull(),
+  calls: integer('calls').notNull(),
+  tokensIn: integer('tokens_in').notNull(),
+  tokensOut: integer('tokens_out').notNull(),
+  ms: integer('ms').notNull(),
+  costUsd: numeric('cost_usd'),
+  priced: boolean('priced').notNull().default(false),
+  traceId: text('trace_id').notNull().default(''),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
 });
 
 export const agentRuns = pgTable('agent_runs', {

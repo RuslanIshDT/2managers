@@ -185,6 +185,8 @@ export function App() {
   const [job, setJob] = useState('');
   const [mailNote, setMailNote] = useState('');
   const [section, setSection] = useState<Section>('home');
+  const [models, setModels] = useState<ModelSettings | null>(null);
+  const [cost, setCost] = useState<CostView | null>(null);
 
   useEffect(() => {
     api<{ user: User | null }>('/api/me')
@@ -198,6 +200,12 @@ export function App() {
       .then(setCabinet)
       .catch((err: Error) => setError(err.message));
   }, [user]);
+
+  useEffect(() => {
+    if (section !== 'settings' || !user) return;
+    api<ModelSettings>('/api/models').then(setModels).catch(() => setModels(null));
+    api<CostView>('/api/cost').then(setCost).catch(() => setCost(null));
+  }, [section, user]);
 
   async function onLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -582,6 +590,13 @@ export function App() {
       ) : null}
       {section === 'settings' ? (
         <>
+      <ModelsPanel
+        data={models}
+        onSaved={() => {
+          api<ModelSettings>('/api/models').then(setModels).catch(() => setModels(null));
+        }}
+      />
+      <CostPanel data={cost} />
       <Revisions
         rows={cabinet?.revisions ?? []}
         onSaved={async () => {
@@ -1337,6 +1352,123 @@ function verdictWords(verdict: string): string {
   if (verdict === 'в_другом_виде') return 'изменить форму';
   if (verdict === 'должно') return 'оставить';
   return verdict;
+}
+
+interface ModelSettings {
+  error: string;
+  agents: { id: string; name: string; model: string; price: string }[];
+  catalog: { id: string; name: string; price: string }[];
+}
+
+interface CostView {
+  today: string;
+  week: string;
+  month: string;
+  byAgent: { agent: string; name: string; operations: number; total: string; average: string }[];
+  byModel: { model: string; operations: number; total: string }[];
+  recent: { id: string; at: string; agent: string; title: string; model: string; calls: number; price: string; trace: string }[];
+}
+
+function ModelsPanel({ data, onSaved }: { data: ModelSettings | null; onSaved: () => void }) {
+  const [note, setNote] = useState('');
+  if (!data) return <Card className="mb-4"><p className="text-sm text-[#5d6878]">Модели загружаются.</p></Card>;
+  async function save(agent: string, model: string) {
+    setNote('');
+    try {
+      await api('/api/models', { method: 'POST', body: JSON.stringify({ agent, model }) });
+      setNote('Сохранено. Новый вызов пойдёт в эту модель.');
+      onSaved();
+    } catch (err) {
+      setNote(err instanceof Error ? err.message : 'Не сохранилось');
+    }
+  }
+  return (
+    <Card className="mb-4">
+      <h2 className="mb-2 text-lg font-semibold">Модели</h2>
+      <p className="mb-3 text-sm text-[#5d6878]">
+        У каждого помощника своя модель. В списке только те, что отвечают по схеме. Цена — за миллион токенов, вход / выход.
+      </p>
+      {data.error ? <p className="mb-2 text-sm">{data.error}. Пока работает модель по умолчанию.</p> : null}
+      <ul className="grid gap-3">
+        {data.agents.map((agent) => (
+          <li key={agent.id} className="grid gap-1 text-sm">
+            <span className="font-medium">{agent.name}</span>
+            <select
+              className="rounded border border-[#d7dde6] bg-white px-2 py-1"
+              value={agent.model}
+              onChange={(event) => save(agent.id, event.target.value)}
+            >
+              {data.catalog.some((item) => item.id === agent.model) ? null : <option value={agent.model}>{agent.model}</option>}
+              {data.catalog.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name} — {item.price}
+                </option>
+              ))}
+            </select>
+            {agent.price ? <span className="text-[#5d6878]">{agent.price}</span> : null}
+          </li>
+        ))}
+      </ul>
+      {note ? <p className="mt-2 text-sm">{note}</p> : null}
+    </Card>
+  );
+}
+
+function CostPanel({ data }: { data: CostView | null }) {
+  if (!data) return <Card className="mb-4"><p className="text-sm text-[#5d6878]">Стоимость загружается.</p></Card>;
+  return (
+    <Card className="mb-4">
+      <h2 className="mb-2 text-lg font-semibold">Стоимость</h2>
+      <p className="mb-3 text-sm text-[#5d6878]">Считается по Москве. «Нет цены» — провайдер цену не прислал. $0 — вызов был бесплатным.</p>
+      <ul className="mb-3 grid gap-1 text-sm sm:grid-cols-3">
+        <li>Сегодня: {data.today}</li>
+        <li>Неделя: {data.week}</li>
+        <li>Месяц: {data.month}</li>
+      </ul>
+      <h3 className="mb-1 text-sm font-medium">По помощникам</h3>
+      <ul className="mb-3 grid gap-1 text-sm">
+        {data.byAgent.map((row) => (
+          <li key={row.agent}>
+            {row.name}: {row.operations} опер., всего {row.total}, в среднем {row.average}
+          </li>
+        ))}
+      </ul>
+      {data.byModel.length ? (
+        <>
+          <h3 className="mb-1 text-sm font-medium">По моделям</h3>
+          <ul className="mb-3 grid gap-1 text-sm">
+            {data.byModel.map((row) => (
+              <li key={row.model}>
+                {row.model}: {row.operations} опер., {row.total}
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : null}
+      {data.recent.length ? (
+        <>
+          <h3 className="mb-1 text-sm font-medium">Последние операции</h3>
+          <ul className="grid gap-2 text-sm">
+            {data.recent.map((row) => (
+              <li key={row.id}>
+                {dayWords(row.at)} · {row.agent} · {row.title} · {row.model} · вызовов {row.calls} · {row.price}
+                {row.trace ? (
+                  <>
+                    {' '}
+                    <a className="underline" href={row.trace} target="_blank" rel="noreferrer">
+                      подробно в Langfuse
+                    </a>
+                  </>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : (
+        <p className="text-sm text-[#5d6878]">Операций ещё нет. Цена появится после следующего вызова модели.</p>
+      )}
+    </Card>
+  );
 }
 
 function Stat({ label, value }: { label: string; value: number | undefined }) {

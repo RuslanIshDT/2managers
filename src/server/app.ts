@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { asc, count, eq, sql } from 'drizzle-orm';
+import { asc, count, desc, eq, sql } from 'drizzle-orm';
 import cookie from '@fastify/cookie';
 import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
@@ -10,12 +10,14 @@ import type pg from 'pg';
 import { z } from 'zod';
 import { hashToken, newSessionToken, verifyPassword } from '../auth.ts';
 import type { Db } from '../db/client.ts';
-import { agentRuns, emails, flowReports, leaders, meetings, people, revisions, sessions, tasks, telegramClicks } from '../db/schema.ts';
+import { agentModels, agentRuns, emails, flowReports, leaders, meetings, operations, people, revisions, sessions, tasks, telegramClicks } from '../db/schema.ts';
 import { departmentForLeader } from '../agents/k1.ts';
 import { accuracyView } from '../agents/accuracy.ts';
 import { controlOf, withLeader } from '../agents/control.ts';
 import { approveProtocol, parseProtocolCallback, protocolCard } from '../agents/protocol.ts';
+import { costView, type OperationRow } from '../agents/cost.ts';
 import { deskForLeader } from '../agents/desk.ts';
+import { catalog, isAgentId, MODEL_AGENTS, priceWords } from '../agents/models.ts';
 import { applyClick, applyLeaderAction, hideMailbox, pullInbox, requestFeed, saveEditText } from '../agents/intake.ts';
 import { acceptWeek, acceptWeekByChat, weekScene } from '../agents/week.ts';
 import { focusForLeader, sendFocus } from '../agents/focus-run.ts';
@@ -228,6 +230,79 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       revisions: await deps.db.select().from(revisions).where(eq(revisions.leaderId, leader.id)).orderBy(asc(revisions.createdAt)),
       lastAudit: last[0] ? { status: last[0].status, mode: last[0].reason, at: last[0].startedAt.toISOString() } : null,
     };
+  });
+
+  app.get('/api/models', async (request, reply) => {
+    const leader = await currentLeader(request);
+    if (!leader) return reply.code(401).send({ error: 'Нужен вход' });
+    const saved = await deps.db.select().from(agentModels).where(eq(agentModels.leaderId, leader.id));
+    const list = await catalog();
+    const byId = new Map(list.models.map((model) => [model.id, model]));
+    const fallback = process.env.LLM_MODEL || 'anthropic/claude-sonnet-5.5';
+    return {
+      error: list.error,
+      agents: MODEL_AGENTS.map((agent) => {
+        const model = saved.find((row) => row.agent === agent.id)?.model || fallback;
+        const known = byId.get(model);
+        return {
+          id: agent.id,
+          name: agent.name,
+          model,
+          price: known
+            ? `${priceWords(known.promptPerMillion)} за млн входных, ${priceWords(known.completionPerMillion)} за млн выходных`
+            : '',
+        };
+      }),
+      catalog: list.models.map((model) => ({
+        id: model.id,
+        name: model.name,
+        price: `${priceWords(model.promptPerMillion)} / ${priceWords(model.completionPerMillion)}`,
+      })),
+    };
+  });
+
+  app.post('/api/models', async (request, reply) => {
+    const leader = await currentLeader(request);
+    if (!leader) return reply.code(401).send({ error: 'Нужен вход' });
+    const body = z.object({ agent: z.string(), model: z.string().trim().min(1).max(200) }).safeParse(request.body);
+    if (!body.success || !isAgentId(body.data.agent)) return reply.code(400).send({ error: 'Неизвестный агент' });
+    const list = await catalog();
+    const fallback = process.env.LLM_MODEL || '';
+    const allowed = new Set(list.models.map((model) => model.id));
+    if (fallback) allowed.add(fallback);
+    if (!allowed.has(body.data.model)) return reply.code(400).send({ error: 'Этой модели нет в каталоге с ответом по схеме' });
+    await deps.db
+      .insert(agentModels)
+      .values({ leaderId: leader.id, agent: body.data.agent, model: body.data.model })
+      .onConflictDoUpdate({ target: [agentModels.leaderId, agentModels.agent], set: { model: body.data.model } });
+    return { ok: true };
+  });
+
+  app.get('/api/cost', async (request, reply) => {
+    const leader = await currentLeader(request);
+    if (!leader) return reply.code(401).send({ error: 'Нужен вход' });
+    const rows = await deps.db
+      .select()
+      .from(operations)
+      .where(eq(operations.leaderId, leader.id))
+      .orderBy(desc(operations.createdAt))
+      .limit(500);
+    const mapped: OperationRow[] = rows.map((row) => ({
+      id: row.id,
+      leaderId: row.leaderId,
+      agent: row.agent,
+      title: row.title,
+      model: row.model,
+      calls: row.calls,
+      tokensIn: row.tokensIn,
+      tokensOut: row.tokensOut,
+      ms: row.ms,
+      costUsd: row.costUsd === null ? null : Number(row.costUsd),
+      priced: row.priced,
+      traceId: row.traceId,
+      createdAt: row.createdAt.toISOString(),
+    }));
+    return costView(mapped, new Date(), process.env.LANGFUSE_PROJECT_URL ?? '');
   });
 
   app.post('/api/revisions', async (request, reply) => {

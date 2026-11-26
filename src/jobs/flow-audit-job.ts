@@ -6,6 +6,7 @@ import PgBoss from 'pg-boss';
 import type { Db } from '../db/client.ts';
 import { agentRuns, flowReports } from '../db/schema.ts';
 import { loadSynthetic } from '../data/synthetic.ts';
+import { withLlmScope } from '../llm.ts';
 import type { AuditedItem } from '../agents/flow-audit.ts';
 import { summarize, toMarkdown, view } from '../agents/flow-audit-report.ts';
 
@@ -78,7 +79,10 @@ async function runFlowAuditJob(db: Db, id: string, data: FlowAuditJob) {
       const { runAudit, buildItems } = await import('../agents/flow-audit.ts');
       const synthetic = await loadSynthetic();
       const items = buildItems(synthetic);
-      const audited = await runAudit(synthetic, items);
+      const audited = await withLlmScope(
+        { agent: 'k5', leaderId: data.leaderId, operationId: id, title: 'Аудит недели' },
+        () => runAudit(synthetic, items),
+      );
       const at = new Date().toISOString();
       const summary = summarize(synthetic, audited, at);
       const viewItems = view(audited);
