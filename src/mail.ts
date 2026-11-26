@@ -1,5 +1,6 @@
 // Яндекс Почта: IMAP для чтения, SMTP для отправки.
 // Без YANDEX_MAIL_USER и YANDEX_MAIL_PASSWORD модуль сообщает «не настроено» и ничего не шлёт.
+import { Buffer } from 'node:buffer';
 import nodemailer from 'nodemailer';
 
 export interface MailConfig {
@@ -58,4 +59,151 @@ export async function sendMail(to: string, subject: string, text: string) {
     text: `${text}\n\n— ИИ-помощник руководителя`,
   });
   return { messageId: info.messageId };
+}
+
+export interface SyntheticLetter {
+  id: string;
+  fromName: string;
+  fromEmail: string;
+  subject: string;
+  body: string;
+  received: string;
+}
+
+export interface MailboxLetter extends SyntheticLetter {
+  messageId: string;
+}
+
+export function syntheticSource(letter: SyntheticLetter, to: string): string {
+  const body = `синтетика ${letter.id}\nОт: ${letter.fromName} <${letter.fromEmail}>\n\n${letter.body.trim()}\n`;
+  const date = new Date(letter.received.replace(' ', 'T') + '+03:00');
+  const stamp = Number.isNaN(date.getTime()) ? new Date().toUTCString() : date.toUTCString();
+  return [
+    `From: ${encoded(letter.fromName)} <${letter.fromEmail}>`,
+    `To: <${to}>`,
+    `Subject: ${encoded(letter.subject)}`,
+    `Date: ${stamp}`,
+    `Message-ID: <${letter.id}.synthetic@ecompras.local>`,
+    `X-Ecompras-Synthetic: ${letter.id}`,
+    `X-Ecompras-Received: ${letter.received}`,
+    'MIME-Version: 1.0',
+    'Content-Type: text/plain; charset=utf-8',
+    'Content-Transfer-Encoding: base64',
+    '',
+    Buffer.from(body, 'utf8').toString('base64').replace(/.{1,76}/g, '$&\n'),
+  ].join('\r\n');
+}
+
+export function parseMailboxSource(source: string): MailboxLetter | null {
+  const text = source.replace(/\r\n/g, '\n');
+  const splitAt = text.indexOf('\n\n');
+  if (splitAt < 0) return null;
+  const rawBody = text.slice(splitAt + 2);
+  const encoding = headerValue(text.slice(0, splitAt), 'content-transfer-encoding');
+  const body = encoding.toLowerCase().includes('base64')
+    ? Buffer.from(rawBody.replace(/\s/g, ''), 'base64').toString('utf8')
+    : rawBody;
+  const lines = body.split('\n');
+  const marker = /^синтетика\s+([A-Za-z0-9_-]+)\s*$/.exec(lines[0] ?? '');
+  const from = /^От:\s*(.+?)\s*<([^>]+)>\s*$/.exec(lines[1] ?? '');
+  if (!marker || !from) return null;
+  const subject = decodeHeader(headerValue(text.slice(0, splitAt), 'subject'));
+  const messageId = headerValue(text.slice(0, splitAt), 'message-id') || `<${marker[1]}.synthetic@ecompras.local>`;
+  const received = headerValue(text.slice(0, splitAt), 'x-ecompras-received') || headerValue(text.slice(0, splitAt), 'date');
+  return {
+    id: marker[1],
+    messageId,
+    fromName: from[1],
+    fromEmail: from[2],
+    subject,
+    body: lines.slice(3).join('\n').trim(),
+    received,
+  };
+}
+
+export async function appendSynthetic(letters: SyntheticLetter[]): Promise<number> {
+  const cfg = mailConfig();
+  if (!cfg) throw new Error('Яндекс Почта не настроена');
+  const { ImapFlow } = await import('imapflow');
+  const client = new ImapFlow({
+    host: 'imap.yandex.com',
+    port: 993,
+    secure: true,
+    auth: { user: cfg.user, pass: cfg.password },
+    logger: false,
+  });
+  await client.connect();
+  try {
+    const existing = new Set((await readSynthetic(client)).map((letter) => letter.id));
+    let added = 0;
+    const lock = await client.getMailboxLock('INBOX');
+    try {
+      for (const letter of letters) {
+        if (existing.has(letter.id)) continue;
+        await client.append('INBOX', syntheticSource(letter, cfg.user), ['\\Seen']);
+        added += 1;
+      }
+    } finally {
+      lock.release();
+    }
+    return added;
+  } finally {
+    await client.logout();
+  }
+}
+
+export async function readSyntheticInbox(): Promise<MailboxLetter[]> {
+  const cfg = mailConfig();
+  if (!cfg) throw new Error('Яндекс Почта не настроена');
+  const { ImapFlow } = await import('imapflow');
+  const client = new ImapFlow({
+    host: 'imap.yandex.com',
+    port: 993,
+    secure: true,
+    auth: { user: cfg.user, pass: cfg.password },
+    logger: false,
+  });
+  await client.connect();
+  try {
+    return await readSynthetic(client);
+  } finally {
+    await client.logout();
+  }
+}
+
+async function readSynthetic(client: {
+  getMailboxLock: (path: string) => Promise<{ release: () => void }>;
+  status: (path: string, query: { messages: true }) => Promise<{ messages?: number }>;
+  fetch: (range: string, query: { source: true }) => AsyncIterable<{ source?: Buffer }>;
+}): Promise<MailboxLetter[]> {
+  const status = await client.status('INBOX', { messages: true });
+  const total = status.messages ?? 0;
+  if (total === 0) return [];
+  const from = Math.max(1, total - 80);
+  const lock = await client.getMailboxLock('INBOX');
+  const found: MailboxLetter[] = [];
+  try {
+    for await (const message of client.fetch(`${from}:*`, { source: true })) {
+      if (!message.source) continue;
+      const parsed = parseMailboxSource(message.source.toString('utf8'));
+      if (parsed) found.push(parsed);
+    }
+  } finally {
+    lock.release();
+  }
+  return found;
+}
+
+function headerValue(headers: string, name: string): string {
+  const unfolded = headers.replace(/\n[ \t]+/g, ' ');
+  const match = new RegExp(`^${name}:\\s*(.*)$`, 'im').exec(unfolded);
+  return match?.[1]?.trim() ?? '';
+}
+
+function decodeHeader(value: string): string {
+  return value.replace(/=\?UTF-8\?B\?([^?]+)\?=/gi, (_, b64: string) => Buffer.from(b64, 'base64').toString('utf8'));
+}
+
+function encoded(value: string): string {
+  return `=?UTF-8?B?${Buffer.from(value, 'utf8').toString('base64')}?=`;
 }

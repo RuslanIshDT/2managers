@@ -33,6 +33,14 @@ interface DepartmentPerson {
   authorities: { area: string; limit: string; unit: string; note: string }[];
 }
 
+interface FeedItem {
+  id: string;
+  kind: string;
+  category: string;
+  summary: string;
+  basis: string;
+}
+
 interface Cabinet {
   name: string;
   profile: string;
@@ -41,6 +49,7 @@ interface Cabinet {
   mail: 'configured' | 'missing';
   telegram: 'configured' | 'missing';
   department: { errors: string[]; people: DepartmentPerson[] };
+  feed: FeedItem[];
   lastAudit: { status: string; mode: string; at: string } | null;
 }
 
@@ -61,6 +70,7 @@ export function App() {
   const [error, setError] = useState('');
   const [pending, setPending] = useState(false);
   const [job, setJob] = useState('');
+  const [mailNote, setMailNote] = useState('');
 
   useEffect(() => {
     api<{ user: User | null }>('/api/me')
@@ -97,6 +107,26 @@ export function App() {
     await api('/api/logout', { method: 'POST' });
     setUser(null);
     setCabinet(null);
+  }
+
+  async function pullMail() {
+    setMailNote('');
+    setError('');
+    setPending(true);
+    try {
+      const result = await api<{ lines: string[]; calls: number; deferred: number }>('/api/mail/pull', {
+        method: 'POST',
+        body: '{}',
+      });
+      const fresh = await api<Cabinet>('/api/cabinet');
+      setCabinet(fresh);
+      const head = result.lines.length ? result.lines.join('; ') : 'Новых писем подчинённых нет';
+      setMailNote(result.deferred ? `${head}. Осталось ещё ${result.deferred}` : head);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось разобрать почту');
+    } finally {
+      setPending(false);
+    }
   }
 
   async function rebuildAudit() {
@@ -183,6 +213,28 @@ export function App() {
       </div>
       <Department department={cabinet?.department} />
       <Card className="mb-4">
+        <h2 className="mb-2 text-lg font-semibold">Лента просьб</h2>
+        <div className="mb-3 flex flex-wrap items-center gap-3">
+          <Button type="button" onClick={pullMail} disabled={pending}>
+            {pending ? 'Разбор…' : 'Разобрать новые письма'}
+          </Button>
+          {mailNote ? <span className="text-sm text-[#1b7a45]">{mailNote}</span> : null}
+        </div>
+        {cabinet?.feed.length ? (
+          <ul className="grid gap-2 text-sm">
+            {cabinet.feed.map((item) => (
+              <li key={item.id}>
+                <b>{kindLabel(item.kind)}</b> · {item.category}
+                <span className="block">{item.summary}</span>
+                <span className="block text-[#5d6878]">{item.basis}</span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-sm text-[#5d6878]">Пока пусто. Письма подчинённых читаются из ящика, не из файла.</p>
+        )}
+      </Card>
+      <Card className="mb-4">
         <h2 className="mb-2 text-lg font-semibold">Подключения</h2>
         <ul className="grid gap-1 text-sm">
           <li>Почта: {cabinet?.mail === 'configured' ? 'учётные данные заданы' : 'не настроена — заглушки отправки нет, ящик синтетики в базе'}</li>
@@ -261,6 +313,13 @@ function Department({ department }: { department: Cabinet['department'] | undefi
       </div>
     </section>
   );
+}
+
+function kindLabel(kind: string): string {
+  if (kind === 'нужен_руководитель') return 'Нужен руководитель';
+  if (kind === 'вернуть') return 'Вернул';
+  if (kind === 'повтор') return 'Повтор, не спрашиваю';
+  return kind;
 }
 
 function Stat({ label, value }: { label: string; value: number | undefined }) {

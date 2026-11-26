@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { hashPassword, hashToken, verifyPassword } from '../src/auth.ts';
 import { checkDepartment, readDepartment } from '../src/agents/k1.ts';
+import { chainKey, discountLimit, enforce, textSignals, type ModelVerdict } from '../src/agents/k2.ts';
+import { lettersForMailbox } from '../src/agents/intake.ts';
 import { loadSynthetic } from '../src/data/synthetic.ts';
+import { parseMailboxSource, syntheticSource } from '../src/mail.ts';
 import { applyOrigin, formOrigin, requestOrigin } from '../src/http/origin.ts';
 import { mailConfig } from '../src/mail.ts';
 import { decisionCallback, parseCallback, parseStart } from '../src/telegram.ts';
@@ -105,5 +108,70 @@ describe('почта и кнопки', () => {
     expect(parseStart('/start abc12')).toBe('abc12');
     expect(parseStart('/start')).toBe('');
     expect(parseStart('привет')).toBeNull();
+  });
+});
+
+const modelReturn: ModelVerdict = {
+  вердикт: 'вернуть',
+  в_полномочиях: 'да',
+  есть_предложение: 'да',
+  только_руководитель: 'нет',
+  категория: 'иное',
+  суть: 'Жалоба на сроки',
+  контекст: '',
+  рекомендация: '',
+  черновик_ответа: 'Мария, это твоя зона. Какой план?',
+  предложение_полномочия: 'Оставить разбор жалоб на сервис',
+  основание: 'Зона сервиса',
+  уверенность: 0.8,
+};
+
+describe('просьба подчинённого', () => {
+  it('скидка выше лимита идёт к руководителю, повтор не спрашивает, N1 само не уходит', () => {
+    const text = 'Скидка 12% для «Ромашка-Ритейл», маржа 18%';
+    expect(textSignals(text).discountPercent).toBe(12);
+    const over = enforce(modelReturn, text, 10, null, false);
+    expect(over.kind).toBe('нужен_руководитель');
+    expect(over.category).toBe('деньги');
+    expect(over.ask).toBe(true);
+    expect(over.send).toBe(false);
+    const again = enforce(modelReturn, text, 10, { id: 'm062', status: 'ждёт', summary: 'скидка' }, false);
+    expect(again.kind).toBe('повтор');
+    expect(again.ask).toBe(false);
+    expect(again.send).toBe(false);
+    const vacation = enforce(modelReturn, 'Прошу согласовать отпуск Ирины', null, null, false);
+    expect(vacation.kind).toBe('нужен_руководитель');
+    expect(vacation.category).toBe('кадры');
+    expect(vacation.send).toBe(false);
+  });
+
+  it('жалоба без признаков N1 возвращается исполнителю', () => {
+    const text = 'Клиент недоволен временем ответа. Предлагаю разбор на планёрке.';
+    const ruled = enforce({ ...modelReturn, суть: 'Жалоба' }, text, null, null, false);
+    expect(ruled.kind).toBe('вернуть');
+    expect(ruled.send).toBe(true);
+    expect(ruled.ask).toBe(false);
+  });
+
+  it('в ящик попадают 8 разных просьб и повтор m079 той же цепочки', async () => {
+    const data = await loadSynthetic('data/synthetic');
+    const subs = new Set(data.people.filter((person) => person.role === 'подчинённый').map((person) => person.email.toLowerCase()));
+    const letters = lettersForMailbox(data.emails, subs);
+    expect(letters.map((letter) => letter.id).sort()).toEqual(
+      ['m007', 'm008', 'm009', 'm020', 'm022', 'm044', 'm046', 'm062', 'm079'].sort(),
+    );
+    const first = letters.find((letter) => letter.id === 'm062');
+    const repeat = letters.find((letter) => letter.id === 'm079');
+    expect(chainKey(first?.fromEmail ?? '', first?.subject ?? '')).toBe(chainKey(repeat?.fromEmail ?? '', repeat?.subject ?? ''));
+    expect(discountLimit([{ area: 'скидка', limit: '10' }])).toBe(10);
+    const source = syntheticSource(
+      { id: 'm062', fromName: 'Ольга Смирнова', fromEmail: 'p02@company.example', subject: first?.subject ?? '', body: first?.body ?? '', received: '2026-12-10 15:52' },
+      'leader@example.com',
+    );
+    const parsed = parseMailboxSource(source);
+    expect(parsed?.id).toBe('m062');
+    expect(parsed?.fromEmail).toBe('p02@company.example');
+    expect(parsed?.subject).toBe(first?.subject);
+    expect(parsed?.body).toContain('12%');
   });
 });

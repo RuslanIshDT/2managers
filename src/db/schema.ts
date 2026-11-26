@@ -130,6 +130,51 @@ export const authorities = pgTable(
   (t) => [primaryKey({ columns: [t.leaderId, t.personId, t.area] })],
 );
 
+export const mailIn = pgTable(
+  'mail_in',
+  {
+    leaderId: text('leader_id').notNull(),
+    messageId: text('message_id').notNull(),
+    syntheticId: text('synthetic_id').notNull().default(''),
+    received: text('received').notNull(),
+    fromName: text('from_name').notNull(),
+    fromEmail: text('from_email').notNull(),
+    subject: text('subject').notNull(),
+    body: text('body').notNull(),
+    chainKey: text('chain_key').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.leaderId, t.messageId] })],
+);
+
+export const verdicts = pgTable('verdicts', {
+  id: text('id').primaryKey(),
+  leaderId: text('leader_id').notNull(),
+  messageId: text('message_id').notNull(),
+  chainKey: text('chain_key').notNull(),
+  kind: text('kind').notNull(),
+  category: text('category').notNull(),
+  summary: text('summary').notNull(),
+  draft: text('draft').notNull(),
+  basis: text('basis').notNull(),
+  context: text('context').notNull(),
+  recommendation: text('recommendation').notNull(),
+  authorityOffer: text('authority_offer').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+});
+
+export const decisions = pgTable('decisions', {
+  id: text('id').primaryKey(),
+  leaderId: text('leader_id').notNull(),
+  chainKey: text('chain_key').notNull(),
+  status: text('status').notNull(),
+  summary: text('summary').notNull(),
+  draft: text('draft').notNull(),
+  replyTo: text('reply_to').notNull(),
+  replyName: text('reply_name').notNull(),
+  subject: text('subject').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+});
+
 export const llmCalls = pgTable('llm_calls', {
   id: bigserial('id', { mode: 'number' }).primaryKey(),
   leaderId: text('leader_id'),

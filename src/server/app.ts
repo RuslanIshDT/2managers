@@ -12,9 +12,10 @@ import { hashToken, newSessionToken, verifyPassword } from '../auth.ts';
 import type { Db } from '../db/client.ts';
 import { agentRuns, emails, leaders, meetings, people, sessions, tasks, telegramClicks } from '../db/schema.ts';
 import { departmentForLeader } from '../agents/k1.ts';
+import { applyClick, pullInbox, requestFeed } from '../agents/intake.ts';
+import { checkMail, mailConfig, readSyntheticInbox } from '../mail.ts';
 import { applyOrigin, formOrigin } from '../http/origin.ts';
 import { FLOW_AUDIT_QUEUE, type FlowAuditJob } from '../jobs/flow-audit-job.ts';
-import { checkMail, mailConfig } from '../mail.ts';
 import { answerCallback, parseCallback, parseStart, sendMessage, telegramConfigured } from '../telegram.ts';
 
 const COOKIE = 'sid';
@@ -176,6 +177,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       mail: mailConfig() ? 'configured' : 'missing',
       telegram: telegramConfigured() ? 'configured' : 'missing',
       department,
+      feed: await requestFeed(deps.db, leader.id),
       lastAudit: last[0] ? { status: last[0].status, mode: last[0].reason, at: last[0].startedAt.toISOString() } : null,
     };
   });
@@ -188,6 +190,18 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     } catch (err) {
       const detail = err instanceof Error ? err.message : 'ошибка почты';
       return { configured: true, ok: false, detail };
+    }
+  });
+
+  app.post('/api/mail/pull', async (request, reply) => {
+    const leader = await currentLeader(request);
+    if (!leader) return reply.code(401).send({ error: 'Нужен вход' });
+    try {
+      const letters = await readSyntheticInbox();
+      return await pullInbox(deps.db, leader.id, letters, 1);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : 'не удалось разобрать почту';
+      return reply.code(502).send({ error: detail });
     }
   });
 
@@ -229,8 +243,20 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
         action: parsedClick?.action ?? null,
         receivedAt: new Date(),
       });
+      let notice = parsedClick ? 'Кнопка получена' : 'Неизвестная кнопка';
+      if (parsedClick && chatId) {
+        try {
+          notice = await applyClick(deps.db, parsedClick.action, parsedClick.decisionId, chatId);
+        } catch (err) {
+          notice = err instanceof Error ? err.message.slice(0, 180) : 'Не удалось выполнить';
+        }
+      }
       if (telegramConfigured()) {
-        await answerCallback(update.callback_query.id, parsedClick ? 'Кнопка получена' : 'Неизвестная кнопка');
+        try {
+          await answerCallback(update.callback_query.id, notice);
+        } catch (err) {
+          console.error('Ответ Telegram на кнопку не ушёл', err);
+        }
       }
       return { ok: true };
     }

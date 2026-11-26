@@ -14,7 +14,8 @@
     "flow-audit:dry": "node src/scripts/flow-audit.ts --dry-run",
     "audit:telegram": "node --env-file=.env src/scripts/audit-telegram.ts",
     "audit:telegram:dry": "node --env-file=.env src/scripts/audit-telegram.ts --dry-run",
-    "tg:chats": "node --env-file=.env src/scripts/audit-telegram.ts --chats"
+    "tg:chats": "node --env-file=.env src/scripts/audit-telegram.ts --chats",
+    "requests": "node --env-file=.env src/scripts/requests.ts"
   },
   "dependencies": {
     "@fastify/cookie": "11.0.2",

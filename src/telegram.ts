@@ -18,13 +18,35 @@ async function api<T>(method: string, body?: Record<string, unknown>): Promise<T
   return data.result as T;
 }
 
-export async function sendMessage(text: string, chatId = telegramConfig().chatId) {
+export async function sendMessage(
+  text: string,
+  chatId = telegramConfig().chatId,
+  extra?: Record<string, unknown>,
+) {
   if (!chatId) throw new Error('TELEGRAM_CHAT_ID не задан (.env): напишите боту /start и запустите npm run tg:chats');
   return api<{ message_id: number }>('sendMessage', {
     chat_id: chatId,
     text,
     parse_mode: 'HTML',
     link_preview_options: { is_disabled: true },
+    ...extra,
+  });
+}
+
+export async function sendDecisionCard(text: string, decisionId: string, chatId: string) {
+  return sendMessage(text, chatId, {
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: 'Утвердить', callback_data: decisionCallback('approve', decisionId) },
+          { text: 'Отклонить', callback_data: decisionCallback('reject', decisionId) },
+        ],
+        [
+          { text: 'Отложить', callback_data: decisionCallback('defer', decisionId) },
+          { text: 'Поправить', callback_data: decisionCallback('edit', decisionId) },
+        ],
+      ],
+    },
   });
 }
 
