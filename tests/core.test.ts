@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { hashPassword, hashToken, verifyPassword } from '../src/auth.ts';
 import { checkDepartment, readDepartment } from '../src/agents/k1.ts';
+import { controlOf, kpiOutlook, reviewTasks, type PersonGoal } from '../src/agents/control.ts';
+import { readFile } from 'node:fs/promises';
 import { chainKey, discountLimit, enforce, textSignals, type ModelVerdict } from '../src/agents/k2.ts';
 import { lettersForMailbox } from '../src/agents/intake.ts';
 import { applyRevision, revisionPrompt } from '../src/agents/revisions.ts';
@@ -525,4 +527,82 @@ describe('протокол', () => {
     expect(parseProtocolCallback('d:approve:ab12cd34')).toBeNull();
   });
 });
+
+describe('цели, задачи и KPI', () => {
+  it('продлевает тренд и считает недели отставания', () => {
+    const outlook = kpiOutlook([
+      { fact: '100', status: 'норма' },
+      { fact: '90', status: 'отстаёт' },
+      { fact: '80', status: 'отстаёт' },
+    ]);
+    expect(outlook).toEqual({ behind: 2, trend: 'падает', forecast: '70' });
+  });
+
+  it('сорванный срок с целью предлагает перенести, задачу без цели — снять', () => {
+    const people: PersonGoal[] = [{ name: 'Пётр', goal: 'Сдать линию', leaderGoal: '1', emails: 1, kpis: [] }];
+    const goals = [{ n: '1', text: 'Сдать линию' }];
+    const reviews = reviewTasks({
+      goals,
+      people,
+      tasks: [
+        { title: 'Сдать линию к среде', owner: 'Пётр', due: '2026-12-01', status: 'просрочена' },
+        { title: 'Купить кружки', owner: 'Пётр', due: '2026-12-20', status: 'новая' },
+      ],
+    });
+    expect(reviews[0]?.recommendation).toBe('перенести');
+    expect(reviews[1]?.recommendation).toBe('снять');
+  });
+
+  it('собирает каскад, разбор задач и ранний сигнал из файлов, без имён в коде', async () => {
+    const source = await readFile('src/agents/control.ts', 'utf8');
+    expect(source).not.toMatch(/Ольга|Иван|Марина|p02|m062|10%/);
+
+    const synthetic = await scene('data/synthetic');
+    expect(synthetic.goals.length).toBeGreaterThan(0);
+    expect(synthetic.goals.every((goal) => goal.owners.length > 0)).toBe(true);
+    expect(synthetic.tasks).toHaveLength(12);
+    expect(synthetic.tasks.every((task) => task.basis.length > 10)).toBe(true);
+    expect(synthetic.tasks.some((task) => task.recommendation === 'снять')).toBe(true);
+    for (const task of synthetic.tasks) {
+      if (task.effect !== 'высокий') continue;
+      const goal = synthetic.goals.find((row) => row.text === task.goal);
+      expect(goal?.owners).toContain(task.owner);
+    }
+    expect(synthetic.tasks.some((task) => task.deadline === 'нет')).toBe(true);
+    const quiet = synthetic.signals.filter((item) => item.early);
+    expect(quiet.length).toBeGreaterThan(0);
+    expect(quiet.every((item) => item.text.includes('писем нет'))).toBe(true);
+
+    const second = await scene('data/leader2');
+    expect(second.goals.length).toBe(3);
+    expect(second.signals.length).toBeGreaterThan(0);
+    const firstNames = new Set(synthetic.goals.flatMap((goal) => goal.owners));
+    expect(second.goals.some((goal) => goal.owners.some((name) => firstNames.has(name)))).toBe(false);
+  });
+});
+
+async function scene(dir: string) {
+  const data = await loadSynthetic(dir);
+  const files = await readDepartment(dir);
+  const checked = checkDepartment(data.people, files);
+  const mail = new Map<string, number>();
+  for (const letter of data.emails) {
+    const person = data.people.find((row) => row.email.toLowerCase() === letter.fromEmail.toLowerCase());
+    if (person) mail.set(person.id, (mail.get(person.id) ?? 0) + 1);
+  }
+  const people: PersonGoal[] = checked.cards.map((card) => ({
+    name: card.name,
+    goal: card.goal,
+    leaderGoal: card.leaderGoal,
+    emails: mail.get(card.personId) ?? 0,
+    kpis: card.kpis.map((kpi) => ({
+      name: kpi.name,
+      unit: kpi.unit,
+      better: kpi.better,
+      weeks: kpi.weeks.map((week) => ({ fact: week.fact, status: week.status })),
+    })),
+  }));
+  const tasks = data.tasks.map((task) => ({ title: task.task, owner: task.owner, due: task.due, status: task.status }));
+  return controlOf(data.profile, people, tasks);
+}
 

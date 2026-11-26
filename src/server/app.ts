@@ -13,6 +13,7 @@ import type { Db } from '../db/client.ts';
 import { agentRuns, emails, flowReports, leaders, meetings, people, revisions, sessions, tasks, telegramClicks } from '../db/schema.ts';
 import { departmentForLeader } from '../agents/k1.ts';
 import { accuracyView } from '../agents/accuracy.ts';
+import { controlOf } from '../agents/control.ts';
 import { approveProtocol, parseProtocolCallback, protocolCard } from '../agents/protocol.ts';
 import { applyClick, applyLeaderAction, pullInbox, requestFeed, saveEditText } from '../agents/intake.ts';
 import { acceptWeek, acceptWeekByChat, weekScene } from '../agents/week.ts';
@@ -165,6 +166,10 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       deps.db.select({ profile: leaders.profile, linkCode: leaders.linkCode }).from(leaders).where(eq(leaders.id, leader.id)),
       departmentForLeader(deps.db, leader.id),
     ]);
+    const taskRows = await deps.db
+      .select({ title: tasks.title, owner: tasks.ownerName, due: tasks.dueOn, status: tasks.status })
+      .from(tasks)
+      .where(eq(tasks.leaderId, leader.id));
     const last = await deps.db
       .select({ status: agentRuns.status, reason: agentRuns.reason, startedAt: agentRuns.startedAt })
       .from(agentRuns)
@@ -191,15 +196,28 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       accuracy: await accuracyView(deps.db, leader.id),
       protocol: await protocolCard(deps.db, leader.id),
       stubs: {
-        tasks: await deps.db
-          .select({ title: tasks.title, owner: tasks.ownerName, due: tasks.dueOn, status: tasks.status })
-          .from(tasks)
-          .where(eq(tasks.leaderId, leader.id)),
+        tasks: taskRows,
         meetings: await deps.db
           .select({ summary: meetings.summary, starts: meetings.startsAt })
           .from(meetings)
           .where(eq(meetings.leaderId, leader.id)),
       },
+      control: controlOf(
+        profileRow[0]?.profile ?? '',
+        department.people.map((person) => ({
+          name: person.name,
+          goal: person.goal,
+          leaderGoal: person.leaderGoal,
+          emails: person.emails,
+          kpis: person.kpis.map((kpi) => ({
+            name: kpi.name,
+            unit: kpi.unit,
+            better: kpi.better,
+            weeks: kpi.weeks.map((week) => ({ fact: week.fact, status: week.status })),
+          })),
+        })),
+        taskRows,
+      ),
       revisions: await deps.db.select().from(revisions).where(eq(revisions.leaderId, leader.id)).orderBy(asc(revisions.createdAt)),
       lastAudit: last[0] ? { status: last[0].status, mode: last[0].reason, at: last[0].startedAt.toISOString() } : null,
     };

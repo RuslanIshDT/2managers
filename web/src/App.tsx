@@ -114,6 +114,12 @@ interface Cabinet {
     tasks: { title: string; owner: string; due: string; status: string }[];
     meetings: { summary: string; starts: string }[];
   };
+  control: {
+    goals: { n: string; text: string; owners: string[]; kpis: string[]; tasks: string[] }[];
+    holes: { kind: string; text: string }[];
+    tasks: { title: string; owner: string; goal: string; effect: string; deadline: string; recommendation: string; basis: string }[];
+    signals: { name: string; kpi: string; early: boolean; text: string }[];
+  };
   lastAudit: { status: string; mode: string; at: string } | null;
 }
 
@@ -461,6 +467,7 @@ export function App() {
             onDecision={decide}
           />
           <Focus focus={cabinet?.focus} pending={pending} onSend={sendFocusNow} />
+          <Signals signals={(cabinet?.control.signals ?? []).filter((item) => item.early)} title="Ранний сигнал" />
         </>
       ) : null}
       {section === 'department' ? (
@@ -472,6 +479,8 @@ export function App() {
             <Stat label="Задачи" value={counts?.tasks} />
           </div>
           <Department department={cabinet?.department} />
+          <Goals control={cabinet?.control} />
+          <Signals signals={cabinet?.control.signals ?? []} title="Сигналы KPI" />
           <Matrix rows={cabinet?.focus.matrix ?? []} />
           <Mirror mirror={cabinet?.mirror} part="notes" pending={pending} onSend={sendNote} onSeries={seriesAction} />
         </>
@@ -505,7 +514,21 @@ export function App() {
         )}
       </Card>
       ) : null}
-      {section === 'tasks' ? <StubList title="Задачи" note="Заглушка. Трекер не подключён, список из файла синтетики." rows={(cabinet?.stubs.tasks ?? []).map((item) => `${item.title} — ${item.owner}, срок ${whenWords(item.due)}, ${item.status}`)} /> : null}
+      {section === 'tasks' ? (
+        <Card className="mb-4">
+          <h2 className="text-lg font-semibold">Задачи</h2>
+          <p className="mb-3 text-sm text-[#5d6878]">Заглушка. Трекер не подключён, список из файла. Разбор ниже считает помощник.</p>
+          <ul className="grid gap-2 text-sm">
+            {(cabinet?.control.tasks ?? []).map((item) => (
+              <li key={item.title}>
+                <b>{item.title}</b> — {item.owner}
+                <span className="block">{item.recommendation === 'оставить' ? 'Оставить' : item.recommendation === 'снять' ? 'Снять' : item.recommendation === 'перенести' ? 'Перенести' : 'Передать'}. Эффект {item.effect}, срок {item.deadline === 'нет' ? 'сорван' : 'в порядке'}{item.goal ? `, цель «${item.goal}»` : ''}.</span>
+                <span className="block text-[#5d6878]">{item.basis}</span>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      ) : null}
       {section === 'calendar' ? <StubList title="Календарь" note="Заглушка. Календарь не подключён, встречи не создаются и не переносятся." rows={(cabinet?.stubs.meetings ?? []).map((item) => `${whenWords(item.starts)} — ${item.summary}`)} /> : null}
       {section === 'mailing' ? (
         <StubList
@@ -849,6 +872,42 @@ function Week({
           </details>
         </dl>
       ) : null}
+    </Card>
+  );
+}
+
+function Goals({ control }: { control: Cabinet['control'] | undefined }) {
+  if (!control) return null;
+  return (
+    <Card className="mb-4">
+      <h2 className="mb-2 text-lg font-semibold">Цели квартала</h2>
+      <ul className="grid gap-2 text-sm">
+        {control.goals.map((goal) => (
+          <li key={goal.n}>
+            <b>{goal.n}. {goal.text}</b>
+            <span className="block text-[#5d6878]">{goal.owners.length ? goal.owners.join(', ') : 'владельца нет'}{goal.kpis.length ? ` · ${goal.kpis.join(', ')}` : ''}</span>
+          </li>
+        ))}
+      </ul>
+      {control.holes.length ? (
+        <p className="mt-3 text-sm">Дыры: {control.holes.map((hole) => `${hole.kind} — ${hole.text}`).join('; ')}.</p>
+      ) : (
+        <p className="mt-3 text-sm text-[#5d6878]">Дыр нет: у каждой цели есть владелец, у людей и задач есть цель.</p>
+      )}
+    </Card>
+  );
+}
+
+function Signals({ signals, title }: { signals: { text: string; early: boolean }[]; title: string }) {
+  if (!signals.length) return null;
+  return (
+    <Card className="mb-4">
+      <h2 className="mb-2 text-lg font-semibold">{title}</h2>
+      <ul className="grid gap-2 text-sm">
+        {signals.map((item) => (
+          <li key={item.text}>{item.early ? 'Раньше письма. ' : ''}{item.text}</li>
+        ))}
+      </ul>
     </Card>
   );
 }
