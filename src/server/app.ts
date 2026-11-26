@@ -12,6 +12,7 @@ import { hashToken, newSessionToken, verifyPassword } from '../auth.ts';
 import type { Db } from '../db/client.ts';
 import { agentRuns, emails, flowReports, leaders, meetings, people, revisions, sessions, tasks, telegramClicks } from '../db/schema.ts';
 import { departmentForLeader } from '../agents/k1.ts';
+import { accuracyView } from '../agents/accuracy.ts';
 import { applyClick, applyLeaderAction, pullInbox, requestFeed, saveEditText } from '../agents/intake.ts';
 import { acceptWeek, acceptWeekByChat, weekScene } from '../agents/week.ts';
 import { focusForLeader, sendFocus } from '../agents/focus-run.ts';
@@ -186,6 +187,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       week: await weekScene(deps.db, leader.id),
       focus: await focusForLeader(deps.db, leader.id, leader.name),
       mirror: await mirrorForLeader(deps.db, leader.id),
+      accuracy: await accuracyView(deps.db, leader.id),
       revisions: await deps.db.select().from(revisions).where(eq(revisions.leaderId, leader.id)).orderBy(asc(revisions.createdAt)),
       lastAudit: last[0] ? { status: last[0].status, mode: last[0].reason, at: last[0].startedAt.toISOString() } : null,
     };
@@ -315,6 +317,18 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     if (!leader) return reply.code(401).send({ error: 'Нужен вход' });
     const quote = await exampleQuote();
     return { ...quote, note: 'Цена прошлого прогона примера. Новый запишется только вам и общий отчёт не заменит.' };
+  });
+
+  app.post('/api/jobs/accuracy', async (request, reply) => {
+    const leader = await currentLeader(request);
+    if (!leader) return reply.code(401).send({ error: 'Нужен вход' });
+    const parsed = z.object({ confirm: z.boolean() }).safeParse(request.body ?? {});
+    if (!parsed.success || parsed.data.confirm !== true) {
+      return reply.code(400).send({ error: 'Нужно подтверждение: один вызов на цепочку, письмо само не отправляется' });
+    }
+    const id = await deps.boss.send('mail-accuracy', { leaderId: leader.id });
+    if (!id) return reply.code(503).send({ error: 'Очередь не приняла задание' });
+    return { id };
   });
 
   app.post('/api/jobs/flow-audit', async (request, reply) => {

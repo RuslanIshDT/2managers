@@ -230,6 +230,18 @@ export const seriesKind = pgTable(
   (t) => [primaryKey({ columns: [t.leaderId, t.seriesKey] })],
 );
 
+export const mailActions = pgTable(
+  'mail_actions',
+  {
+    leaderId: text('leader_id').notNull(),
+    chainKey: text('chain_key').notNull(),
+    action: text('action').notNull(),
+    forced: boolean('forced').notNull().default(false),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.leaderId, t.chainKey] })],
+);
+
 export const flowReports = pgTable('flow_reports', {
   leaderId: text('leader_id').primaryKey(),
   report: jsonb('report').notNull(),

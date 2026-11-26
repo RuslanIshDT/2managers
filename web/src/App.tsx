@@ -108,6 +108,7 @@ interface Cabinet {
   focus: FocusScene;
   mirror: MirrorScene;
   revisions: { id: string; category: string; instead: string }[];
+  accuracy: { total: number; hit: number; calls: number; forced: number; misses: { pair: string; count: number }[] } | null;
   lastAudit: { status: string; mode: string; at: string } | null;
 }
 
@@ -266,6 +267,35 @@ export function App() {
       setMailNote(result.deferred ? `${head}. Осталось ещё ${result.deferred}` : head);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Не удалось разобрать почту');
+    } finally {
+      setPending(false);
+    }
+  }
+
+  async function measureAccuracy() {
+    setJob('');
+    setError('');
+    const agreed = window.confirm('Замер вызовет модель по одному разу на цепочку писем. Письма сами не отправляются. Запустить?');
+    if (!agreed) return;
+    setPending(true);
+    try {
+      const created = await api<{ id: string }>('/api/jobs/accuracy', {
+        method: 'POST',
+        body: JSON.stringify({ confirm: true }),
+      });
+      for (let i = 0; i < 40; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 4000));
+        const state = await api<{ status: string; detail: string | null }>(`/api/jobs/${created.id}`);
+        if (state.status === 'done') {
+          setJob(state.detail || 'Точность записана');
+          setCabinet(await api<Cabinet>('/api/cabinet'));
+          return;
+        }
+        if (state.status === 'failed') throw new Error(state.detail || 'Замер не выполнился');
+      }
+      setJob('Замер ещё идёт. Обновите страницу через минуту.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось замерить точность');
     } finally {
       setPending(false);
     }
@@ -473,6 +503,22 @@ export function App() {
         <p className="mt-2 text-sm text-[#5d6878]">
           «Пересобрать» не вызывает модель. «Прогнать моделью» сначала показывает цену прошлого прогона и пишет отчёт только этому руководителю.
         </p>
+        <div className="mt-4">
+          <Button type="button" variant="outline" onClick={measureAccuracy} disabled={pending}>
+            {pending ? 'Задание…' : 'Замерить точность 80 писем'}
+          </Button>
+          {cabinet?.accuracy ? (
+            <p className="mt-2 text-sm">
+              Точность: {cabinet.accuracy.hit} из {cabinet.accuracy.total}. Цепочек {cabinet.accuracy.calls}, из них код поправил{' '}
+              {cabinet.accuracy.forced}. Ответ сам не отправлялся.
+              {cabinet.accuracy.misses.length
+                ? ` Расхождения: ${cabinet.accuracy.misses.map((row) => `${actionWords(row.pair)} — ${row.count}`).join('; ')}.`
+                : ''}
+            </p>
+          ) : (
+            <p className="mt-2 text-sm text-[#5d6878]">Замера ещё нет. Один вызов на цепочку, не на каждое письмо.</p>
+          )}
+        </div>
       </Card>
       <Card className="mb-4">
         <h2 className="mb-2 text-lg font-semibold">Профиль</h2>
@@ -870,6 +916,13 @@ function kindLabel(kind: string): string {
   if (kind === 'повтор') return 'Повтор, не спрашиваю';
   if (kind === 'не_из_отдела') return 'Не из отдела';
   return kind;
+}
+
+function actionWords(pair: string): string {
+  return pair
+    .replaceAll('спросить_руководителя', 'спросить руководителя')
+    .replaceAll('в_сводку', 'в сводку')
+    .replaceAll('_', ' ');
 }
 
 function categoryWords(category: string): string {

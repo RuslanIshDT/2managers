@@ -14,6 +14,7 @@ import { applyChoice, renderPlan } from '../src/agents/conductor.ts';
 import { burningSeries, noteToSend, weeklyNotes } from '../src/agents/mirror.ts';
 import { letterHits, replayWeek, ruleEffect, rulesFromAudit, trustOffers, waitingHours } from '../src/agents/replay.ts';
 import { finishTemplate, hasProposal } from '../src/agents/k2.ts';
+import { forceMailAction, mailScore } from '../src/agents/accuracy.ts';
 import { decisionCallback, parseCallback, parseRuleCallback, parseStart } from '../src/telegram.ts';
 
 describe('синтетика D2', () => {
@@ -400,6 +401,33 @@ describe('правка и второй каталог', () => {
     expect(second.people.every((person) => !firstNames.has(person.name))).toBe(true);
     expect(second.people.some((person) => person.role === 'подчинённый')).toBe(true);
     expect(second.emails.length).toBeGreaterThan(0);
+  });
+});
+
+describe('точность почты', () => {
+  it('код переводит деньги и кадры в вопрос руководителю и сам ничего не шлёт', () => {
+    expect(forceMailAction('Прошу скидку 12%', false, 'делегировать')).toEqual({
+      action: 'спросить_руководителя',
+      forced: true,
+    });
+    expect(forceMailAction('Отпуск с 20 декабря', false, 'в_сводку')).toEqual({
+      action: 'спросить_руководителя',
+      forced: true,
+    });
+    expect(forceMailAction('Прогноз плана 94%', true, 'в_сводку')).toEqual({
+      action: 'спросить_руководителя',
+      forced: true,
+    });
+    expect(forceMailAction('Дашборд обновлён', false, 'в_сводку')).toEqual({ action: 'в_сводку', forced: false });
+  });
+
+  it('считает совпадения и группирует расхождения', () => {
+    const score = mailScore([
+      { expected: 'в_сводку', action: 'в_сводку' },
+      { expected: 'в_сводку', action: 'в_сводку' },
+      { expected: 'делегировать', action: 'в_сводку' },
+    ]);
+    expect(score).toEqual({ total: 3, hit: 2, misses: [{ pair: 'делегировать → в_сводку', count: 1 }] });
   });
 });
 

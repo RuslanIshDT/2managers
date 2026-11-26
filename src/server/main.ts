@@ -1,7 +1,9 @@
 import { existsSync } from 'node:fs';
 import { setLlmSink } from '../llm.ts';
 import { createDb, createPool, migrate } from '../db/client.ts';
-import { leaders, llmCalls } from '../db/schema.ts';
+import { eq } from 'drizzle-orm';
+import { agentRuns, leaders, llmCalls } from '../db/schema.ts';
+import { accuracyView, measureAccuracy } from '../agents/accuracy.ts';
 import { loadDepartment } from '../agents/k1.ts';
 import { sendFocusAll } from '../agents/focus-run.ts';
 import { pullInbox } from '../agents/intake.ts';
@@ -55,6 +57,36 @@ await boss.work('inbox-poll', async () => {
   }
 });
 await boss.schedule('inbox-poll', '* * * * *', {}, { tz: 'Europe/Moscow' });
+await boss.createQueue('mail-accuracy');
+await boss.work<{ leaderId: string }>('mail-accuracy', async (jobs) => {
+  for (const job of jobs) {
+    await db.insert(agentRuns).values({
+      id: job.id,
+      leaderId: job.data.leaderId,
+      agent: 'accuracy',
+      reason: 'model',
+      startedAt: new Date(),
+      status: 'running',
+    });
+    try {
+      const result = await measureAccuracy(db, job.data.leaderId);
+      const view = await accuracyView(db, job.data.leaderId);
+      await db
+        .update(agentRuns)
+        .set({
+          status: 'done',
+          finishedAt: new Date(),
+          detail: view ? `${view.hit} из ${view.total}, новых вызовов ${result.calls}` : `новых вызовов ${result.calls}`,
+        })
+        .where(eq(agentRuns.id, job.id));
+    } catch (err) {
+      await db
+        .update(agentRuns)
+        .set({ status: 'failed', finishedAt: new Date(), detail: err instanceof Error ? err.message : 'сбой' })
+        .where(eq(agentRuns.id, job.id));
+    }
+  }
+});
 
 setLlmSink(async (purpose, result) => {
   await db.insert(llmCalls).values({
