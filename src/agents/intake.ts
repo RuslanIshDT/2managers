@@ -74,7 +74,40 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
   for (const letter of pending) {
     if (seen.has(letter.messageId)) continue;
     const person = persons.find((row) => row.email.toLowerCase() === letter.fromEmail.toLowerCase());
-    if (!person || person.role !== 'подчинённый') continue;
+    if (!person || person.role !== 'подчинённый') {
+      if (letter.marked !== false) continue;
+      await db.insert(mailIn).values({
+        leaderId,
+        messageId: letter.messageId,
+        syntheticId: '',
+        received: letter.received,
+        fromName: letter.fromName,
+        fromEmail: letter.fromEmail,
+        subject: letter.subject,
+        body: letter.body,
+        chainKey: chainKey(letter.fromEmail, letter.subject),
+      });
+      await db.insert(verdicts).values({
+        id: `v-${letter.messageId}`.slice(0, 120),
+        leaderId,
+        messageId: letter.messageId,
+        chainKey: chainKey(letter.fromEmail, letter.subject),
+        kind: 'не_из_отдела',
+        category: 'иное',
+        summary: `${letter.fromName}: ${letter.subject}`,
+        draft: '',
+        basis: 'Адрес не найден среди подчинённых этого руководителя',
+        context: '',
+        recommendation: '',
+        authorityOffer: '',
+        risks: '',
+        ifNot: '',
+        createdAt: new Date(),
+      });
+      seen.add(letter.messageId);
+      lines.push(`${letter.id}: не из отдела`);
+      continue;
+    }
     const key = chainKey(letter.fromEmail, letter.subject);
     const prior = decisionRows.find((row) => row.chainKey === key || row.id === letter.id) ?? null;
     const ownAuth = authRows.filter((row) => row.personId === person.externalId);

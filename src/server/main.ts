@@ -4,6 +4,8 @@ import { createDb, createPool, migrate } from '../db/client.ts';
 import { leaders, llmCalls } from '../db/schema.ts';
 import { loadDepartment } from '../agents/k1.ts';
 import { sendFocusAll } from '../agents/focus-run.ts';
+import { pullInbox } from '../agents/intake.ts';
+import { readSyntheticInbox } from '../mail.ts';
 import { seedIfEmpty, seedMissingCatalogs } from '../db/seed.ts';
 import { startBoss } from '../jobs/flow-audit-job.ts';
 import { buildApp } from './app.ts';
@@ -36,6 +38,23 @@ for (const name of ['focus-morning', 'focus-friday']) {
 }
 await boss.schedule('focus-morning', '30 8 * * *', {}, { tz: 'Europe/Moscow' });
 await boss.schedule('focus-friday', '0 17 * * 5', {}, { tz: 'Europe/Moscow' });
+await boss.createQueue('inbox-poll');
+await boss.work('inbox-poll', async () => {
+  let letters;
+  try {
+    letters = await readSyntheticInbox();
+  } catch (err) {
+    console.error('Ящик не прочитан', err);
+    return;
+  }
+  const bound = await db.select({ id: leaders.id, chat: leaders.telegramChatId }).from(leaders);
+  const inboxOwner = bound.find((row) => row.chat)?.id;
+  for (const row of bound) {
+    if (row.id !== inboxOwner) continue;
+    await pullInbox(db, row.id, letters.filter((letter) => letter.marked === false), 1);
+  }
+});
+await boss.schedule('inbox-poll', '* * * * *', {}, { tz: 'Europe/Moscow' });
 
 setLlmSink(async (purpose, result) => {
   await db.insert(llmCalls).values({

@@ -72,6 +72,7 @@ export interface SyntheticLetter {
 
 export interface MailboxLetter extends SyntheticLetter {
   messageId: string;
+  marked?: boolean;
 }
 
 export function syntheticSource(letter: SyntheticLetter, to: string): string {
@@ -103,21 +104,39 @@ export function parseMailboxSource(source: string): MailboxLetter | null {
   const body = encoding.toLowerCase().includes('base64')
     ? Buffer.from(rawBody.replace(/\s/g, ''), 'base64').toString('utf8')
     : rawBody;
+  const headers = text.slice(0, splitAt);
   const lines = body.split('\n');
   const marker = /^синтетика\s+([A-Za-z0-9_-]+)\s*$/.exec(lines[0] ?? '');
-  const from = /^От:\s*(.+?)\s*<([^>]+)>\s*$/.exec(lines[1] ?? '');
-  if (!marker || !from) return null;
-  const subject = decodeHeader(headerValue(text.slice(0, splitAt), 'subject'));
-  const messageId = headerValue(text.slice(0, splitAt), 'message-id') || `<${marker[1]}.synthetic@ecompras.local>`;
-  const received = headerValue(text.slice(0, splitAt), 'x-ecompras-received') || headerValue(text.slice(0, splitAt), 'date');
+  const fromLine = /^От:\s*(.+?)\s*<([^>]+)>\s*$/.exec(lines[1] ?? '');
+  const subject = decodeHeader(headerValue(headers, 'subject'));
+  const received = headerValue(headers, 'x-ecompras-received') || headerValue(headers, 'date');
+  if (marker && fromLine) {
+    const messageId = headerValue(headers, 'message-id') || `<${marker[1]}.synthetic@ecompras.local>`;
+    return {
+      id: marker[1],
+      messageId,
+      fromName: fromLine[1],
+      fromEmail: fromLine[2],
+      subject,
+      body: lines.slice(3).join('\n').trim(),
+      received,
+      marked: true,
+    };
+  }
+  const fromHeader = decodeHeader(headerValue(headers, 'from'));
+  const from = /^(.*?)\s*<([^>]+)>\s*$/.exec(fromHeader);
+  const email = (from?.[2] ?? fromHeader).trim().toLowerCase();
+  if (!email.includes('@')) return null;
+  const messageId = headerValue(headers, 'message-id') || `local-${email}-${subject}`;
   return {
-    id: marker[1],
+    id: messageId.replace(/[<>]/g, '').slice(0, 80),
     messageId,
-    fromName: from[1],
-    fromEmail: from[2],
-    subject,
-    body: lines.slice(3).join('\n').trim(),
+    fromName: (from?.[1] ?? '').replace(/^"|"$/g, '').trim() || email,
+    fromEmail: email,
+    subject: subject || '(без темы)',
+    body: body.trim(),
     received,
+    marked: false,
   };
 }
 

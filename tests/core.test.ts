@@ -194,6 +194,23 @@ describe('просьба подчинённого', () => {
     expect(parsed?.fromEmail).toBe('p02@company.example');
     expect(parsed?.subject).toBe(first?.subject);
     expect(parsed?.body).toContain('12%');
+    expect(parsed?.marked).toBe(true);
+    const human = parseMailboxSource(
+      [
+        'From: =?UTF-8?B?0JjQstCw0L0=?= <person@example.com>',
+        'To: <leader@example.com>',
+        'Subject: =?UTF-8?B?0JLQvtC/0YDQvtGB?=',
+        'Date: Thu, 26 Nov 2026 12:00:00 +0300',
+        'Message-ID: <hand.1@example.com>',
+        'Content-Type: text/plain; charset=utf-8',
+        '',
+        'Нужно решение по сроку.',
+      ].join('\n'),
+    );
+    expect(human?.marked).toBe(false);
+    expect(human?.fromEmail).toBe('person@example.com');
+    expect(human?.subject).toBe('Вопрос');
+    expect(human?.body).toContain('решение');
   });
 
   it('просьба без предложения возвращается с шаблоном', () => {
