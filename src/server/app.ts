@@ -15,6 +15,7 @@ import { departmentForLeader } from '../agents/k1.ts';
 import { applyClick, pullInbox, requestFeed } from '../agents/intake.ts';
 import { acceptWeek, acceptWeekByChat, weekScene } from '../agents/week.ts';
 import { focusForLeader, sendFocus } from '../agents/focus-run.ts';
+import { mirrorForLeader, sendWeeklyNote, setSeriesFate } from '../agents/mirror-run.ts';
 import { checkMail, mailConfig, readSyntheticInbox } from '../mail.ts';
 import { applyOrigin, formOrigin } from '../http/origin.ts';
 import { assertAuditConfirm, exampleQuote, FLOW_AUDIT_QUEUE, type FlowAuditJob } from '../jobs/flow-audit-job.ts';
@@ -184,6 +185,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       feed: await requestFeed(deps.db, leader.id),
       week: await weekScene(deps.db, leader.id),
       focus: await focusForLeader(deps.db, leader.id, leader.name),
+      mirror: await mirrorForLeader(deps.db, leader.id),
       lastAudit: last[0] ? { status: last[0].status, mode: last[0].reason, at: last[0].startedAt.toISOString() } : null,
     };
   });
@@ -214,6 +216,36 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     } catch (err) {
       const detail = err instanceof Error ? err.message : 'не удалось отправить';
       return reply.code(502).send({ error: detail });
+    }
+  });
+
+  app.post('/api/mirror/send', async (request, reply) => {
+    const leader = await currentLeader(request);
+    if (!leader) return reply.code(401).send({ error: 'Нужен вход' });
+    try {
+      return await sendWeeklyNote(deps.db, leader.id);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : 'не удалось отправить';
+      return reply.code(502).send({ error: detail });
+    }
+  });
+
+  app.post('/api/series', async (request, reply) => {
+    const leader = await currentLeader(request);
+    if (!leader) return reply.code(401).send({ error: 'Нужен вход' });
+    const body = z
+      .object({
+        key: z.string().trim().min(1).max(200),
+        action: z.enum(['продлить', 'отпустить']),
+        reason: z.string().max(500).optional(),
+      })
+      .safeParse(request.body ?? {});
+    if (!body.success) return reply.code(400).send({ error: 'Непонятное действие по серии' });
+    try {
+      return await setSeriesFate(deps.db, leader.id, body.data.key, body.data.action, body.data.reason ?? '');
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : 'не удалось записать';
+      return reply.code(400).send({ error: detail });
     }
   });
 

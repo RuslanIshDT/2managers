@@ -260,6 +260,7 @@ export async function departmentForLeader(db: Db, leaderId: string) {
       return {
         id: person.externalId,
         name: person.name,
+        email: person.email,
         position: person.position,
         zone: person.zone,
         goal: person.goal,

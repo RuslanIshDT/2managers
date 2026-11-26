@@ -193,6 +193,18 @@ export const rules = pgTable('rules', {
   effect: text('effect').notNull().default(''),
 });
 
+export const seriesFate = pgTable(
+  'series_fate',
+  {
+    leaderId: text('leader_id').notNull(),
+    seriesKey: text('series_key').notNull(),
+    action: text('action').notNull(),
+    reason: text('reason').notNull().default(''),
+    at: timestamp('at', { withTimezone: true }).notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.leaderId, t.seriesKey] })],
+);
+
 export const flowReports = pgTable('flow_reports', {
   leaderId: text('leader_id').primaryKey(),
   report: jsonb('report').notNull(),

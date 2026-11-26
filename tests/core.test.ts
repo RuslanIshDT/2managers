@@ -9,6 +9,7 @@ import { applyOrigin, formOrigin, requestOrigin } from '../src/http/origin.ts';
 import { mailConfig } from '../src/mail.ts';
 import { staffCard } from '../src/agents/dependence.ts';
 import { departmentMatrix, goalMinutes, morningLines } from '../src/agents/focus.ts';
+import { burningSeries, noteToSend, weeklyNotes } from '../src/agents/mirror.ts';
 import { letterHits, replayWeek, rulesFromAudit, trustOffers, waitingHours } from '../src/agents/replay.ts';
 import { finishTemplate, hasProposal } from '../src/agents/k2.ts';
 import { decisionCallback, parseCallback, parseRuleCallback, parseStart } from '../src/telegram.ts';
@@ -204,6 +205,24 @@ describe('просьба подчинённого', () => {
   });
 });
 
+describe('записки и серии', () => {
+  it('тихий отстающий получает другую записку, серия «должно» не сгорает', () => {
+    const notes = weeklyNotes([
+      { name: 'Мария', email: 'm@example', subjects: ['отпуск Ирины', 'жалоба клиента'], lagging: false, ownRules: [] },
+      { name: 'Дмитрий', email: 'd@example', subjects: [], lagging: true, ownRules: [] },
+    ]);
+    expect(notes[0]?.text).toContain('отпуск Ирины');
+    expect(notes[1]?.text).toContain('не писали');
+    expect(noteToSend(notes)?.name).toBe('Дмитрий');
+    const series = burningSeries([
+      { kind: 'встречи', title: 'Статус', verdict: 'не_должно', change: 'убрать', freedHours: 1.5 },
+      { kind: 'встречи', title: 'Совет', verdict: 'должно', change: '', hours: 2 },
+      { kind: 'письма', title: 'Письмо', verdict: 'не_должно', change: '', hours: 1 },
+    ]);
+    expect(series.map((item) => item.title)).toEqual(['Статус']);
+    expect(series[0]?.hours).toBe(1.5);
+  });
+});
 describe('утро и матрица', () => {
   it('тихая проблема — тот, кто отстаёт и не пишет; у другого отдела её нет', () => {
     const first = departmentMatrix([

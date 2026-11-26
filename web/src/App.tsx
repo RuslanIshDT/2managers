@@ -76,6 +76,11 @@ interface FocusScene {
   share: { percent: number; onGoal: number; total: number };
 }
 
+interface MirrorScene {
+  notes: { name: string; email: string; text: string; quiet: boolean }[];
+  series: { title: string; verdict: string; change: string; hours: number; action: string; reason: string }[];
+}
+
 interface Cabinet {
   name: string;
   profile: string;
@@ -87,6 +92,7 @@ interface Cabinet {
   feed: FeedItem[];
   week: WeekScene;
   focus: FocusScene;
+  mirror: MirrorScene;
   lastAudit: { status: string; mode: string; at: string } | null;
 }
 
@@ -144,6 +150,35 @@ export function App() {
     await api('/api/logout', { method: 'POST' });
     setUser(null);
     setCabinet(null);
+  }
+
+  async function sendNote() {
+    setError('');
+    setPending(true);
+    try {
+      const result = await api<{ name: string }>('/api/mirror/send', { method: 'POST', body: '{}' });
+      setJob(`Записка для ${result.name} ушла в тестовый ящик`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось отправить записку');
+    } finally {
+      setPending(false);
+    }
+  }
+
+  async function seriesAction(key: string, action: 'продлить' | 'отпустить') {
+    const reason = action === 'продлить' ? window.prompt('Какое решение принимается на этой серии?') ?? '' : '';
+    if (action === 'продлить' && reason.trim().length < 3) return;
+    setError('');
+    setPending(true);
+    try {
+      await api('/api/series', { method: 'POST', body: JSON.stringify({ key, action, reason }) });
+      const fresh = await api<Cabinet>('/api/cabinet');
+      setCabinet(fresh);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось записать серию');
+    } finally {
+      setPending(false);
+    }
   }
 
   async function sendFocusNow() {
@@ -302,6 +337,7 @@ export function App() {
       {error ? <p className="mb-4 text-sm text-[#a3302a]">{error}</p> : null}
       <Week week={cabinet?.week} pending={pending} onAccept={acceptRules} />
       <Focus focus={cabinet?.focus} pending={pending} onSend={sendFocusNow} />
+      <Mirror mirror={cabinet?.mirror} pending={pending} onSend={sendNote} onSeries={seriesAction} />
       <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Stat label="Люди" value={counts?.people} />
         <Stat label="Письма" value={counts?.emails} />
@@ -365,6 +401,57 @@ export function App() {
         </a>
       </p>
     </main>
+  );
+}
+
+function Mirror({
+  mirror,
+  pending,
+  onSend,
+  onSeries,
+}: {
+  mirror: MirrorScene | undefined;
+  pending: boolean;
+  onSend: () => void;
+  onSeries: (key: string, action: 'продлить' | 'отпустить') => void;
+}) {
+  if (!mirror) return null;
+  return (
+    <Card className="mb-4">
+      <h2 className="mb-2 text-lg font-semibold">Записки и серии встреч</h2>
+      <p className="mb-2 text-sm text-[#5d6878]">Календарь не подключён: «продлить» и «отпустить» только записывают решение. Рассылка всем подчинённым — нет, в ящик уходит одна записка.</p>
+      <ul className="grid gap-2 text-sm">
+        {mirror.notes.map((note) => (
+          <li key={note.email}>
+            <b>{note.name}</b>
+            {note.quiet ? ' · тихая проблема' : ''}
+            <span className="block whitespace-pre-wrap text-[#5d6878]">{note.text}</span>
+          </li>
+        ))}
+      </ul>
+      <Button className="mt-3" type="button" variant="outline" onClick={onSend} disabled={pending}>
+        {pending ? 'Отправка…' : 'Отправить одну записку'}
+      </Button>
+      <ul className="mt-4 grid gap-3 text-sm">
+        {mirror.series.map((item) => (
+          <li key={item.title}>
+            <b>{item.title}</b>
+            <span className="block text-[#5d6878]">
+              {item.verdict}, {item.hours} ч. {item.change}
+              {item.action ? ` Записано: ${item.action}${item.reason ? ` — ${item.reason}` : ''}.` : ''}
+            </span>
+            <span className="mt-1 flex gap-2">
+              <Button type="button" variant="outline" disabled={pending} onClick={() => onSeries(item.title, 'продлить')}>
+                Продлить
+              </Button>
+              <Button type="button" variant="outline" disabled={pending} onClick={() => onSeries(item.title, 'отпустить')}>
+                Отпустить
+              </Button>
+            </span>
+          </li>
+        ))}
+      </ul>
+    </Card>
   );
 }
 
