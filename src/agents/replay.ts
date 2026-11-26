@@ -1,5 +1,5 @@
 // Пересчёт недели через правила. Код не знает людей и лимиты синтетики: они приходят в данных.
-import { textSignals } from './k2.ts';
+import { leaderMustConfirm, textSignals } from './k2.ts';
 
 export interface HistoryRow {
   personId: string;
@@ -27,7 +27,7 @@ export interface FlowRule {
   fromEmail: string;
   subjectKey: string;
   seriesKey: string;
-  effect: 'стоп' | 'дайджест' | 'сам';
+  effect: 'стоп' | 'дайджест' | 'сам' | 'карточка';
   cause: string;
 }
 
@@ -51,6 +51,16 @@ export interface Replay {
   digestMeetings: number;
   stillLetters: number;
   stillMeetings: number;
+  gluedLetters: number;
+  gluedMeetings: number;
+  remaining: string[];
+}
+
+export function ruleEffect(verdict: string, category: string): 'стоп' | 'карточка' | null {
+  if (leaderMustConfirm(category)) return verdict === 'должно' ? null : 'карточка';
+  if (verdict === 'должно' || verdict === '') return null;
+  if (verdict === 'не_должно') return 'стоп';
+  return 'карточка';
 }
 
 const STREAK = 5;
@@ -102,21 +112,29 @@ export function trustOffers(rows: HistoryRow[]): TrustOffer[] {
   return offers.filter((offer) => offer.ready);
 }
 
-export function rulesFromAudit(pieces: AuditPiece[], offers: TrustOffer[], emailByPerson: Map<string, string>): FlowRule[] {
+export function rulesFromAudit(
+  pieces: AuditPiece[],
+  offers: TrustOffer[],
+  emailByPerson: Map<string, string>,
+  categoryByKey: Map<string, string> = new Map(),
+): FlowRule[] {
   const rules: FlowRule[] = [];
   for (const piece of pieces) {
-    if (piece.verdict === 'должно') continue;
-    const effect = piece.verdict === 'не_должно' ? 'стоп' : 'дайджест';
+    const split = piece.kind === 'письма' ? piece.key.indexOf('|') : -1;
+    const fromEmail = split >= 0 ? piece.key.slice(0, split) : '';
+    const subject = subjectKey(split >= 0 ? piece.key.slice(split + 1) : piece.title);
+    const category = piece.kind === 'письма' ? categoryByKey.get(`${fromEmail.toLowerCase()}|${subject}`) ?? '' : '';
+    const effect = ruleEffect(piece.verdict, category);
+    if (!effect) continue;
     if (piece.kind === 'письма') {
-      const split = piece.key.indexOf('|');
       rules.push({
         kind: 'письмо',
         title: piece.change || piece.title,
         personId: '',
         area: '',
         limitValue: '',
-        fromEmail: split >= 0 ? piece.key.slice(0, split) : '',
-        subjectKey: split >= 0 ? piece.key.slice(split + 1) : subjectKey(piece.title),
+        fromEmail,
+        subjectKey: subject,
         seriesKey: '',
         effect,
         cause: piece.cause,
@@ -166,19 +184,21 @@ export function letterHits(
       rule.kind === 'письмо' &&
       rule.fromEmail.toLowerCase() === email &&
       rule.subjectKey === key &&
-      (rule.effect === 'стоп' || rule.effect === 'дайджест'),
+      (rule.effect === 'стоп' || rule.effect === 'дайджест' || rule.effect === 'карточка'),
   );
-  if (thread) return thread;
   const signal = textSignals(`${letter.subject}\n${letter.body}`);
-  if (signal.discountPercent === null) return null;
-  return (
-    rules.find((rule) => {
-      if (rule.kind !== 'полномочие' || rule.effect !== 'сам') return false;
-      if (rule.fromEmail.toLowerCase() !== email) return false;
-      const limit = Number(rule.limitValue);
-      return Number.isFinite(limit) && rule.limitValue !== '' && signal.discountPercent !== null && signal.discountPercent <= limit;
-    }) ?? null
-  );
+  const authority =
+    signal.discountPercent === null
+      ? null
+      : rules.find((rule) => {
+          if (rule.kind !== 'полномочие' || rule.effect !== 'сам') return false;
+          if (rule.fromEmail.toLowerCase() !== email) return false;
+          const limit = Number(rule.limitValue);
+          return Number.isFinite(limit) && rule.limitValue !== '' && signal.discountPercent !== null && signal.discountPercent <= limit;
+        }) ?? null;
+  if (authority && thread?.effect !== 'стоп' && thread?.effect !== 'дайджест') return authority;
+  if (thread) return thread;
+  return authority;
 }
 
 export function meetingHits(summary: string, rules: FlowRule[]): FlowRule | null {
@@ -205,24 +225,49 @@ export function replayWeek(
       digestMeetings: 0,
       stillLetters: letters.length,
       stillMeetings: meetings.length,
+      gluedLetters: 0,
+      gluedMeetings: 0,
+      remaining: letters.map((letter) => letter.subject),
     };
   }
   let stoppedLetters = 0;
   let digestLetters = 0;
   let stillLetters = 0;
+  let gluedLetters = 0;
+  const seenLetters = new Set<string>();
+  const remaining: string[] = [];
   for (const letter of letters) {
     const hit = letterHits(letter, rules);
-    if (!hit) stillLetters += 1;
-    else if (hit.effect === 'дайджест') digestLetters += 1;
+    if (!hit) {
+      stillLetters += 1;
+      remaining.push(letter.subject);
+    } else if (hit.effect === 'карточка') {
+      const id = `${letter.fromEmail.toLowerCase()}|${subjectKey(letter.subject)}`;
+      if (seenLetters.has(id)) gluedLetters += 1;
+      else {
+        seenLetters.add(id);
+        stillLetters += 1;
+        remaining.push(letter.subject);
+      }
+    } else if (hit.effect === 'дайджест') digestLetters += 1;
     else stoppedLetters += 1;
   }
   let stoppedMeetings = 0;
   let digestMeetings = 0;
   let stillMeetings = 0;
+  let gluedMeetings = 0;
+  const seenMeetings = new Set<string>();
   for (const meeting of meetings) {
     const hit = meetingHits(meeting.summary, rules);
     if (!hit) stillMeetings += 1;
-    else if (hit.effect === 'дайджест') digestMeetings += 1;
+    else if (hit.effect === 'карточка') {
+      if (seenMeetings.has(meeting.summary)) gluedMeetings += 1;
+      else {
+        seenMeetings.add(meeting.summary);
+        stillMeetings += 1;
+        remaining.push(meeting.summary);
+      }
+    } else if (hit.effect === 'дайджест') digestMeetings += 1;
     else stoppedMeetings += 1;
   }
   const still = stillLetters + stillMeetings;
@@ -237,6 +282,9 @@ export function replayWeek(
     digestMeetings,
     stillLetters,
     stillMeetings,
+    gluedLetters,
+    gluedMeetings,
+    remaining,
   };
 }
 

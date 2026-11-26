@@ -2,12 +2,14 @@
 import { readFile } from 'node:fs/promises';
 import { eq } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
-import { decisions, emails, flowReports, leaders, meetings, people, rules, verdicts } from '../db/schema.ts';
+import { decisions, emailEtalon, emails, flowReports, leaders, meetings, people, rules, verdicts } from '../db/schema.ts';
 import { readHistory, staffFromVerdict, type StaffCard } from './dependence.ts';
+import { leaderMustConfirm } from './k2.ts';
 import {
   askShare,
   replayWeek,
   rulesFromAudit,
+  subjectKey,
   trustOffers,
   waitingHours,
   type AuditPiece,
@@ -33,7 +35,7 @@ export async function listFlowRules(db: Db, leaderId: string): Promise<FlowRule[
     fromEmail: row.fromEmail,
     subjectKey: row.subjectKey,
     seriesKey: row.seriesKey,
-    effect: row.effect === 'стоп' || row.effect === 'дайджест' || row.effect === 'сам' ? row.effect : 'стоп',
+    effect: row.effect === 'стоп' || row.effect === 'дайджест' || row.effect === 'сам' || row.effect === 'карточка' ? row.effect : 'стоп',
     cause: row.cause,
   }));
 }
@@ -80,6 +82,9 @@ export async function weekScene(db: Db, leaderId: string) {
     stoppedMeetings: picture.stoppedMeetings,
     digestLetters: picture.digestLetters,
     digestMeetings: picture.digestMeetings,
+    gluedLetters: picture.gluedLetters,
+    gluedMeetings: picture.gluedMeetings,
+    remaining: picture.remaining,
     offers: offers.map((offer) => offer.title),
     rules: ruleRows.length,
     askPercent: askShare(verdictRows.map((row) => row.kind)),
@@ -92,7 +97,7 @@ export async function acceptWeek(db: Db, leaderId: string) {
   const [history, persons, pieces] = await Promise.all([historyOf(leaderId), db.select().from(people).where(eq(people.leaderId, leaderId)), readPieces(db, leaderId)]);
   const offers = trustOffers(history);
   const emailByPerson = new Map(persons.map((person) => [person.externalId, person.email]));
-  const built = rulesFromAudit(pieces, offers, emailByPerson);
+  const built = rulesFromAudit(pieces, offers, emailByPerson, await categoriesByLetter(db, leaderId));
   const now = new Date();
   await db.delete(rules).where(eq(rules.leaderId, leaderId));
   if (built.length) {
@@ -122,6 +127,23 @@ export async function acceptWeekByChat(db: Db, chatId: string): Promise<string> 
   if (!leader) return 'Чат не привязан';
   const scene = await acceptWeek(db, leader.id);
   return `Правила приняты. Индекс ${scene.before}% → ${scene.after}%`;
+}
+
+async function categoriesByLetter(db: Db, leaderId: string): Promise<Map<string, string>> {
+  const [marks, rows] = await Promise.all([
+    db.select().from(emailEtalon).where(eq(emailEtalon.leaderId, leaderId)),
+    db.select().from(emails).where(eq(emails.leaderId, leaderId)),
+  ]);
+  const byId = new Map(marks.map((row) => [row.externalId, row.category]));
+  const map = new Map<string, string>();
+  for (const row of rows) {
+    const category = byId.get(row.externalId) ?? '';
+    if (!category) continue;
+    const key = `${row.fromEmail.toLowerCase()}|${subjectKey(row.subject)}`;
+    const prev = map.get(key);
+    if (!prev || leaderMustConfirm(category)) map.set(key, category);
+  }
+  return map;
 }
 
 async function readPieces(db: Db, leaderId: string): Promise<AuditPiece[]> {

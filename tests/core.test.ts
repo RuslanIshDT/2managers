@@ -11,7 +11,7 @@ import { mailConfig } from '../src/mail.ts';
 import { staffCard } from '../src/agents/dependence.ts';
 import { departmentMatrix, goalMinutes, morningLines } from '../src/agents/focus.ts';
 import { burningSeries, noteToSend, weeklyNotes } from '../src/agents/mirror.ts';
-import { letterHits, replayWeek, rulesFromAudit, trustOffers, waitingHours } from '../src/agents/replay.ts';
+import { letterHits, replayWeek, ruleEffect, rulesFromAudit, trustOffers, waitingHours } from '../src/agents/replay.ts';
 import { finishTemplate, hasProposal } from '../src/agents/k2.ts';
 import { decisionCallback, parseCallback, parseRuleCallback, parseStart } from '../src/telegram.ts';
 
@@ -293,7 +293,30 @@ describe('пересчёт недели', () => {
     const closed = replayWeek(letters, meetings, rules, true);
     expect(open.after).toBe(100);
     expect(closed.after).toBeLessThan(100);
-    expect(closed.stillMeetings).toBe(1);
+    expect(closed.stillMeetings).toBe(2);
+    expect(ruleEffect('не_должно', 'кадры')).toBe('карточка');
+    expect(ruleEffect('в_другом_виде', 'иное')).toBe('карточка');
+    expect(ruleEffect('не_должно', 'иное')).toBe('стоп');
+    expect(ruleEffect('должно', 'деньги')).toBeNull();
+    const guarded = rulesFromAudit(
+      [{ kind: 'письма', key: 'a@example|отпуск', title: 'Отпуск', verdict: 'не_должно', change: '', cause: 'кадры' }],
+      [],
+      new Map(),
+      new Map([['a@example|отпуск', 'кадры']]),
+    );
+    expect(guarded[0]?.effect).toBe('карточка');
+    const twice = replayWeek(
+      [
+        { fromEmail: 'a@example', subject: 'Отпуск', body: 'даты' },
+        { fromEmail: 'a@example', subject: 'Повтор: Отпуск', body: 'даты' },
+      ],
+      [],
+      guarded,
+      true,
+    );
+    expect(twice.stillLetters).toBe(1);
+    expect(twice.gluedLetters).toBe(1);
+    expect(twice.digestLetters).toBe(0);
     expect(letterHits(letters[0], rules)?.effect).toBe('стоп');
     expect(letterHits({ fromEmail: 'a@example', subject: 'Скидка новая', body: 'Скидка 8%' }, rules)?.effect).toBe('сам');
     expect(letterHits({ fromEmail: 'a@example', subject: 'Скидка новая', body: 'Скидка 12%' }, rules)).toBeNull();

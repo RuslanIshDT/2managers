@@ -81,7 +81,7 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
     const limit = discountLimit(ownAuth.map((row) => ({ area: row.area, limit: row.limitValue })));
     const covered = letterHits(letter, authority);
     let ruled: Ruled;
-    if (covered) {
+    if (covered && covered.effect !== 'карточка') {
       ruled = {
         kind: 'вернуть',
         category: 'иное',

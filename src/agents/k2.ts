@@ -18,6 +18,10 @@ export type RequestCategory = (typeof CATEGORIES)[number];
 
 const N1 = new Set<RequestCategory>(['деньги', 'кадры', 'обязательства_клиентам', 'руководство']);
 
+export function leaderMustConfirm(category: string): boolean {
+  return N1.has(category as RequestCategory);
+}
+
 export interface ModelVerdict {
   вердикт: (typeof VERDICT_KINDS)[number];
   в_полномочиях: 'да' | 'нет' | 'неясно';

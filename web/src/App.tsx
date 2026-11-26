@@ -63,6 +63,9 @@ interface WeekScene {
   stoppedMeetings: number;
   digestLetters: number;
   digestMeetings: number;
+  gluedLetters: number;
+  gluedMeetings: number;
+  remaining: string[];
   offers: string[];
   rules: number;
   askPercent: number;
@@ -532,7 +535,7 @@ function Week({ week, pending, onAccept }: { week: WeekScene | undefined; pendin
       <p className="text-5xl font-semibold tabular-nums">{week.current}%</p>
       <p className="mt-2 text-sm text-[#5d6878]">
         {week.accepted
-          ? `Было ${week.before}% писем и встреч. После правил руководителю остаются ${week.stillLetters} писем и ${week.stillMeetings} встреч из ${week.letters} и ${week.meetings}. Не доходят ${week.stoppedLetters} писем и ${week.stoppedMeetings} встреч. Сводкой: ${week.digestLetters} писем и ${week.digestMeetings} встреч. Среди разобранных просьб руководителя просят ${week.askPercent}%. Ждут решения ${week.waitingHours} ч.`
+          ? `Было ${week.before}% писем и встреч. После правил руководителю остаются ${week.stillLetters} писем и ${week.stillMeetings} встреч из ${week.letters} и ${week.meetings}. Не доходят ${week.stoppedLetters} писем и ${week.stoppedMeetings} встреч. Сводкой: ${week.digestLetters} писем и ${week.digestMeetings} встреч. Повторы склеены: ${week.gluedLetters} писем и ${week.gluedMeetings} встреч. Оставшееся: ${week.remaining.join('; ') || 'нет'}. Среди разобранных просьб руководителя просят ${week.askPercent}%. Ждут решения ${week.waitingHours} ч.`
           : `Сейчас на руководителя приходится весь поток: ${week.letters} писем и ${week.meetings} встреч. Правила ещё не приняты.`}
       </p>
       {week.offers.map((offer) => (
