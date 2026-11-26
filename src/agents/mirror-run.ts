@@ -2,18 +2,19 @@
 import { readFile } from 'node:fs/promises';
 import { and, eq } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
-import { emails, flowReports, seriesFate } from '../db/schema.ts';
+import { emails, flowReports, seriesFate, seriesKind } from '../db/schema.ts';
 import { departmentForLeader } from './k1.ts';
 import { burningSeries, noteToSend, weeklyNotes, type SeriesView } from './mirror.ts';
 import { listFlowRules } from './week.ts';
 import { mailConfig, sendMail } from '../mail.ts';
 
 export async function mirrorForLeader(db: Db, leaderId: string) {
-  const [department, mailRows, rules, fateRows, view] = await Promise.all([
+  const [department, mailRows, rules, fateRows, kindRows, view] = await Promise.all([
     departmentForLeader(db, leaderId),
     db.select().from(emails).where(eq(emails.leaderId, leaderId)),
     listFlowRules(db, leaderId),
     db.select().from(seriesFate).where(eq(seriesFate.leaderId, leaderId)),
+    db.select().from(seriesKind).where(eq(seriesKind.leaderId, leaderId)),
     readView(db, leaderId),
   ]);
   const notes = weeklyNotes(
@@ -29,10 +30,12 @@ export async function mirrorForLeader(db: Db, leaderId: string) {
     })),
   );
   const fate = new Map(fateRows.map((row) => [row.seriesKey, row]));
+  const kinds = new Map(kindRows.map((row) => [row.seriesKey, row.kind]));
   const series = burningSeries(view).map((item) => ({
     ...item,
     action: fate.get(item.title)?.action ?? '',
     reason: fate.get(item.title)?.reason ?? '',
+    kind: kinds.get(item.title) ?? '',
   }));
   return { notes, series };
 }

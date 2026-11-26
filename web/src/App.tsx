@@ -81,7 +81,7 @@ interface FocusScene {
 
 interface MirrorScene {
   notes: { name: string; email: string; text: string; quiet: boolean }[];
-  series: { title: string; verdict: string; change: string; hours: number; action: string; reason: string }[];
+  series: { title: string; verdict: string; change: string; hours: number; action: string; reason: string; kind: string }[];
 }
 
 interface Cabinet {
@@ -447,6 +447,7 @@ function Mirror({
         {mirror.series.map((item) => (
           <li key={item.title}>
             <b>{item.title}</b>
+            {item.kind ? <span className="text-[#5d6878]"> · {item.kind}</span> : null}
             <span className="block text-[#5d6878]">
               {item.verdict}, {item.hours} ч. {item.change}
               {item.action ? ` Записано: ${item.action}${item.reason ? ` — ${item.reason}` : ''}.` : ''}

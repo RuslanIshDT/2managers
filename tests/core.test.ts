@@ -10,6 +10,7 @@ import { applyOrigin, formOrigin, requestOrigin } from '../src/http/origin.ts';
 import { mailConfig } from '../src/mail.ts';
 import { staffCard } from '../src/agents/dependence.ts';
 import { departmentMatrix, goalMinutes, morningLines } from '../src/agents/focus.ts';
+import { applyChoice, renderPlan } from '../src/agents/conductor.ts';
 import { burningSeries, noteToSend, weeklyNotes } from '../src/agents/mirror.ts';
 import { letterHits, replayWeek, ruleEffect, rulesFromAudit, trustOffers, waitingHours } from '../src/agents/replay.ts';
 import { finishTemplate, hasProposal } from '../src/agents/k2.ts';
@@ -241,6 +242,31 @@ describe('записки и серии', () => {
     expect(series[0]?.hours).toBe(1.5);
   });
 });
+describe('дирижёр', () => {
+  it('оставляет не больше трёх дел и помечает остальные как не сегодня', () => {
+    const candidates = [
+      { id: 'a', kind: 'задача', title: 'Бюджет', detail: 'срок', goal: '' },
+      { id: 'b', kind: 'решение', title: 'Ждёт ответ', detail: '2 дн.', goal: '' },
+      { id: 'c', kind: 'kpi', title: 'Отстаёт план', detail: '', goal: 'План' },
+      { id: 'd', kind: 'матрица', title: 'Тихий', detail: '', goal: '' },
+      { id: 'e', kind: 'задача', title: 'Лишнее', detail: '', goal: '' },
+    ];
+    const plan = applyChoice(candidates, [
+      { id: 'нет', goal: 'чужое', minutes: 10, why: 'мимо' },
+      { id: 'c', goal: 'План', minutes: 30, why: 'час руководителя двигает отставание' },
+      { id: 'a', goal: 'План', minutes: 20, why: 'срок ближе' },
+      { id: 'b', goal: '', minutes: 15, why: 'пустое отбрасывается' },
+      { id: 'd', goal: 'План', minutes: 10, why: 'третье входит' },
+      { id: 'e', goal: 'План', minutes: 10, why: 'четвёртое не входит' },
+    ]);
+    expect(plan.today.map((item) => item.title)).toEqual(['Отстаёт план', 'Бюджет', 'Тихий']);
+    expect(plan.later).toEqual(['Ждёт ответ', 'Лишнее']);
+    const text = renderPlan({ plan, yesterday: [], todayMeetings: [], matrix: ['— клетка'], share: 'Календарь на цели: 0%.' });
+    expect(text).toContain('Не сегодня: Ждёт ответ; Лишнее');
+    expect(text).toContain('Вчера встреч в календаре не было');
+  });
+});
+
 describe('утро и матрица', () => {
   it('тихая проблема — тот, кто отстаёт и не пишет; у другого отдела её нет', () => {
     const first = departmentMatrix([

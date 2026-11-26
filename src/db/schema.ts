@@ -214,6 +214,22 @@ export const seriesFate = pgTable(
   (t) => [primaryKey({ columns: [t.leaderId, t.seriesKey] })],
 );
 
+export const focusPlans = pgTable('focus_plans', {
+  leaderId: text('leader_id').primaryKey(),
+  plan: jsonb('plan').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+});
+
+export const seriesKind = pgTable(
+  'series_kind',
+  {
+    leaderId: text('leader_id').notNull(),
+    seriesKey: text('series_key').notNull(),
+    kind: text('kind').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.leaderId, t.seriesKey] })],
+);
+
 export const flowReports = pgTable('flow_reports', {
   leaderId: text('leader_id').primaryKey(),
   report: jsonb('report').notNull(),
