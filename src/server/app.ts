@@ -14,6 +14,7 @@ import { agentRuns, emails, flowReports, leaders, meetings, people, sessions, ta
 import { departmentForLeader } from '../agents/k1.ts';
 import { applyClick, pullInbox, requestFeed } from '../agents/intake.ts';
 import { acceptWeek, acceptWeekByChat, weekScene } from '../agents/week.ts';
+import { focusForLeader, sendFocus } from '../agents/focus-run.ts';
 import { checkMail, mailConfig, readSyntheticInbox } from '../mail.ts';
 import { applyOrigin, formOrigin } from '../http/origin.ts';
 import { assertAuditConfirm, exampleQuote, FLOW_AUDIT_QUEUE, type FlowAuditJob } from '../jobs/flow-audit-job.ts';
@@ -182,6 +183,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       department,
       feed: await requestFeed(deps.db, leader.id),
       week: await weekScene(deps.db, leader.id),
+      focus: await focusForLeader(deps.db, leader.id, leader.name),
       lastAudit: last[0] ? { status: last[0].status, mode: last[0].reason, at: last[0].startedAt.toISOString() } : null,
     };
   });
@@ -201,6 +203,18 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       }
     }
     return scene;
+  });
+
+  app.post('/api/focus/send', async (request, reply) => {
+    const leader = await currentLeader(request);
+    if (!leader) return reply.code(401).send({ error: 'Нужен вход' });
+    try {
+      const scene = await sendFocus(deps.db, leader.id);
+      return { ok: true, text: scene.text };
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : 'не удалось отправить';
+      return reply.code(502).send({ error: detail });
+    }
   });
 
   app.post('/api/mail/check', async (request, reply) => {

@@ -8,6 +8,7 @@ import { parseMailboxSource, syntheticSource } from '../src/mail.ts';
 import { applyOrigin, formOrigin, requestOrigin } from '../src/http/origin.ts';
 import { mailConfig } from '../src/mail.ts';
 import { staffCard } from '../src/agents/dependence.ts';
+import { departmentMatrix, goalMinutes, morningLines } from '../src/agents/focus.ts';
 import { letterHits, replayWeek, rulesFromAudit, trustOffers, waitingHours } from '../src/agents/replay.ts';
 import { finishTemplate, hasProposal } from '../src/agents/k2.ts';
 import { decisionCallback, parseCallback, parseRuleCallback, parseStart } from '../src/telegram.ts';
@@ -203,6 +204,36 @@ describe('просьба подчинённого', () => {
   });
 });
 
+describe('утро и матрица', () => {
+  it('тихая проблема — тот, кто отстаёт и не пишет; у другого отдела её нет', () => {
+    const first = departmentMatrix([
+      { name: 'А', emails: 0, lagging: true },
+      { name: 'Б', emails: 8, lagging: false },
+      { name: 'В', emails: 2, lagging: false },
+    ]);
+    expect(first.find((row) => row.name === 'А')?.cell).toBe('один_на_один');
+    expect(first.find((row) => row.name === 'А')?.quiet).toBe(true);
+    expect(first.find((row) => row.name === 'Б')?.cell).toBe('расширить');
+    const second = departmentMatrix([
+      { name: 'Г', emails: 3, lagging: true },
+      { name: 'Д', emails: 1, lagging: false },
+    ]);
+    expect(second.some((row) => row.quiet)).toBe(false);
+    expect(second.find((row) => row.name === 'Г')?.cell).toBe('помочь');
+    const text = morningLines({
+      tasks: [{ title: 'Бюджет', dueOn: '2026-12-13' }],
+      waiting: [],
+      quiet: ['А'],
+    });
+    expect(text.join('\n')).toContain('Бюджет');
+    expect(text.join('\n')).toContain('А');
+    expect(goalMinutes([{ minutes: 30, summary: 'План продаж' }, { minutes: 60, summary: 'Статус' }], ['план продаж'])).toEqual({
+      onGoal: 30,
+      total: 90,
+      percent: 33,
+    });
+  });
+});
 describe('пересчёт недели', () => {
   it('два руководителя получают разные числа из своих данных', () => {
     const firstHistory = [

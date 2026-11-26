@@ -70,6 +70,12 @@ interface WeekScene {
   staff: StaffCard | null;
 }
 
+interface FocusScene {
+  text: string;
+  matrix: { name: string; basis: string; quiet: boolean }[];
+  share: { percent: number; onGoal: number; total: number };
+}
+
 interface Cabinet {
   name: string;
   profile: string;
@@ -80,6 +86,7 @@ interface Cabinet {
   department: { errors: string[]; people: DepartmentPerson[] };
   feed: FeedItem[];
   week: WeekScene;
+  focus: FocusScene;
   lastAudit: { status: string; mode: string; at: string } | null;
 }
 
@@ -137,6 +144,20 @@ export function App() {
     await api('/api/logout', { method: 'POST' });
     setUser(null);
     setCabinet(null);
+  }
+
+  async function sendFocusNow() {
+    setError('');
+    setPending(true);
+    try {
+      const result = await api<{ text: string }>('/api/focus/send', { method: 'POST', body: '{}' });
+      setJob('Утро и матрица отправлены в Telegram');
+      setCabinet((prev) => (prev ? { ...prev, focus: { ...prev.focus, text: result.text } } : prev));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось отправить');
+    } finally {
+      setPending(false);
+    }
   }
 
   async function acceptRules() {
@@ -280,6 +301,7 @@ export function App() {
       </div>
       {error ? <p className="mb-4 text-sm text-[#a3302a]">{error}</p> : null}
       <Week week={cabinet?.week} pending={pending} onAccept={acceptRules} />
+      <Focus focus={cabinet?.focus} pending={pending} onSend={sendFocusNow} />
       <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Stat label="Люди" value={counts?.people} />
         <Stat label="Письма" value={counts?.emails} />
@@ -343,6 +365,22 @@ export function App() {
         </a>
       </p>
     </main>
+  );
+}
+
+function Focus({ focus, pending, onSend }: { focus: FocusScene | undefined; pending: boolean; onSend: () => void }) {
+  if (!focus) return null;
+  return (
+    <Card className="mb-4">
+      <h2 className="mb-2 text-lg font-semibold">Утро и матрица</h2>
+      <pre className="whitespace-pre-wrap font-sans text-sm leading-relaxed">{focus.text}</pre>
+      <p className="mt-2 text-sm text-[#5d6878]">
+        Расписание: 8:30 каждый день и пятница в 17:00, часовой пояс Москвы. Кнопка отправляет то же сообщение сейчас.
+      </p>
+      <Button className="mt-3" type="button" variant="outline" onClick={onSend} disabled={pending}>
+        {pending ? 'Отправка…' : 'Прислать сейчас'}
+      </Button>
+    </Card>
   );
 }
 

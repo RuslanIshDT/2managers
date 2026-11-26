@@ -2,6 +2,7 @@ import { setLlmSink } from '../llm.ts';
 import { createDb, createPool, migrate } from '../db/client.ts';
 import { llmCalls } from '../db/schema.ts';
 import { loadDepartment } from '../agents/k1.ts';
+import { sendFocusAll } from '../agents/focus-run.ts';
 import { LEADER_ID, seedIfEmpty } from '../db/seed.ts';
 import { startBoss } from '../jobs/flow-audit-job.ts';
 import { buildApp } from './app.ts';
@@ -19,6 +20,14 @@ if (department.errors.length) console.error(`K1: ${department.errors.join('; ')}
 else console.log(`K1: отдел загружен, подчинённых ${department.loaded}`);
 
 const boss = await startBoss(connectionString, db);
+for (const name of ['focus-morning', 'focus-friday']) {
+  await boss.createQueue(name);
+  await boss.work(name, async () => {
+    await sendFocusAll(db);
+  });
+}
+await boss.schedule('focus-morning', '30 8 * * *', {}, { tz: 'Europe/Moscow' });
+await boss.schedule('focus-friday', '0 17 * * 5', {}, { tz: 'Europe/Moscow' });
 
 setLlmSink(async (purpose, result) => {
   await db.insert(llmCalls).values({
