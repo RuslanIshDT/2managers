@@ -159,6 +159,8 @@ export const verdicts = pgTable('verdicts', {
   context: text('context').notNull(),
   recommendation: text('recommendation').notNull(),
   authorityOffer: text('authority_offer').notNull(),
+  risks: text('risks').notNull().default(''),
+  ifNot: text('if_not').notNull().default(''),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
 });
 
@@ -185,6 +187,10 @@ export const rules = pgTable('rules', {
   limitValue: text('limit_value').notNull().default(''),
   cause: text('cause').notNull().default(''),
   acceptedAt: timestamp('accepted_at', { withTimezone: true }).notNull(),
+  fromEmail: text('from_email').notNull().default(''),
+  subjectKey: text('subject_key').notNull().default(''),
+  seriesKey: text('series_key').notNull().default(''),
+  effect: text('effect').notNull().default(''),
 });
 
 export const flowReports = pgTable('flow_reports', {

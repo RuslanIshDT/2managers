@@ -130,14 +130,15 @@ export function staffFromVerdict(input: {
   recommendation: string;
   basis: string;
   context: string;
-  category: string;
+  risks: string;
+  ifNot: string;
 }): StaffCard | null {
   return staffCard({
     вывод: input.summary.trim(),
     рекомендация: input.recommendation.trim() || 'Решение за вами: утвердить черновик или отклонить.',
     основание: input.basis.trim() || 'Основание собрано из полномочий и письма.',
-    риски: riskLine(input.category),
-    если_не_решить: waitLine(input.category),
+    риски: input.risks.trim(),
+    если_не_решить: input.ifNot.trim(),
     контекст: input.context.trim() || 'Контекст — карточка подчинённого и текст письма.',
   });
 }
@@ -194,19 +195,6 @@ export async function readAuditChanges(path = 'reports/flow-audit.json'): Promis
     .filter((row) => row.cause && row.change)
     .map((row) => ({ cause: row.cause as string, title: row.change as string }));
 }
-function riskLine(category: string): string {
-  if (category === 'деньги') return 'Скидка выше полномочия. Маржа и срок названы в письме; ниже лимита такие скидки уже решались без вас.';
-  if (category === 'кадры') return 'Кадровое решение без вас не действует.';
-  if (category === 'руководство') return 'Письмо уйдёт вашему руководителю от вашего имени.';
-  return 'Если вернуть исполнителю, дело останется в его зоне.';
-}
-
-function waitLine(category: string): string {
-  if (category === 'деньги') return 'Клиент ждёт ответа, подчинённый сам скидку выше лимита дать не может.';
-  if (category === 'кадры') return 'Отпуск или оффер останутся без решения.';
-  return 'Просьба зависнет до вашего ответа.';
-}
-
 function round1(value: number): number {
   return Math.round(value * 10) / 10;
 }

@@ -4,10 +4,11 @@ import type { Db } from '../db/client.ts';
 import { authorities, decisions, kpis, leaders, mailIn, people, tasks, verdicts } from '../db/schema.ts';
 import { mailConfig, sendMail, type MailboxLetter } from '../mail.ts';
 import { sendDecisionCard } from '../telegram.ts';
-import { authorityBlocks, staffFromVerdict } from './dependence.ts';
+import { staffFromVerdict } from './dependence.ts';
 import { kpiStatus } from './k1.ts';
 import { cardText, chainKey, discountLimit, enforce, judgeLetter, letterPrompt, type ModelVerdict, type Ruled } from './k2.ts';
-import { listAuthorityRules } from './week.ts';
+import { letterHits } from './replay.ts';
+import { listFlowRules } from './week.ts';
 
 const REPEAT_ID = 'm079';
 const DUMMY: ModelVerdict = {
@@ -22,6 +23,8 @@ const DUMMY: ModelVerdict = {
   черновик_ответа: '',
   предложение_полномочия: '',
   основание: '',
+  риски: '',
+  если_не_решить: '',
   уверенность: 0,
 };
 
@@ -58,7 +61,7 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
   const authRows = await db.select().from(authorities).where(eq(authorities.leaderId, leaderId));
   const taskRows = await db.select().from(tasks).where(eq(tasks.leaderId, leaderId));
   const decisionRows = await db.select().from(decisions).where(eq(decisions.leaderId, leaderId));
-  const authority = await listAuthorityRules(db, leaderId);
+  const authority = await listFlowRules(db, leaderId);
   const lines: string[] = [];
   let calls = 0;
   let deferred = 0;
@@ -72,20 +75,25 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
     const prior = decisionRows.find((row) => row.chainKey === key || row.id === letter.id) ?? null;
     const ownAuth = authRows.filter((row) => row.personId === person.externalId);
     const limit = discountLimit(ownAuth.map((row) => ({ area: row.area, limit: row.limitValue })));
-    const covered = authorityBlocks(letter, authority);
+    const covered = letterHits(letter, authority);
     let ruled: Ruled;
     if (covered) {
       ruled = {
         kind: 'вернуть',
-        category: 'деньги',
-        summary: `Скидка в пределах права ${covered.limit}%`,
-        draft: `Это ваше право: скидка до ${covered.limit}%. Решите сами и напишите клиенту.`,
-        basis: `Правило уже принято: ${covered.area} до ${covered.limit}%. Руководителю не спрашиваю`,
+        category: 'иное',
+        summary: covered.effect === 'сам' ? `В пределах принятого права: ${covered.area}` : `Правило потока: ${covered.title}`,
+        draft:
+          covered.effect === 'сам'
+            ? 'Это уже ваше право по принятому правилу. Решите сами и напишите адресату.'
+            : 'Это письмо закрыто принятым правилом потока и руководителю не передаётся.',
+        basis: `Правило: ${covered.title}`,
         context: '',
         recommendation: '',
+        risks: '',
+        ifNot: '',
         authorityOffer: '',
         ask: false,
-        send: true,
+        send: covered.effect === 'сам',
       };
     } else if (prior) {
       ruled = enforce(DUMMY, `${letter.subject}\n${letter.body}`, limit, prior, false);
@@ -130,7 +138,8 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
           recommendation: ruled.recommendation,
           basis: ruled.basis,
           context: ruled.context,
-          category: ruled.category,
+          risks: ruled.risks,
+          ifNot: ruled.ifNot,
         });
         if (!staff) throw new Error('Карточка без вывода и рекомендации');
         await sendDecisionCard(
@@ -210,6 +219,8 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
       context: ruled.context,
       recommendation: ruled.recommendation,
       authorityOffer: ruled.authorityOffer,
+      risks: ruled.risks,
+      ifNot: ruled.ifNot,
       createdAt: new Date(),
     });
     seen.add(letter.messageId);

@@ -7,7 +7,8 @@ import { loadSynthetic } from '../src/data/synthetic.ts';
 import { parseMailboxSource, syntheticSource } from '../src/mail.ts';
 import { applyOrigin, formOrigin, requestOrigin } from '../src/http/origin.ts';
 import { mailConfig } from '../src/mail.ts';
-import { authorityBlocks, dependenceIndex, dependenceOf, staffCard, trustOffer, type AuditTotals } from '../src/agents/dependence.ts';
+import { staffCard } from '../src/agents/dependence.ts';
+import { letterHits, replayWeek, rulesFromAudit, trustOffers, waitingHours } from '../src/agents/replay.ts';
 import { finishTemplate, hasProposal } from '../src/agents/k2.ts';
 import { decisionCallback, parseCallback, parseRuleCallback, parseStart } from '../src/telegram.ts';
 
@@ -138,6 +139,8 @@ const modelReturn: ModelVerdict = {
   черновик_ответа: 'Мария, это твоя зона. Какой план?',
   предложение_полномочия: 'Оставить разбор жалоб на сервис',
   основание: 'Зона сервиса',
+  риски: '',
+  если_не_решить: '',
   уверенность: 0.8,
 };
 
@@ -200,48 +203,54 @@ describe('просьба подчинённого', () => {
   });
 });
 
-const AUDIT: AuditTotals = {
-  flowHours: 22.58,
-  freedHours: 13.91,
-  letters: 80,
-  meetings: 50,
-  stoppedLetters: 40,
-  stoppedMeetings: 4,
-  digestLetters: 40,
-  digestMeetings: 35,
-};
-
-describe('индекс и правила недели', () => {
-  it('до правил индекс 100, после — доля оставшихся часов', () => {
-    expect(dependenceIndex(22.58, 22.58)).toBe(100);
-    expect(dependenceIndex(22.58, 22.58 - 13.91)).toBe(38);
-    const before = dependenceOf(AUDIT, false);
-    const after = dependenceOf(AUDIT, true);
-    expect(before.before).toBe(100);
-    expect(after.after).toBe(38);
-    expect(before.stoppedLetters).toBe(0);
-    expect(after.stoppedLetters).toBe(40);
-    expect(after.digestMeetings).toBe(35);
-  });
-
-  it('пять утверждений подряд дают Ольге скидку до 10%, 8% закрывает правило, 12% нет', () => {
-    const rows = [
-      { personId: 'p02', area: 'скидка', subject: 'старая', outcome: 'с_правкой', at: '2026-10-20' },
-      { personId: 'p02', area: 'скидка', subject: '1', outcome: 'утверждено', at: '2026-11-03' },
-      { personId: 'p02', area: 'скидка', subject: '2', outcome: 'утверждено', at: '2026-11-10' },
-      { personId: 'p02', area: 'скидка', subject: '3', outcome: 'утверждено', at: '2026-11-17' },
-      { personId: 'p02', area: 'скидка', subject: '4', outcome: 'утверждено', at: '2026-11-24' },
-      { personId: 'p02', area: 'скидка', subject: '5', outcome: 'утверждено', at: '2026-12-01' },
+describe('пересчёт недели', () => {
+  it('два руководителя получают разные числа из своих данных', () => {
+    const firstHistory = [
+      { personId: 'a', area: 'скидка', subject: 'старая', outcome: 'с_правкой', at: '2026-10-01' },
+      { personId: 'a', area: 'скидка', subject: 'Скидка 4%', outcome: 'утверждено', at: '2026-10-08' },
+      { personId: 'a', area: 'скидка', subject: 'Скидка 6%', outcome: 'утверждено', at: '2026-10-15' },
+      { personId: 'a', area: 'скидка', subject: 'Скидка 5%', outcome: 'утверждено', at: '2026-10-22' },
+      { personId: 'a', area: 'скидка', subject: 'Скидка 8%', outcome: 'утверждено', at: '2026-10-29' },
+      { personId: 'a', area: 'скидка', subject: 'Скидка 7%', outcome: 'утверждено', at: '2026-11-05' },
     ];
-    const offer = trustOffer(rows, 'p02', 'скидка');
-    expect(offer.ready).toBe(true);
-    expect(offer.streak).toBe(5);
-    expect(offer.limit).toBe(10);
-    const rules = [{ personId: 'p02', email: 'p02@company.example', area: 'скидка', limit: 10 }];
-    expect(authorityBlocks({ fromEmail: 'p02@company.example', subject: 'Скидка', body: 'Скидка 8% для «Поле»' }, rules)?.limit).toBe(10);
-    expect(authorityBlocks({ fromEmail: 'p02@company.example', subject: 'Скидка', body: 'Скидка 12% для «Ромашка»' }, rules)).toBeNull();
+    const secondHistory = [
+      { personId: 'b', area: 'бюджет', subject: 'Бюджет кампании', outcome: 'утверждено', at: '2026-10-08' },
+      { personId: 'b', area: 'бюджет', subject: 'Бюджет кампании', outcome: 'утверждено', at: '2026-10-15' },
+      { personId: 'b', area: 'бюджет', subject: 'Бюджет кампании', outcome: 'утверждено', at: '2026-10-22' },
+      { personId: 'b', area: 'бюджет', subject: 'Бюджет кампании', outcome: 'утверждено', at: '2026-10-29' },
+      { personId: 'b', area: 'бюджет', subject: 'Бюджет кампании', outcome: 'утверждено', at: '2026-11-05' },
+    ];
+    const first = trustOffers(firstHistory);
+    const second = trustOffers(secondHistory);
+    expect(first).toHaveLength(1);
+    expect(first[0]?.limit).toBe(8);
+    expect(second[0]?.limit).toBeNull();
+    expect(second[0]?.area).toBe('бюджет');
+    const pieces = [
+      { kind: 'письма' as const, key: 'a@example|скидка клиенту', title: 'Скидка', verdict: 'не_должно', change: 'сам', cause: 'в_полномочиях_отправителя' },
+      { kind: 'встречи' as const, key: 'Планёрка', title: 'Планёрка', verdict: 'в_другом_виде', change: 'реже', cause: 'встреча_без_решения' },
+      { kind: 'встречи' as const, key: 'Совет', title: 'Совет', verdict: 'должно', change: '', cause: 'нужно' },
+    ];
+    const rules = rulesFromAudit(pieces, first, new Map([['a', 'a@example']]));
+    const letters = [
+      { fromEmail: 'a@example', subject: 'Скидка клиенту', body: 'Скидка 8%' },
+      { fromEmail: 'a@example', subject: 'Новая тема', body: 'Скидка 12%' },
+      { fromEmail: 'c@example', subject: 'Другое', body: 'Вопрос' },
+    ];
+    const meetings = [{ summary: 'Планёрка' }, { summary: 'Совет' }];
+    const open = replayWeek(letters, meetings, rules, false);
+    const closed = replayWeek(letters, meetings, rules, true);
+    expect(open.after).toBe(100);
+    expect(closed.after).toBeLessThan(100);
+    expect(closed.stillMeetings).toBe(1);
+    expect(letterHits(letters[0], rules)?.effect).toBe('стоп');
+    expect(letterHits({ fromEmail: 'a@example', subject: 'Скидка новая', body: 'Скидка 8%' }, rules)?.effect).toBe('сам');
+    expect(letterHits({ fromEmail: 'a@example', subject: 'Скидка новая', body: 'Скидка 12%' }, rules)).toBeNull();
+    const other = rulesFromAudit(pieces, second, new Map([['b', 'b@example']]));
+    expect(other.some((rule) => rule.personId === 'b' && rule.limitValue === '')).toBe(true);
+    expect(other.some((rule) => rule.personId === 'a')).toBe(false);
     expect(staffCard({ вывод: '', рекомендация: 'да', основание: '', риски: '', если_не_решить: '', контекст: '' })).toBeNull();
-    expect(staffCard({ вывод: 'Скидка', рекомендация: 'Утвердить', основание: 'лимит', риски: 'маржа', если_не_решить: 'клиент ждёт', контекст: 'письмо' })?.вывод).toBe('Скидка');
+    expect(waitingHours([{ status: 'ждёт', createdAt: new Date('2026-11-26T08:00:00Z') }], new Date('2026-11-26T10:30:00Z'))).toBe(2.5);
   });
 });
 

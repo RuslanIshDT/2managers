@@ -55,14 +55,18 @@ interface WeekScene {
   before: number;
   after: number;
   current: number;
-  flowHours: number;
-  stillHours: number;
+  letters: number;
+  meetings: number;
+  stillLetters: number;
+  stillMeetings: number;
   stoppedLetters: number;
   stoppedMeetings: number;
   digestLetters: number;
   digestMeetings: number;
-  offer: string;
+  offers: string[];
   rules: number;
+  askPercent: number;
+  waitingHours: number;
   staff: StaffCard | null;
 }
 
@@ -351,10 +355,14 @@ function Week({ week, pending, onAccept }: { week: WeekScene | undefined; pendin
       <p className="text-5xl font-semibold tabular-nums">{week.current}%</p>
       <p className="mt-2 text-sm text-[#5d6878]">
         {week.accepted
-          ? `Было ${week.before}%. После правил остаётся ${week.stillHours} ч из ${week.flowHours}. Не приходят ${week.stoppedLetters} писем и ${week.stoppedMeetings} встречи. Ещё ${week.digestLetters} писем и ${week.digestMeetings} встреч — только сводкой.`
-          : `Сейчас на руководителя приходится весь поток: ${week.flowHours} ч в неделю. Правила аудита ещё не приняты.`}
+          ? `Было ${week.before}% писем и встреч. После правил руководителю остаются ${week.stillLetters} писем и ${week.stillMeetings} встреч из ${week.letters} и ${week.meetings}. Не доходят ${week.stoppedLetters} писем и ${week.stoppedMeetings} встреч. Сводкой: ${week.digestLetters} писем и ${week.digestMeetings} встреч. Среди разобранных просьб руководителя просят ${week.askPercent}%. Ждут решения ${week.waitingHours} ч.`
+          : `Сейчас на руководителя приходится весь поток: ${week.letters} писем и ${week.meetings} встреч. Правила ещё не приняты.`}
       </p>
-      {week.offer ? <p className="mt-3 text-sm">{week.offer}</p> : null}
+      {week.offers.map((offer) => (
+        <p key={offer} className="mt-3 text-sm">
+          {offer}
+        </p>
+      ))}
       {week.accepted ? (
         <p className="mt-3 text-sm text-[#1b7a45]">Правила приняты, записаны в базу ({week.rules}).</p>
       ) : (
