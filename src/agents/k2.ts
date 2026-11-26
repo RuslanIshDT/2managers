@@ -249,6 +249,7 @@ export function letterPrompt(input: {
   subject: string;
   body: string;
   limit: number | null;
+  revisions?: string;
 }): string {
   return [
     'Профиль руководителя:',
@@ -260,6 +261,8 @@ export function letterPrompt(input: {
     '',
     'Открытые задачи:',
     input.tasks || 'нет',
+    '',
+    input.revisions ?? '',
     '',
     `Письмо. Тема: ${input.subject}`,
     input.body.trim(),

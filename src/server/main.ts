@@ -1,9 +1,10 @@
+import { existsSync } from 'node:fs';
 import { setLlmSink } from '../llm.ts';
 import { createDb, createPool, migrate } from '../db/client.ts';
-import { llmCalls } from '../db/schema.ts';
+import { leaders, llmCalls } from '../db/schema.ts';
 import { loadDepartment } from '../agents/k1.ts';
 import { sendFocusAll } from '../agents/focus-run.ts';
-import { LEADER_ID, seedIfEmpty } from '../db/seed.ts';
+import { seedIfEmpty, seedMissingCatalogs } from '../db/seed.ts';
 import { startBoss } from '../jobs/flow-audit-job.ts';
 import { buildApp } from './app.ts';
 
@@ -15,9 +16,16 @@ await migrate(pool);
 const db = createDb(pool);
 const seeded = await seedIfEmpty(db);
 if (seeded.seeded) console.log(`Каталог руководителя загружен. Вход: ${seeded.login}`);
-const department = await loadDepartment(db, LEADER_ID);
-if (department.errors.length) console.error(`K1: ${department.errors.join('; ')}`);
-else console.log(`K1: отдел загружен, подчинённых ${department.loaded}`);
+const added = await seedMissingCatalogs(db);
+if (added.length) console.log(`Добавлены входы: ${added.join(', ')}`);
+const leaderRows = await db.select({ id: leaders.id }).from(leaders);
+for (const row of leaderRows) {
+  const dir = `data/${row.id}`;
+  if (!existsSync(`${dir}/department.csv`)) continue;
+  const department = await loadDepartment(db, row.id, dir);
+  if (department.errors.length) console.error(`K1 ${row.id}: ${department.errors.join('; ')}`);
+  else console.log(`K1 ${row.id}: подчинённых ${department.loaded}`);
+}
 
 const boss = await startBoss(connectionString, db);
 for (const name of ['focus-morning', 'focus-friday']) {

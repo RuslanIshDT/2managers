@@ -1,13 +1,15 @@
 // Письмо из ящика → вердикт K2 → карточка или ответ.
-import { and, desc, eq } from 'drizzle-orm';
+import { randomUUID } from 'node:crypto';
+import { and, asc, desc, eq } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
-import { authorities, decisions, kpis, leaders, mailIn, people, tasks, verdicts } from '../db/schema.ts';
+import { authorities, decisions, kpis, leaders, mailIn, people, revisions, tasks, verdicts } from '../db/schema.ts';
 import { mailConfig, sendMail, type MailboxLetter } from '../mail.ts';
 import { sendDecisionCard } from '../telegram.ts';
 import { staffFromVerdict } from './dependence.ts';
 import { kpiStatus } from './k1.ts';
 import { cardText, chainKey, discountLimit, enforce, judgeLetter, letterPrompt, type ModelVerdict, type Ruled } from './k2.ts';
 import { letterHits } from './replay.ts';
+import { applyRevision, revisionPrompt } from './revisions.ts';
 import { listFlowRules } from './week.ts';
 
 const REPEAT_ID = 'm079';
@@ -62,6 +64,8 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
   const taskRows = await db.select().from(tasks).where(eq(tasks.leaderId, leaderId));
   const decisionRows = await db.select().from(decisions).where(eq(decisions.leaderId, leaderId));
   const authority = await listFlowRules(db, leaderId);
+  const revisionRows = await db.select().from(revisions).where(eq(revisions.leaderId, leaderId)).orderBy(asc(revisions.createdAt));
+  const edits = revisionRows.map((row) => ({ category: row.category, instead: row.instead }));
   const lines: string[] = [];
   let calls = 0;
   let deferred = 0;
@@ -112,11 +116,13 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
           subject: letter.subject,
           body: letter.body,
           limit,
+          revisions: revisionPrompt(edits),
         }),
       });
       calls += 1;
       ruled = enforce(model, `${letter.subject}\n${letter.body}`, limit, null, false);
     }
+    ruled = { ...ruled, draft: applyRevision(ruled.draft, ruled.category, edits) };
 
     if (ruled.ask) {
       if (!leaderRow.telegramChatId) throw new Error('Telegram-чат руководителя не привязан');
@@ -130,6 +136,7 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
         replyTo: letter.fromEmail,
         replyName: letter.fromName,
         subject: letter.subject,
+        awaitingEdit: false,
         createdAt: new Date(),
       });
       try {
@@ -165,6 +172,7 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
         replyTo: letter.fromEmail,
         replyName: letter.fromName,
         subject: letter.subject,
+        awaitingEdit: false,
         createdAt: new Date(),
       });
     } else if (ruled.send) {
@@ -179,6 +187,7 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
         replyTo: letter.fromEmail,
         replyName: letter.fromName,
         subject: letter.subject,
+        awaitingEdit: false,
         createdAt: new Date(),
       });
       decisionRows.push({
@@ -191,6 +200,7 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
         replyTo: letter.fromEmail,
         replyName: letter.fromName,
         subject: letter.subject,
+        awaitingEdit: false,
         createdAt: new Date(),
       });
     }
@@ -240,7 +250,10 @@ export async function applyClick(db: Db, action: string, decisionId: string, cha
     .limit(1);
   if (!decision) return 'Решение не найдено';
   if (decision.status !== 'ждёт') return `Уже ${decision.status}`;
-  if (action === 'edit') return 'Правка текстом пока не меняет черновик';
+  if (action === 'edit') {
+    await db.update(decisions).set({ awaitingEdit: true }).where(eq(decisions.id, decision.id));
+    return 'Напишите, что поставить вместо черновика. Та же формулировка попадёт в следующее письмо этой категории.';
+  }
   if (action === 'approve') {
     await deliverReply(decision.replyName, decision.replyTo, decision.subject, decision.draft);
     await db.update(decisions).set({ status: 'исполнено' }).where(eq(decisions.id, decision.id));
@@ -250,6 +263,33 @@ export async function applyClick(db: Db, action: string, decisionId: string, cha
   if (!status) return 'Неизвестная кнопка';
   await db.update(decisions).set({ status }).where(eq(decisions.id, decision.id));
   return status === 'отклонено' ? 'Отклонено' : 'Отложено';
+}
+
+export async function saveEditText(db: Db, chatId: string, text: string): Promise<string | null> {
+  const instead = text.trim();
+  if (instead.length < 3) return null;
+  const [leader] = await db.select().from(leaders).where(eq(leaders.telegramChatId, chatId)).limit(1);
+  if (!leader) return null;
+  const [decision] = await db
+    .select()
+    .from(decisions)
+    .where(and(eq(decisions.leaderId, leader.id), eq(decisions.awaitingEdit, true)))
+    .limit(1);
+  if (!decision) return null;
+  const [verdict] = await db.select().from(verdicts).where(eq(verdicts.id, `v-${decision.id}`)).limit(1);
+  const category = verdict?.category || 'иное';
+  await db.insert(revisions).values({
+    id: randomUUID(),
+    leaderId: leader.id,
+    category,
+    instead,
+    createdAt: new Date(),
+  });
+  await db
+    .update(decisions)
+    .set({ draft: applyRevision(decision.draft, category, [{ category, instead }]), awaitingEdit: false })
+    .where(eq(decisions.id, decision.id));
+  return `Правка записана для категории «${category}». Черновик этого решения обновлён, следующее письмо той же категории её учтёт.`;
 }
 
 export async function requestFeed(db: Db, leaderId: string) {

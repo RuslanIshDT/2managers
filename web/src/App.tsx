@@ -93,6 +93,7 @@ interface Cabinet {
   week: WeekScene;
   focus: FocusScene;
   mirror: MirrorScene;
+  revisions: { id: string; category: string; instead: string }[];
   lastAudit: { status: string; mode: string; at: string } | null;
 }
 
@@ -336,6 +337,13 @@ export function App() {
       </div>
       {error ? <p className="mb-4 text-sm text-[#a3302a]">{error}</p> : null}
       <Week week={cabinet?.week} pending={pending} onAccept={acceptRules} />
+      <Revisions
+        rows={cabinet?.revisions ?? []}
+        onSaved={async () => {
+          const fresh = await api<Cabinet>('/api/cabinet');
+          setCabinet(fresh);
+        }}
+      />
       <Focus focus={cabinet?.focus} pending={pending} onSend={sendFocusNow} />
       <Mirror mirror={cabinet?.mirror} pending={pending} onSend={sendNote} onSeries={seriesAction} />
       <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -467,6 +475,50 @@ function Focus({ focus, pending, onSend }: { focus: FocusScene | undefined; pend
       <Button className="mt-3" type="button" variant="outline" onClick={onSend} disabled={pending}>
         {pending ? 'Отправка…' : 'Прислать сейчас'}
       </Button>
+    </Card>
+  );
+}
+
+function Revisions({ rows, onSaved }: { rows: { id: string; category: string; instead: string }[]; onSaved: () => Promise<void> }) {
+  const [category, setCategory] = useState('кадры');
+  const [instead, setInstead] = useState('');
+  const [error, setError] = useState('');
+  async function save(event: FormEvent) {
+    event.preventDefault();
+    setError('');
+    try {
+      await api('/api/revisions', { method: 'POST', body: JSON.stringify({ category, instead }) });
+      setInstead('');
+      await onSaved();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не сохранилось');
+    }
+  }
+  return (
+    <Card className="mb-4">
+      <h2 className="mb-2 text-lg font-semibold">Правки</h2>
+      <p className="mb-2 text-sm text-[#5d6878]">Текст попадает в следующий черновик той же категории. В Telegram кнопка «Поправить» ждёт следующее сообщение.</p>
+      <ul className="mb-3 grid gap-1 text-sm">
+        {rows.map((row) => (
+          <li key={row.id}>
+            <b>{row.category}.</b> {row.instead}
+          </li>
+        ))}
+      </ul>
+      <form className="grid gap-2" onSubmit={save}>
+        <label className="grid gap-1 text-sm">
+          Категория
+          <Input value={category} onChange={(event) => setCategory(event.target.value)} required />
+        </label>
+        <label className="grid gap-1 text-sm">
+          Что поставить вместо
+          <Input value={instead} onChange={(event) => setInstead(event.target.value)} required minLength={3} />
+        </label>
+        {error ? <p className="text-sm text-[#a3302a]">{error}</p> : null}
+        <Button type="submit" variant="outline">
+          Записать правку
+        </Button>
+      </form>
     </Card>
   );
 }

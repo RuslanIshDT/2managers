@@ -1,4 +1,4 @@
-import { bigint, bigserial, integer, jsonb, numeric, pgTable, primaryKey, text, timestamp } from 'drizzle-orm/pg-core';
+import { bigint, bigserial, boolean, integer, jsonb, numeric, pgTable, primaryKey, text, timestamp } from 'drizzle-orm/pg-core';
 
 export const leaders = pgTable('leaders', {
   id: text('id').primaryKey(),
@@ -174,6 +174,15 @@ export const decisions = pgTable('decisions', {
   replyTo: text('reply_to').notNull(),
   replyName: text('reply_name').notNull(),
   subject: text('subject').notNull(),
+  awaitingEdit: boolean('awaiting_edit').notNull().default(false),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+});
+
+export const revisions = pgTable('revisions', {
+  id: text('id').primaryKey(),
+  leaderId: text('leader_id').notNull(),
+  category: text('category').notNull(),
+  instead: text('instead').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
 });
 

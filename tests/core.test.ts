@@ -3,6 +3,7 @@ import { hashPassword, hashToken, verifyPassword } from '../src/auth.ts';
 import { checkDepartment, readDepartment } from '../src/agents/k1.ts';
 import { chainKey, discountLimit, enforce, textSignals, type ModelVerdict } from '../src/agents/k2.ts';
 import { lettersForMailbox } from '../src/agents/intake.ts';
+import { applyRevision, revisionPrompt } from '../src/agents/revisions.ts';
 import { loadSynthetic } from '../src/data/synthetic.ts';
 import { parseMailboxSource, syntheticSource } from '../src/mail.ts';
 import { applyOrigin, formOrigin, requestOrigin } from '../src/http/origin.ts';
@@ -301,6 +302,26 @@ describe('пересчёт недели', () => {
     expect(other.some((rule) => rule.personId === 'a')).toBe(false);
     expect(staffCard({ вывод: '', рекомендация: 'да', основание: '', риски: '', если_не_решить: '', контекст: '' })).toBeNull();
     expect(waitingHours([{ status: 'ждёт', createdAt: new Date('2026-11-26T08:00:00Z') }], new Date('2026-11-26T10:30:00Z'))).toBe(2.5);
+  });
+});
+
+describe('правка и второй каталог', () => {
+  it('правка меняет только черновик своей категории', () => {
+    const edits = [{ category: 'кадры', instead: 'Нужна замена на даты отпуска' }];
+    const same = applyRevision('Черновик ответа.', 'кадры', edits);
+    const other = applyRevision('Черновик ответа.', 'деньги', edits);
+    expect(same).toContain('Нужна замена на даты отпуска');
+    expect(other).toBe('Черновик ответа.');
+    expect(revisionPrompt(edits)).toContain('кадры');
+  });
+
+  it('второй каталог — другие люди', async () => {
+    const first = await loadSynthetic('data/synthetic');
+    const second = await loadSynthetic('data/leader2');
+    const firstNames = new Set(first.people.map((person) => person.name));
+    expect(second.people.every((person) => !firstNames.has(person.name))).toBe(true);
+    expect(second.people.some((person) => person.role === 'подчинённый')).toBe(true);
+    expect(second.emails.length).toBeGreaterThan(0);
   });
 });
 

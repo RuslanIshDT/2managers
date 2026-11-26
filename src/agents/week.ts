@@ -14,6 +14,14 @@ import {
   type FlowRule,
 } from './replay.ts';
 
+async function historyOf(leaderId: string) {
+  try {
+    return await readHistory(`data/${leaderId}`);
+  } catch {
+    return [];
+  }
+}
+
 export async function listFlowRules(db: Db, leaderId: string): Promise<FlowRule[]> {
   const rows = await db.select().from(rules).where(eq(rules.leaderId, leaderId));
   return rows.map((row) => ({
@@ -32,7 +40,7 @@ export async function listFlowRules(db: Db, leaderId: string): Promise<FlowRule[
 
 export async function weekScene(db: Db, leaderId: string) {
   const [history, ruleRows, verdictRows, decisionRows, letterRows, meetingRows] = await Promise.all([
-    readHistory(),
+    historyOf(leaderId),
     listFlowRules(db, leaderId),
     db.select().from(verdicts).where(eq(verdicts.leaderId, leaderId)),
     db.select().from(decisions).where(eq(decisions.leaderId, leaderId)),
@@ -81,7 +89,7 @@ export async function weekScene(db: Db, leaderId: string) {
 }
 
 export async function acceptWeek(db: Db, leaderId: string) {
-  const [history, persons, pieces] = await Promise.all([readHistory(), db.select().from(people).where(eq(people.leaderId, leaderId)), readPieces(db, leaderId)]);
+  const [history, persons, pieces] = await Promise.all([historyOf(leaderId), db.select().from(people).where(eq(people.leaderId, leaderId)), readPieces(db, leaderId)]);
   const offers = trustOffers(history);
   const emailByPerson = new Map(persons.map((person) => [person.externalId, person.email]));
   const built = rulesFromAudit(pieces, offers, emailByPerson);

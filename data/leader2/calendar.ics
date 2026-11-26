@@ -1,0 +1,13 @@
+BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//ecompras//leader2//RU
+BEGIN:VEVENT
+UID:shop001@workshop.example
+DTSTART:20261207T074000
+DTEND:20261207T081000
+SUMMARY:План смены
+CATEGORIES:операционная
+ORGANIZER:mailto:q01@workshop.example
+ATTENDEE;CN=Пётр Ильин:mailto:q02@workshop.example
+END:VEVENT
+END:VCALENDAR

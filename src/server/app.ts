@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { count, eq, sql } from 'drizzle-orm';
+import { asc, count, eq, sql } from 'drizzle-orm';
 import cookie from '@fastify/cookie';
 import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
@@ -10,9 +10,9 @@ import type pg from 'pg';
 import { z } from 'zod';
 import { hashToken, newSessionToken, verifyPassword } from '../auth.ts';
 import type { Db } from '../db/client.ts';
-import { agentRuns, emails, flowReports, leaders, meetings, people, sessions, tasks, telegramClicks } from '../db/schema.ts';
+import { agentRuns, emails, flowReports, leaders, meetings, people, revisions, sessions, tasks, telegramClicks } from '../db/schema.ts';
 import { departmentForLeader } from '../agents/k1.ts';
-import { applyClick, pullInbox, requestFeed } from '../agents/intake.ts';
+import { applyClick, pullInbox, requestFeed, saveEditText } from '../agents/intake.ts';
 import { acceptWeek, acceptWeekByChat, weekScene } from '../agents/week.ts';
 import { focusForLeader, sendFocus } from '../agents/focus-run.ts';
 import { mirrorForLeader, sendWeeklyNote, setSeriesFate } from '../agents/mirror-run.ts';
@@ -186,8 +186,24 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       week: await weekScene(deps.db, leader.id),
       focus: await focusForLeader(deps.db, leader.id, leader.name),
       mirror: await mirrorForLeader(deps.db, leader.id),
+      revisions: await deps.db.select().from(revisions).where(eq(revisions.leaderId, leader.id)).orderBy(asc(revisions.createdAt)),
       lastAudit: last[0] ? { status: last[0].status, mode: last[0].reason, at: last[0].startedAt.toISOString() } : null,
     };
+  });
+
+  app.post('/api/revisions', async (request, reply) => {
+    const leader = await currentLeader(request);
+    if (!leader) return reply.code(401).send({ error: 'Нужен вход' });
+    const parsed = z.object({ category: z.string().trim().min(1).max(80), instead: z.string().trim().min(3).max(500) }).safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: 'Нужны категория и текст правки' });
+    await deps.db.insert(revisions).values({
+      id: randomUUID(),
+      leaderId: leader.id,
+      category: parsed.data.category,
+      instead: parsed.data.instead,
+      createdAt: new Date(),
+    });
+    return { ok: true };
   });
 
   app.post('/api/rules/accept', async (request, reply) => {
@@ -375,7 +391,10 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
         }
         await deps.db.update(leaders).set({ telegramChatId: chatId }).where(eq(leaders.id, leader.id));
         if (telegramConfigured()) await sendMessage(`Чат привязан к ${leader.name}. Сообщения помощника подписаны как от ИИ-помощника.`, chatId);
+        return { ok: true };
       }
+      const saved = await saveEditText(deps.db, chatId, text);
+      if (saved && telegramConfigured()) await sendMessage(saved, chatId);
     }
     return { ok: true };
   });
