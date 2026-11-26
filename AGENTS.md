@@ -6,7 +6,7 @@
 ## Любой агент
 - Правила одни для всех инструментов и моделей и живут только здесь. Файлы CLAUDE.md, GEMINI.md, .cursor/rules/agents.mdc, .github/copilot-instructions.md, .aider.conf.yml — только указатели на этот файл, правил в них не писать.
 - Инструмент не подхватил правила сам — начать с фразы «Прочитай AGENTS.md».
-- Порядок чтения перед работой: этот файл, docs/contest.md, docs/criteria.md, docs/tz.md, docs/backlog.md. На сервере ещё _not_in_git/LOCAL.md (стенд и доступ; в репозиторий не переносить).
+- Порядок чтения перед работой: этот файл, docs/contest.md, docs/criteria.md, docs/tz.md, docs/architecture.md, docs/backlog.md. На сервере ещё _not_in_git/LOCAL.md (стенд и доступ; в репозиторий не переносить).
 - Договорённости хранить в этих файлах, а не в памяти инструмента или чате: следующий агент их не увидит.
 
 ## Работа
