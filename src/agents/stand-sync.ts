@@ -39,8 +39,8 @@ export async function syncLeader(db: Db, leaderId: string): Promise<string> {
       const draft = issueDraft(task, relatedSubjects(task.title, subjects));
       try {
         const result = await createIssue({ unique: taskUnique(leaderId, task.externalId), ...draft });
-        if (result === 'created') created += 1;
-        else existed += 1;
+        if (result === 'exists') existed += 1;
+        else created += 1;
       } catch {
         trackerFailed += 1;
       }

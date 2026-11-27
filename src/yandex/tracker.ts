@@ -60,13 +60,34 @@ export async function listTrackerUsers(): Promise<TrackerUser[]> {
   return found;
 }
 
+export type IssueResult = 'created' | 'created-unassigned' | 'exists';
+
+// Отказ 422: задача уже есть, Трекер не принял исполнителя, или другая ошибка полей.
+export function issueRejection(body: string): 'unique' | 'assignee' | 'other' {
+  let errors: Record<string, unknown> | null = null;
+  let messages = '';
+  try {
+    const data = JSON.parse(body) as { errors?: Record<string, unknown>; errorMessages?: unknown };
+    if (data.errors && typeof data.errors === 'object') errors = data.errors;
+    if (Array.isArray(data.errorMessages)) messages = data.errorMessages.map((item) => String(item)).join(' ');
+  } catch {
+    messages = body;
+  }
+  if (errors && Object.keys(errors).some((key) => /assignee|исполнител/i.test(key))) return 'assignee';
+  const errorText = errors ? Object.entries(errors).map(([key, value]) => `${key} ${String(value)}`).join(' ') : '';
+  const all = `${errorText} ${messages}`.trim();
+  if (/unique/i.test(all) || (!errors && /unique/i.test(body))) return 'unique';
+  if (/assignee|исполнител/i.test(all)) return 'assignee';
+  return 'other';
+}
+
 export async function createIssue(draft: {
   unique: string;
   summary: string;
   description: string;
   deadline: string | null;
   assignee?: string;
-}): Promise<'created' | 'exists'> {
+}): Promise<IssueResult> {
   const cfg = trackerConfig();
   if (!cfg) throw new Error('Трекер не настроен');
   const body: Record<string, string> = {
@@ -77,21 +98,24 @@ export async function createIssue(draft: {
   };
   if (draft.deadline) body.deadline = draft.deadline;
   if (draft.assignee) body.assignee = draft.assignee;
+  let droppedAssignee = false;
   let response = await call('/v2/issues', { method: 'POST', body: JSON.stringify(body) });
   if (response.status === 422 && draft.assignee) {
-    const text = await response.text();
-    if (/unique/i.test(text)) return 'exists';
+    const reason = issueRejection(await response.text());
+    if (reason === 'unique') return 'exists';
+    if (reason !== 'assignee') throw new Error(`Трекер не принял задачу (${response.status})`);
     delete body.assignee;
+    droppedAssignee = true;
     response = await call('/v2/issues', { method: 'POST', body: JSON.stringify(body) });
   }
   if (response.status === 409) return 'exists';
   if (response.status === 422) {
     const text = await response.text();
-    if (/unique/i.test(text)) return 'exists';
+    if (issueRejection(text) === 'unique') return 'exists';
     throw new Error(`Трекер не принял задачу (${response.status})`);
   }
   if (!response.ok) throw new Error(`Трекер ответил ${response.status}`);
-  return 'created';
+  return droppedAssignee ? 'created-unassigned' : 'created';
 }
 
 export async function listOurIssues(): Promise<TrackerIssue[]> {

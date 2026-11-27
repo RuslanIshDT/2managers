@@ -17,7 +17,8 @@ import {
   stepLine,
 } from '../src/agents/protocol-steps.ts';
 import { isLeaderTask } from '../src/agents/focus.ts';
-import { assigneeLogin } from '../src/yandex/tracker.ts';
+import { assignmentLine, tallyIssue } from '../src/yandex/publish.ts';
+import { assigneeLogin, issueRejection } from '../src/yandex/tracker.ts';
 
 // Люди и поручения выдуманы: этого протокола нет в синтетике.
 const known = [
@@ -141,6 +142,23 @@ describe('исполнитель в Трекере', () => {
     expect(assigneeLogin('Борис Ким', users, 'boris@example.test')).toBe('boris');
     expect(assigneeLogin('Борис Ким', users)).toBe('');
     expect(assigneeLogin('не назван', users, 'inga@example.test')).toBe('');
+  });
+
+  it('считает назначение только если Трекер сохранил исполнителя', () => {
+    expect(issueRejection('{"errors":{"assignee":"нет такого пользователя"},"errorMessages":[]}')).toBe('assignee');
+    expect(issueRejection('Пользователь-исполнитель не найден')).toBe('assignee');
+    expect(issueRejection('{"errors":{},"errorMessages":["Значение поля unique уже используется"]}')).toBe('unique');
+    expect(issueRejection('{"errors":{"deadline":"не та дата"}}')).toBe('other');
+    const tally = { created: 0, existed: 0, assigned: 0, refused: 0 };
+    tallyIssue('created', true, tally);
+    tallyIssue('created-unassigned', true, tally);
+    tallyIssue('exists', true, tally);
+    expect(tally).toEqual({ created: 2, existed: 1, assigned: 1, refused: 1 });
+    expect(assignmentLine(3, tally.assigned, tally.refused)).toBe(
+      ' Назначено исполнителю: 1 из 3. Без поля исполнителя: 1 — Трекер пользователя не принял.',
+    );
+    expect(assignmentLine(3, 3, 0)).toBe(' Назначено исполнителю: 3 из 3.');
+    expect(assignmentLine(0, 0, 0)).toBe('');
   });
 });
 
