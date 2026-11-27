@@ -1,12 +1,44 @@
 import { describe, expect, it } from 'vitest';
 import { enforce, type ModelVerdict } from '../src/agents/k2.ts';
 import { renderMorning } from '../src/agents/focus.ts';
-import { dueFromInstruction, exampleBlock, finishDraft, morningBlockOrder, replaceStepLine, ruleFromChoice, stepIndex } from '../src/agents/memory.ts';
+import { leaderEditReport } from '../src/agents/k2-tools.ts';
+import { revisionPrompt } from '../src/agents/revisions.ts';
+import { acceptRewrite, dueFromInstruction, exampleBlock, finishDraft, localRewrite, mailRevisions, morningBlockOrder, replaceStepLine, ruleFromChoice, stepIndex } from '../src/agents/memory.ts';
 
 const letter = 'Нужно подготовить справку по оттоку до 16 декабря. Клиент ждёт цифры.';
 const rule = [{ area: 'письма', instead: 'В письмах команде начинай с действия и срока' }];
 
 describe('профиль и память', () => {
+  it('обычная правка меняет письмо и не подставляет просьбу', () => {
+    const source = 'Здравствуйте! Отчёт готов. Вышлю во вторник.';
+    const greeting = acceptRewrite(source, 'Убери приветствие', localRewrite(source, 'Убери приветствие') ?? '');
+    expect(greeting).toBe('Отчёт готов. Вышлю во вторник.');
+    const shorter = acceptRewrite(source, 'Сделай ответ короче', localRewrite(source, 'Сделай ответ короче') ?? 'Сделай ответ короче');
+    expect(shorter).toBeTruthy();
+    expect(shorter).not.toContain('Сделай ответ короче');
+    expect(shorter!.toLowerCase()).toContain('вторник');
+    expect(shorter!.toLowerCase()).toContain('отчёт');
+    expect(shorter!.length).toBeLessThan(source.length);
+    expect(acceptRewrite(source, 'Сделай ответ короче', 'Сделай ответ короче')).toBeNull();
+    expect(acceptRewrite(source, 'Убери приветствие', source)).toBeNull();
+  });
+
+  it('разбор письма не получает правила протоколов и утра', () => {
+    const rows = [
+      { area: 'протоколы', category: 'протоколы', instead: 'Сроки пиши в конце протокола' },
+      { area: 'утро', category: 'утро', instead: 'сначала просроченные задачи' },
+      { area: 'письма', category: 'письма', instead: 'Без приветствия' },
+      { category: 'протокол', instead: 'Старая правка протокола' },
+    ];
+    expect(mailRevisions(rows).map((row) => row.instead)).toEqual(['Без приветствия']);
+    expect(leaderEditReport(rows)).toContain('Без приветствия');
+    expect(leaderEditReport(rows)).not.toContain('протокола');
+    expect(leaderEditReport(rows)).not.toContain('просроченные');
+    expect(leaderEditReport([{ area: 'протоколы', category: 'протоколы', instead: 'Сроки пиши в конце протокола' }])).toBe('Правок нет');
+    expect(revisionPrompt(rows)).toContain('Без приветствия');
+    expect(revisionPrompt(rows)).not.toContain('протокола');
+  });
+
   it('запомнить создаёт правило, утверждение и разовая правка — нет', () => {
     expect(ruleFromChoice('В письмах команде начинай с действия и срока', 'keep')).toBe('В письмах команде начинай с действия и срока');
     expect(ruleFromChoice('В письмах команде начинай с действия и срока', 'once')).toBeNull();

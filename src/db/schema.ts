@@ -276,6 +276,7 @@ export const protocols = pgTable('protocols', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
   awaitingEdit: boolean('awaiting_edit').notNull().default(false),
   pendingRule: text('pending_rule').notNull().default(''),
+  originalBody: text('original_body').notNull().default(''),
   steps: jsonb('steps').notNull().default([]),
   prior: jsonb('prior').notNull().default([]),
   agreed: jsonb('agreed').notNull().default([]),

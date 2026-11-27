@@ -9,6 +9,7 @@ import { and, desc, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import type { Db } from '../db/client.ts';
 import { leaders, meetings, people, protocols, revisions, tasks } from '../db/schema.ts';
+import { writeLeaderAct } from './acts.ts';
 import { clockFor } from './scene.ts';
 import { callJson, withLlmScope, type JsonSchema } from '../llm.ts';
 import { mailConfig, sendMail } from '../mail.ts';
@@ -390,6 +391,7 @@ export async function approveProtocol(db: Db, id: string, chatId: string): Promi
   }
   const mailbox = mailConfig();
   if (!mailbox) return 'Яндекс Почта не настроена';
+  await noteProtocol(db, row, 'утвердил', 'Протокол утверждён', row.body);
   const outgoing = await outgoingFor(db, leader, row);
   const emailOf = new Map(outgoing.known.map((person) => [person.name.toLowerCase(), person.email]));
   const taskRows = outgoing.release.tasks.map((task, index) => ({
@@ -524,6 +526,8 @@ export async function rejectProtocol(db: Db, id: string, chatId: string): Promis
   const [row] = await db.select().from(protocols).where(eq(protocols.id, id)).limit(1);
   if (!row || row.leaderId !== leader.id) return 'Протокол не найден';
   if (row.status === 'утверждён') return 'Уже утверждён';
+  if (row.status === 'отклонён') return 'Уже отклонён';
+  await noteProtocol(db, row, 'отклонил', 'Протокол отклонён', '');
   await db.update(protocols).set({ status: 'отклонён', awaitingEdit: false }).where(eq(protocols.id, id));
   return 'Протокол отклонён: задачи не созданы, письмо не ушло, в календарь не записан.';
 }
@@ -594,9 +598,19 @@ export async function saveProtocolEdit(db: Db, chatId: string, text: string): Pr
   if (!parsed.success) return 'Правку не удалось внести: ответ модели не прошёл проверку. Протокол прежний.';
   const draft = cleanDraft(parsed.data, staff, priorTasks);
   const body = renderProtocol(draft);
+  await noteProtocol(db, row, 'поправил', instead, body);
   await db
     .update(protocols)
-    .set({ body, openItems: draft.open, steps: draft.steps, prior: draft.prior, agreed: draft.agreed, awaitingEdit: false, pendingRule: instead })
+    .set({
+      body,
+      openItems: draft.open,
+      steps: draft.steps,
+      prior: draft.prior,
+      agreed: draft.agreed,
+      awaitingEdit: false,
+      pendingRule: instead,
+      originalBody: row.originalBody.trim() ? row.originalBody : row.body,
+    })
     .where(eq(protocols.id, row.id));
   await sendProtocol(body, chatId, row.id, true);
   return 'Протокол поправлен, новая версия выше. «Только сейчас» — правило не создаётся. «Запомнить» — для следующих протоколов.';
@@ -609,10 +623,31 @@ function yearOf(source: string, steps: { due: string }[]): number {
   return due ? Number(due.due.slice(0, 4)) : new Date().getFullYear();
 }
 
+async function noteProtocol(
+  db: Db,
+  row: { id: string; leaderId: string; source: string; body: string; originalBody: string },
+  action: 'поправил' | 'утвердил' | 'отклонил',
+  result: string,
+  nextBody: string,
+) {
+  const proposed = row.originalBody.trim() || row.body;
+  const line = row.body.split('\n').map((item) => item.trim()).find(Boolean) ?? '';
+  await writeLeaderAct(db, {
+    leaderId: row.leaderId,
+    subject: (line || 'Протокол').slice(0, 300),
+    action,
+    result,
+    original: proposed,
+    approved: nextBody,
+    auto: false,
+    refId: row.id,
+  });
+}
+
 async function applyDueEdit(
   db: Db,
   leaderId: string,
-  row: { id: string; leaderId: string; source: string; body: string; steps: unknown },
+  row: { id: string; leaderId: string; source: string; body: string; steps: unknown; originalBody: string },
   instruction: string,
 ): Promise<{ body: string; note: string } | null> {
   if (row.leaderId !== leaderId) return null;
@@ -625,7 +660,17 @@ async function applyDueEdit(
   const after = { ...before, due };
   const next = steps.map((step, i) => (i === index ? after : step));
   const body = replaceStepLine(row.body, before, after);
-  await db.update(protocols).set({ body, steps: next, awaitingEdit: false, pendingRule: instruction }).where(eq(protocols.id, row.id));
+  await noteProtocol(db, row, 'поправил', instruction, body);
+  await db
+    .update(protocols)
+    .set({
+      body,
+      steps: next,
+      awaitingEdit: false,
+      pendingRule: instruction,
+      originalBody: row.originalBody.trim() ? row.originalBody : row.body,
+    })
+    .where(eq(protocols.id, row.id));
   return { body, note: `Срок поручения изменён: ${stepLine(after)}. «Только сейчас» — правило не создаётся. «Запомнить» — для следующих протоколов.` };
 }
 

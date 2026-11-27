@@ -1134,7 +1134,11 @@ function Revisions({
             <li key={row.id}>
               <b>{row.when}</b> — {row.action}: {row.subject}. {row.result}
               {row.original && row.approved && row.original !== row.approved ? (
-                <span className="block text-[#5d6878]">Было: {row.original.slice(0, 180)} Стало: {row.approved.slice(0, 180)}</span>
+                <details className="text-[#5d6878]">
+                  <summary>Было и стало</summary>
+                  <span className="mt-1 block whitespace-pre-wrap">Было: {row.original}</span>
+                  <span className="mt-1 block whitespace-pre-wrap">Стало: {row.approved}</span>
+                </details>
               ) : null}
             </li>
           ))}
@@ -1281,10 +1285,10 @@ function WorkCard({
             className="mt-2 grid gap-2"
             onSubmit={(event) => {
               event.preventDefault();
-              api<{ draft: string }>('/api/decisions', { method: 'POST', body: JSON.stringify({ id: item.id, action: 'edit', text: edit }) })
+              api<{ notice: string; draft: string; changed: boolean }>('/api/decisions', { method: 'POST', body: JSON.stringify({ id: item.id, action: 'edit', text: edit }) })
                 .then(async (result) => {
-                  setDraft(result.draft);
-                  setNote('Черновик обновлён. Выберите, запомнить ли правку, затем утвердите.');
+                  setDraft(result.changed ? result.draft : ' ');
+                  setNote(result.notice.split('\n\n')[0] ?? result.notice);
                   await onRefresh();
                 })
                 .catch((err: unknown) => setNote(err instanceof Error ? err.message : 'Не сохранилось'));

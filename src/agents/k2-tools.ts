@@ -2,6 +2,7 @@
 // Внутр. — отправитель из организации (подчинённый, коллега, начальник), внеш. — все остальные.
 // Данные инструментов — только данные этого руководителя, переданные в контексте. N1 и лимиты проверяет код после модели.
 import { callTools, type ChatMessage, type ToolCall, type ToolSpec } from '../llm.ts';
+import { mailRevisions } from './memory.ts';
 import { kpiStatus } from './k1.ts';
 import { judgeLetter, type ModelVerdict } from './k2.ts';
 
@@ -22,7 +23,7 @@ export interface K2Context {
   tasks: { title: string; dueOn: string; status: string }[];
   history: { area: string; subject: string; outcome: string; at: string }[];
   thread: { subject: string; received: string; verdict: string }[];
-  revisions: { category: string; instead: string }[];
+  revisions: { category: string; area?: string; instead: string }[];
 }
 
 const OBJECT = { type: 'object', properties: {}, additionalProperties: false };
@@ -38,7 +39,7 @@ export const K2_TOOLS: ToolSpec[] = [
     parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'], additionalProperties: false },
   },
   { name: 'thread', description: 'Прежние письма этого человека руководителю: тема, дата, чем закончился разбор', parameters: OBJECT },
-  { name: 'leader_edits', description: 'Как руководитель правил черновики ответов: учитывать в черновике', parameters: OBJECT },
+  { name: 'leader_edits', description: 'Правила писем руководителя. Правила протоколов и утреннего плана сюда не входят', parameters: OBJECT },
   { name: 'people', description: 'Люди руководителя: имя, должность, зона ответственности — чтобы понять, чьё это дело и кому передать', parameters: OBJECT },
 ];
 
@@ -85,9 +86,7 @@ export function runTool(name: string, args: Record<string, unknown>, ctx: K2Cont
     case 'thread':
       return ctx.thread.length ? ctx.thread.slice(-10).map((row) => `${row.received}: ${row.subject} — ${row.verdict || 'без разбора'}`).join('\n') : 'Прежних писем нет';
     case 'leader_edits':
-      return ctx.revisions.length
-        ? ctx.revisions.slice(-8).map((row) => `Правило (${row.category}): ${row.instead}. Учти в черновике, формулировку не цитируй.`).join('\n')
-        : 'Правок нет';
+      return leaderEditReport(ctx.revisions);
     case 'people':
       return ctx.people?.length ? ctx.people.map((row) => `${row.name} — ${row.position || 'должность не указана'}${row.zone ? `; зона: ${row.zone}` : ''}`).join('\n') : 'Список людей пуст';
     default:
@@ -202,8 +201,15 @@ export function k2Context(
     thread: data.mail
       .filter((row) => addresses.includes(row.fromEmail.toLowerCase()))
       .map((row) => ({ subject: row.subject, received: row.received, verdict: row.kind ?? '' })),
-    revisions: data.revisions,
+    revisions: mailRevisions(data.revisions),
   };
+}
+
+export function leaderEditReport(revisions: { category: string; area?: string; instead: string }[]): string {
+  const rows = mailRevisions(revisions);
+  return rows.length
+    ? rows.slice(-8).map((row) => `Правило (${row.category}): ${row.instead}. Учти в черновике, формулировку не цитируй.`).join('\n')
+    : 'Правок нет';
 }
 
 // Контекст для письма не из организации: только прежние письма этого адреса, правки руководителя и его люди.
@@ -221,6 +227,6 @@ export function externalContext(
     tasks: [],
     history: [],
     thread: data.mail.filter((row) => row.fromEmail.toLowerCase() === address).map((row) => ({ subject: row.subject, received: row.received, verdict: row.kind ?? '' })),
-    revisions: data.revisions,
+    revisions: mailRevisions(data.revisions),
   };
 }

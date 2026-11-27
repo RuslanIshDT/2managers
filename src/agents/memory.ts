@@ -64,11 +64,84 @@ export function finishDraft(draft: string, letterText: string, rules: { area?: s
   return `${opening.action}, ${opening.due}.\n\n${clean}`.trim();
 }
 
-export function rewriteLetter(draft: string, instruction: string, letterText: string): string {
+const GREETING = /^(?:здравствуйте|добрый(?:\s+|-)(?:день|вечер|утро)|привет(?:ствую)?|доброго\s+времени(?:\s+суток)?)[!.,…\s]*/i;
+
+function stripService(draft: string): string {
+  return draft.replace(/\n*По вашей правке:[\s\S]*$/u, '').trim();
+}
+
+function capitalize(text: string): string {
+  const next = text.trim();
+  if (!next) return next;
+  return next.charAt(0).toUpperCase() + next.slice(1);
+}
+
+function stripGreeting(text: string): string {
+  return capitalize(text.replace(GREETING, ''));
+}
+
+function sameText(a: string, b: string): boolean {
+  return a.trim().toLowerCase().replace(/\s+/g, ' ') === b.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function factsOf(text: string): string[] {
+  const found =
+    text.match(
+      /\d+(?:[.,]\d+)?\s*%|\d[\d\s.,]*\s*(?:₽|руб(?:\.|лей|ля|ль)?)|(?:понедельник|вторник|сред[ауы]|четверг|пятниц[аыу]|суббот[аыу]|воскресенье)|\d{1,2}\s+(?:января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря)/gi,
+    ) ?? [];
+  return [...new Set(found.map((item) => item.toLowerCase().replace(/\s+/g, ' ').trim()))];
+}
+
+const COURTESY = /^(?:спасибо|благодарю|с уважением|хорошего дня|всего доброго|заранее благодар)/i;
+
+function shorten(text: string): string {
+  const bare = stripGreeting(text);
+  const sentences = bare
+    .split(/(?<=[.!?])\s+/)
+    .map((item) => item.trim())
+    .filter((item) => item && !COURTESY.test(item));
+  if (!sentences.length) return bare;
+  const joined = `${sentences.map((item) => item.replace(/[.!?]+$/g, '')).join(', ')}.`;
+  const lined = sentences.join(' ');
+  return joined.length < lined.length ? capitalize(joined) : lined;
+}
+
+// Понятная правка делается здесь. null — нужен разбор моделью, текст просьбы черновиком не становится.
+export function localRewrite(draft: string, instruction: string): string | null {
+  const clean = stripService(draft);
+  const ask = instruction.trim();
+  if (/убери\s+приветств|без\s+приветств/i.test(ask)) return stripGreeting(clean);
+  if (/короче|сократ|покороче/i.test(ask)) {
+    const next = shorten(clean);
+    return next.length < clean.length ? next : null;
+  }
+  return null;
+}
+
+// Новый текст принимается, только если это всё ещё письмо: не просьба руководителя и факты черновика на месте.
+export function acceptRewrite(draft: string, instruction: string, candidate: string): string | null {
+  const clean = stripService(draft);
+  const next = stripService(candidate);
+  if (next.length < 3 || sameText(next, instruction) || sameText(next, clean)) return null;
+  if (/убери\s+приветств|без\s+приветств/i.test(instruction) && GREETING.test(next)) return null;
+  for (const fact of factsOf(clean)) {
+    if (!next.toLowerCase().includes(fact)) return null;
+  }
+  return next;
+}
+
+export function rewriteLetter(draft: string, instruction: string, letterText: string): string | null {
   if (/начинай с действия и срока/i.test(instruction)) return finishDraft(draft, letterText, [{ area: 'письма', instead: instruction }], true);
-  const clean = draft.replace(/\n*По вашей правке:[\s\S]*$/u, '').trim();
-  if (/^(?:начинай|пиши|убери|добавь|не\s)/i.test(instruction)) return clean;
-  return instruction.trim();
+  return localRewrite(draft, instruction);
+}
+
+export function isLetterRule(row: { area?: string; category?: string }): boolean {
+  if (row.area === 'протоколы' || row.area === 'утро' || row.category === 'протокол') return false;
+  return (row.area ?? 'письма') === 'письма';
+}
+
+export function mailRevisions<T extends { area?: string; category?: string }>(rows: T[]): T[] {
+  return rows.filter(isLetterRule);
 }
 
 export function dueFromInstruction(text: string, year: number): string | null {

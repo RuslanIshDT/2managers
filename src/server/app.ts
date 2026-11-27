@@ -385,7 +385,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       if (!parsed.data.text || parsed.data.text.trim().length < 3) return reply.code(400).send({ error: 'Напишите правку' });
       const saved = await saveLeaderEdit(deps.db, leader.id, parsed.data.text, parsed.data.id);
       if (!saved) return reply.code(404).send({ error: 'Решение не найдено' });
-      return { notice: saved.text, draft: saved.text };
+      return { notice: saved.text, draft: saved.draft, changed: saved.changed };
     }
     const notice = await applyLeaderAction(deps.db, leader.id, parsed.data.action, parsed.data.id);
     return { notice };

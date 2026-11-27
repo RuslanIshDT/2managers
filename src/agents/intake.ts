@@ -8,11 +8,12 @@ import { sendDecisionCard } from '../telegram.ts';
 import { staffFromVerdict } from './dependence.ts';
 import { kpiStatus, personAddresses } from './k1.ts';
 import { cardText, chainKey, discountLimit, enforce, failedRuling, judgeLetter, letterPrompt, type ModelVerdict, type Ruled } from './k2.ts';
-import { withLlmScope } from '../llm.ts';
+import { callJson, withLlmScope, type JsonSchema } from '../llm.ts';
 import { externalContext, judgeWithTools, k2Context, stepsWords } from './k2-tools.ts';
 import { readHistory } from './dependence.ts';
 import { letterHits } from './replay.ts';
-import { exampleBlock, finishDraft, rewriteLetter, ruleFromChoice, ruleHint } from './memory.ts';
+import { acceptRewrite, exampleBlock, finishDraft, mailRevisions, rewriteLetter, ruleFromChoice, ruleHint } from './memory.ts';
+import { writeLeaderAct } from './acts.ts';
 import { applyRevision, revisionPrompt } from './revisions.ts';
 import { listFlowRules } from './week.ts';
 import { clockFor, letterMoment, moscowStamp } from './scene.ts';
@@ -94,7 +95,7 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
   const verdictRows = await db.select({ chainKey: verdicts.chainKey, kind: verdicts.kind, createdAt: verdicts.createdAt }).from(verdicts).where(eq(verdicts.leaderId, leaderId));
   const authority = await listFlowRules(db, leaderId);
   const revisionRows = await db.select().from(revisions).where(eq(revisions.leaderId, leaderId)).orderBy(asc(revisions.createdAt));
-  const edits = revisionRows.map((row) => ({ category: row.category, area: row.area, instead: row.instead }));
+  const edits = mailRevisions(revisionRows.map((row) => ({ category: row.category, area: row.area, instead: row.instead })));
   const actRows = await db.select().from(leaderActs).where(eq(leaderActs.leaderId, leaderId)).orderBy(asc(leaderActs.at));
   const history = await readHistory(`data/${leaderId}`).catch(() => []);
   const catalog = await db
@@ -471,18 +472,35 @@ async function recordAct(
   db: Db,
   input: { leaderId: string; subject: string; action: string; result: string; original: string; approved: string; auto: boolean; refId: string },
 ) {
-  await db.insert(leaderActs).values({
-    id: randomUUID(),
-    leaderId: input.leaderId,
-    subject: input.subject.slice(0, 300),
-    at: new Date(),
-    action: input.action,
-    result: input.result.slice(0, 500),
-    originalDraft: input.original.slice(0, 2000),
-    approvedText: input.approved.slice(0, 2000),
-    auto: input.auto,
-    refId: input.refId,
-  });
+  await writeLeaderAct(db, input);
+}
+
+const LETTER_EDIT_SCHEMA: JsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: { text: { type: 'string' } },
+  required: ['text'],
+};
+
+async function rewriteWithModel(leaderId: string, draft: string, instruction: string): Promise<string> {
+  const result = await withLlmScope(
+    { agent: 'k2', leaderId, operationId: `letter-edit:${leaderId}:${Date.now()}`, title: 'Правка письма' },
+    () =>
+      callJson<{ text: string }>({
+        purpose: `letter-edit:${leaderId}`,
+        system: [
+          'Ты правишь черновик письма по просьбе руководителя.',
+          'Верни готовый текст письма.',
+          'Сохрани факты: имена, даты, сроки, суммы, проценты и что именно обещано.',
+          'Не заменяй письмо текстом просьбы.',
+          'Не пиши фразу «По вашей правке».',
+        ].join(' '),
+        user: `Черновик:\n${draft}\n\nПросьба руководителя:\n${instruction}`,
+        schemaName: 'letter_edit',
+        schema: LETTER_EDIT_SCHEMA,
+      }),
+  );
+  return result.data.text ?? '';
 }
 
 export async function saveEditText(db: Db, chatId: string, text: string): Promise<{ id: string; text: string } | null> {
@@ -493,7 +511,7 @@ export async function saveEditText(db: Db, chatId: string, text: string): Promis
   return saveLeaderEdit(db, leader.id, instead);
 }
 
-export async function saveLeaderEdit(db: Db, leaderId: string, text: string, decisionId = ''): Promise<{ id: string; text: string } | null> {
+export async function saveLeaderEdit(db: Db, leaderId: string, text: string, decisionId = ''): Promise<{ id: string; text: string; draft: string; changed: boolean } | null> {
   const instead = text.trim();
   if (instead.length < 3) return null;
   const [decision] = decisionId
@@ -501,28 +519,50 @@ export async function saveLeaderEdit(db: Db, leaderId: string, text: string, dec
     : await db.select().from(decisions).where(and(eq(decisions.leaderId, leaderId), eq(decisions.awaitingEdit, true))).limit(1);
   if (!decision || decision.status !== 'ждёт') return null;
   const letterText = await sourceLetter(db, leaderId, decision.id, decision.subject, decision.summary);
-  const draft = rewriteLetter(decision.draft, instead, letterText);
+  let proposed = rewriteLetter(decision.draft, instead, letterText);
+  if (proposed === null) {
+    try {
+      proposed = await rewriteWithModel(leaderId, decision.draft, instead);
+    } catch (err) {
+      console.error('Правка письма не разобрана', decision.id, err instanceof Error ? err.message : err);
+      proposed = null;
+    }
+  }
+  const draft = proposed === null ? null : acceptRewrite(decision.draft, instead, proposed);
   await db
     .update(decisions)
     .set({
-      draft,
+      ...(draft ? { draft } : {}),
       originalDraft: decision.originalDraft || decision.draft,
       pendingRule: instead,
       awaitingEdit: false,
     })
     .where(eq(decisions.id, decision.id));
+  if (!draft) {
+    const asked = proposed?.trim().toLowerCase() === instead.toLowerCase();
+    const untouched = proposed !== null && proposed.trim() === decision.draft.trim();
+    const why = asked ? 'просьба не подставлена вместо письма' : untouched || proposed === null ? 'менять было нечего' : 'правка не сохранила факты письма';
+    return {
+      id: decision.id,
+      draft: decision.draft,
+      changed: false,
+      text: `Черновик не изменился: ${why}. «Запомнить» запишет правило, «Только сейчас» — нет.`,
+    };
+  }
   await recordAct(db, {
     leaderId,
     subject: decision.subject,
     action: 'поправил',
     result: instead,
     original: decision.originalDraft || decision.draft,
-    approved: '',
+    approved: draft,
     auto: false,
     refId: decision.id,
   });
   return {
     id: decision.id,
+    draft,
+    changed: true,
     text: `Черновик обновлён. «Только сейчас» — правило не создаётся. «Запомнить» — для следующих писем.\n\n${draft}`,
   };
 }

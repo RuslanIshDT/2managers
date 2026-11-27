@@ -1,0 +1,1 @@
+ALTER TABLE protocols ADD COLUMN IF NOT EXISTS original_body text NOT NULL DEFAULT '';

@@ -9,6 +9,7 @@ import { readHistory } from './dependence.ts';
 import { personAddresses } from './k1.ts';
 import { discountLimit, enforce, failedRuling, leaderMustConfirm, type Ruled } from './k2.ts';
 import { externalContext, judgeWithTools, k2Context } from './k2-tools.ts';
+import { mailRevisions } from './memory.ts';
 
 export const LEADER_ACTION = 'спросить_руководителя';
 
@@ -115,7 +116,7 @@ export async function runEval(
   ]);
   const history = await readHistory(`data/${leaderId}`).catch(() => []);
   const etalon = new Map(etalonRows.map((row) => [row.externalId, row]));
-  const edits = revisionRows.map((row) => ({ category: row.category, instead: row.instead }));
+  const edits = mailRevisions(revisionRows.map((row) => ({ category: row.category, area: row.area, instead: row.instead })));
   const letters = letterRows.filter((row) => etalon.has(row.externalId) && (!options.only || options.only.has(row.externalId)));
 
   return pool(letters, options.concurrency ?? 4, async (letter) => {
