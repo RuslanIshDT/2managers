@@ -79,7 +79,8 @@ export function lettersForMailbox(emails: SeedLetter[], subordinateEmails: Set<s
   return picked;
 }
 
-export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter[], modelBudget: number) {
+// notify: false — карточка не уходит в Telegram (сброс стенда готовит сцену, а не шлёт сообщение).
+export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter[], modelBudget: number, options: { notify?: boolean } = {}) {
   const [leaderRow] = await db.select().from(leaders).where(eq(leaders.id, leaderId)).limit(1);
   if (!leaderRow) throw new Error('Руководитель не найден');
   const known = await db.select({ id: mailIn.messageId }).from(mailIn).where(eq(mailIn.leaderId, leaderId));
@@ -264,7 +265,7 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
           awaitingEdit: false,
           createdAt: moment,
         });
-        try {
+        if (options.notify !== false) try {
           if (!leaderRow.telegramChatId) throw new Error('Telegram-чат руководителя не привязан');
           const staff = staffFromVerdict({
             summary: ruled.summary || letter.subject,

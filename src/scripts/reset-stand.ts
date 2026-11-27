@@ -1,9 +1,9 @@
 // Очищает решения, вердикты, ленту и принятые правила руководителя с Telegram.
-// Каталог писем не трогает. Карточку «ждёт» берёт из письма, где скидка выше полномочия.
+// Каталог писем не трогает. Карточку «ждёт» берёт из письма, где скидка выше полномочия, и разбирает его моделью.
 import { eq, isNotNull } from 'drizzle-orm';
 import { pickDiscountAboveLimit } from '../agents/reset-stand.ts';
 import { chainKey } from '../agents/k2.ts';
-import { parseMoscow } from '../agents/scene.ts';
+import { pullInbox } from '../agents/intake.ts';
 import { createDb, createPool, migrate } from '../db/client.ts';
 import { authorities, decisions, emails, leaders, mailIn, people, rules, verdicts } from '../db/schema.ts';
 
@@ -64,43 +64,24 @@ const removed = {
 };
 
 if (letter) {
+  // Карточка — настоящий разбор агента полномочий тем же путём, что письмо из ящика: контекст, рекомендация,
+  // риски и «если не решить» пишет модель. Берётся первое письмо цепочки, чтобы ожидание считалось с него.
+  // В Telegram при сбросе ничего не уходит.
   const key = chainKey(letter.fromEmail, letter.subject);
   const first = catalog
-    .filter((row) => chainKey(row.fromEmail, row.subject) === key)
-    .map((row) => row.received)
-    .sort()[0];
-  const now = parseMoscow(first ?? letter.received) ?? new Date();
-  await db.insert(decisions).values({
-    id: letter.id,
+    .filter((row) => chainKey(row.fromEmail, row.subject) === key && row.body === letter.body)
+    .sort((a, b) => a.received.localeCompare(b.received))[0];
+  const source = first ? { id: first.externalId, fromEmail: first.fromEmail, fromName: first.fromName, subject: first.subject, body: first.body, received: first.received } : letter;
+  const result = await pullInbox(
+    db,
     leaderId,
-    chainKey: chainKey(letter.fromEmail, letter.subject),
-    status: 'ждёт',
-    summary: letter.subject,
-    draft: '',
-    replyTo: letter.fromEmail,
-    replyName: letter.fromName,
-    subject: letter.subject,
-    awaitingEdit: false,
-    createdAt: now,
-  });
-  await db.insert(verdicts).values({
-    id: `v-${letter.id}`,
-    leaderId,
-    messageId: letter.id,
-    chainKey: chainKey(letter.fromEmail, letter.subject),
-    kind: 'нужен_руководитель',
-    category: 'деньги',
-    summary: letter.subject,
-    draft: '',
-    basis: 'Скидка в письме выше полномочия этого человека.',
-    context: '',
-    recommendation: 'Решение за вами.',
-    authorityOffer: '',
-    risks: '',
-    ifNot: '',
-    createdAt: now,
-  });
-  console.log(`Ждёт решения: ${letter.subject}`);
+    [{ ...source, messageId: `<${source.id}.synthetic@ecompras.local>`, marked: true }],
+    1,
+    { notify: false },
+  );
+  const [made] = await db.select().from(verdicts).where(eq(verdicts.id, `v-${source.id}`)).limit(1);
+  console.log(`Ждёт решения: ${letter.subject}. Разбор: ${result.lines.join('; ') || 'нет'}`);
+  if (!made?.risks || !made?.ifNot) console.log('Внимание: модель не заполнила риски или «если не решить».');
 } else {
   console.log('Письма со скидкой выше полномочия в каталоге нет. Карточка не создана.');
 }
