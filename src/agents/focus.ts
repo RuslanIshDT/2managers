@@ -93,7 +93,9 @@ export interface MorningInput {
   notes?: string[];
 }
 
-// Утреннее сообщение целиком: сначала решения, которые ждут руководителя, затем три дела и что сделано без него.
+// Утреннее сообщение (порядок — владелец 27.11.2026, T66). Сначала то, что взято из систем: решения из почты,
+// ваши задачи из Трекера, встречи из календаря. Затем то, что собрали агенты: три дела, просрочки сотрудников,
+// открытые вопросы протокола, время на цели, ответы помощника.
 export function renderMorning(input: MorningInput): string {
   const blocks: string[][] = [[`План на ${dateWords(input.today)}`]];
   blocks.push(
@@ -106,6 +108,7 @@ export function renderMorning(input: MorningInput): string {
       ? ['Ваши задачи со сроком в ближайшую неделю:', ...input.ownWeek.map((task) => `— ${task.title}, ${dueWords(task.dueOn, input.today)}`)]
       : ['Ваших задач со сроком в ближайшую неделю нет.'],
   );
+  blocks.push([input.todayMeetings.length ? `Встречи сегодня: ${input.todayMeetings.join('; ')}.` : 'Сегодня встреч в календаре нет.']);
   if (input.plan === null) blocks.push(['Три дела на сегодня модель выберет при отправке.']);
   else if (!input.plan.length) blocks.push(['Три дела на сегодня: модель не выбрала ни одного.']);
   else
@@ -113,17 +116,16 @@ export function renderMorning(input: MorningInput): string {
       'Три дела на сегодня:',
       ...input.plan.map((item, index) => `${index + 1}. ${item.title}. ${item.minutes} мин, цель «${item.goal}». ${item.why}`),
     ]);
+  blocks.push(overdueLines(input.overdue));
+  if (input.openItems.length) blocks.push(['Открытые вопросы прошлой встречи:', ...input.openItems.map((item) => `— ${item}`)]);
+  blocks.push([
+    `Время встреч на ваши цели: ${input.share.percent}% (${hours(input.share.onGoal)} из ${hours(input.share.total)} ч по календарю).`,
+  ]);
   blocks.push(
     input.returned.length
       ? ['Помощник ответил сам на этой неделе — сотрудники решают это без вас:', ...input.returned.map((row) => `— ${row.who}: ${row.what}`)]
       : ['На этой неделе помощник сам ни на одно письмо не отвечал.'],
   );
-  blocks.push(overdueLines(input.overdue));
-  blocks.push([input.todayMeetings.length ? `Встречи сегодня: ${input.todayMeetings.join('; ')}.` : 'Сегодня встреч в календаре нет.']);
-  if (input.openItems.length) blocks.push(['Открытые вопросы прошлой встречи:', ...input.openItems.map((item) => `— ${item}`)]);
-  blocks.push([
-    `Время встреч на ваши цели: ${input.share.percent}% (${hours(input.share.onGoal)} из ${hours(input.share.total)} ч по календарю).`,
-  ]);
   // Трекер или календарь не ответили — сказать, откуда взяты задачи и встречи.
   if (input.notes?.length) blocks.push(input.notes);
   return blocks.map((block) => block.join('\n')).join('\n\n');
