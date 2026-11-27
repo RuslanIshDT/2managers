@@ -37,6 +37,11 @@ export function noteToSend(notes: Note[]): Note | null {
   return notes.find((note) => note.quiet) ?? notes.find((note) => note.text.includes('раз:')) ?? notes[0] ?? null;
 }
 
+export function pendingNotes(notes: Note[], sentEmails: string[]): Note[] {
+  const sent = new Set(sentEmails.map((email) => email.trim().toLowerCase()));
+  return notes.filter((note) => note.email.trim() !== '' && !sent.has(note.email.trim().toLowerCase()));
+}
+
 export interface SeriesView {
   title: string;
   verdict: string;

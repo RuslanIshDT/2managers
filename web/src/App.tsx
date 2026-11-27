@@ -237,8 +237,8 @@ export function App() {
     setError('');
     setPending(true);
     try {
-      const result = await api<{ name: string }>('/api/mirror/send', { method: 'POST', body: '{}' });
-      setJob(`Записка для ${result.name} ушла в тестовый ящик`);
+      const result = await api<{ sent: string[] }>('/api/mirror/send', { method: 'POST', body: '{}' });
+      setJob(result.sent.length ? `Записки ушли в тестовый ящик: ${result.sent.join(', ')}` : 'Новых записок нет: всем уже отправляли');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Не удалось отправить записку');
     } finally {
@@ -705,7 +705,7 @@ function Mirror({
     return (
       <Card className="mb-4">
         <h2 className="mb-2 text-lg font-semibold">Записки</h2>
-        <p className="mb-2 text-sm text-[#5d6878]">В ящик уходит одна записка. Остальные видны здесь.</p>
+        <p className="mb-2 text-sm text-[#5d6878]">В тестовый ящик уходит записка каждому, кому она ещё не уходила. Адрес в тексте — настоящий, ящик синтетический писем не принимает.</p>
         <details className="text-sm">
           <summary>подробнее</summary>
           <ul className="mt-2 grid gap-2">
@@ -720,7 +720,7 @@ function Mirror({
           </ul>
         </details>
         <Button className="mt-3" type="button" variant="outline" onClick={onSend} disabled={pending}>
-          {pending ? 'Отправка…' : 'Отправить одну записку'}
+          {pending ? 'Отправка…' : 'Отправить записки'}
         </Button>
       </Card>
     );

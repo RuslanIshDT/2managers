@@ -2,9 +2,9 @@
 import { readFile } from 'node:fs/promises';
 import { and, eq } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
-import { emails, flowReports, seriesFate, seriesKind } from '../db/schema.ts';
+import { emails, flowReports, noteSent, seriesFate, seriesKind } from '../db/schema.ts';
 import { departmentForLeader } from './k1.ts';
-import { burningSeries, noteToSend, weeklyNotes, type SeriesView } from './mirror.ts';
+import { burningSeries, pendingNotes, weeklyNotes, type SeriesView } from './mirror.ts';
 import { listFlowRules } from './week.ts';
 import { mailConfig, sendMail } from '../mail.ts';
 
@@ -42,16 +42,20 @@ export async function mirrorForLeader(db: Db, leaderId: string) {
 
 export async function sendWeeklyNote(db: Db, leaderId: string) {
   const scene = await mirrorForLeader(db, leaderId);
-  const note = noteToSend(scene.notes);
-  if (!note) throw new Error('Записок нет');
+  const sentRows = await db.select({ email: noteSent.email }).from(noteSent).where(eq(noteSent.leaderId, leaderId));
+  const notes = pendingNotes(scene.notes, sentRows.map((row) => row.email));
+  if (!notes.length) return { sent: [] as string[] };
   const cfg = mailConfig();
   if (!cfg) throw new Error('Яндекс Почта не настроена');
-  await sendMail(
-    cfg.user,
-    `Записка: ${note.name}`,
-    `Кому: ${note.name} <${note.email}>\nАдрес подчинённого синтетический, поэтому письмо ушло в тестовый ящик.\n\n${note.text}`,
-  );
-  return { name: note.name, quiet: note.quiet };
+  for (const note of notes) {
+    await sendMail(
+      cfg.user,
+      `Записка: ${note.name}`,
+      `Кому: ${note.name} <${note.email}>\nАдрес подчинённого синтетический, поэтому письмо ушло в тестовый ящик.\n\n${note.text}`,
+    );
+    await db.insert(noteSent).values({ leaderId, email: note.email, sentAt: new Date() }).onConflictDoNothing();
+  }
+  return { sent: notes.map((note) => note.name) };
 }
 
 export async function setSeriesFate(db: Db, leaderId: string, seriesKey: string, action: string, reason: string) {

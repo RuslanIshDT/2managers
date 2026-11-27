@@ -22,7 +22,7 @@ import { mailConfig } from '../src/mail.ts';
 import { staffCard } from '../src/agents/dependence.ts';
 import { departmentMatrix, goalMinutes, morningLines, overdueLines, overdueTasks } from '../src/agents/focus.ts';
 import { applyChoice, renderPlan } from '../src/agents/conductor.ts';
-import { burningSeries, noteToSend, weeklyNotes } from '../src/agents/mirror.ts';
+import { burningSeries, noteToSend, pendingNotes, weeklyNotes } from '../src/agents/mirror.ts';
 import { letterHits, replayWeek, ruleEffect, rulesFromAudit, trustOffers, waitingHours } from '../src/agents/replay.ts';
 import { finishTemplate, hasProposal } from '../src/agents/k2.ts';
 import { forceMailAction, mailScore } from '../src/agents/accuracy.ts';
@@ -354,6 +354,7 @@ describe('записки и серии', () => {
     expect(notes[0]?.text).toContain('отпуск Ирины');
     expect(notes[1]?.text).toContain('не писали');
     expect(noteToSend(notes)?.name).toBe('Дмитрий');
+    expect(pendingNotes(notes, ['d@example']).map((note) => note.name)).toEqual(['Мария']);
     const series = burningSeries([
       { kind: 'встречи', title: 'Статус', verdict: 'не_должно', change: 'убрать', freedHours: 1.5 },
       { kind: 'встречи', title: 'Совет', verdict: 'должно', change: '', hours: 2 },
@@ -656,6 +657,7 @@ describe('цели, задачи и KPI', () => {
 describe('лента и сброс стенда', () => {
   it('прячет адрес ящика и выбирает скидку выше полномочия без зашитого id', async () => {
     expect(hideMailbox('Письмо на box@example.com и BOX@example.com', 'box@example.com')).toBe('Письмо на и');
+    expect(hideMailbox('аккаунт standbox', 'standbox@example.com')).toBe('аккаунт');
     const within = {
       id: 'low',
       fromEmail: 'a@example.com',

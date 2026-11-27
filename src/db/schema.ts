@@ -243,6 +243,16 @@ export const protocols = pgTable('protocols', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
 });
 
+export const noteSent = pgTable(
+  'note_sent',
+  {
+    leaderId: text('leader_id').notNull(),
+    email: text('email').notNull(),
+    sentAt: timestamp('sent_at', { withTimezone: true }).notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.leaderId, t.email] })],
+);
+
 export const mailActions = pgTable(
   'mail_actions',
   {

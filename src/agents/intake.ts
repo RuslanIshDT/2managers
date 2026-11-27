@@ -425,7 +425,11 @@ export async function saveEditText(db: Db, chatId: string, text: string): Promis
 export function hideMailbox(text: string, mailbox: string): string {
   const own = mailbox.trim();
   if (!own) return text;
-  return text.replace(new RegExp(own.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), '').replace(/[ \t]{2,}/g, ' ').trim();
+  const escape = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const local = own.split('@')[0] ?? '';
+  let next = text.replace(new RegExp(escape(own), 'gi'), '');
+  if (local.length >= 4) next = next.replace(new RegExp(escape(local), 'gi'), '');
+  return next.replace(/[ \t]{2,}/g, ' ').trim();
 }
 
 export async function requestFeed(db: Db, leaderId: string) {
@@ -461,6 +465,51 @@ export async function deliverReply(name: string, email: string, subject: string,
     `Re: ${subject}`,
     `Кому: ${name} <${email}>\nАдрес подчинённого синтетический, поэтому письмо ушло в тестовый ящик.\n\n${draft}`,
   );
+}
+
+export async function rejudgeOutside(db: Db, leaderId: string, modelBudget: number) {
+  const [leaderRow] = await db.select().from(leaders).where(eq(leaders.id, leaderId)).limit(1);
+  if (!leaderRow) throw new Error('Руководитель не найден');
+  const rows = await db
+    .select({
+      id: verdicts.id,
+      messageId: mailIn.messageId,
+      fromName: mailIn.fromName,
+      fromEmail: mailIn.fromEmail,
+      subject: mailIn.subject,
+      body: mailIn.body,
+    })
+    .from(verdicts)
+    .innerJoin(mailIn, and(eq(mailIn.leaderId, verdicts.leaderId), eq(mailIn.messageId, verdicts.messageId)))
+    .where(and(eq(verdicts.leaderId, leaderId), eq(verdicts.kind, 'не_из_отдела')));
+  const lines: string[] = [];
+  let calls = 0;
+  for (const letter of rows) {
+    if (calls >= modelBudget) break;
+    const letterText = `От: ${letter.fromName}\nТема: ${letter.subject}\n${letter.body}`;
+    const chosen = await withLlmScope(
+      { agent: 'accuracy', leaderId, operationId: `mail:${letter.messageId}`.slice(0, 180), title: letter.subject.slice(0, 180) || 'Разбор письма' },
+      () => judgeMail({ purpose: `accuracy:${letter.messageId}`, profile: leaderRow.profile, letter: letterText }),
+    );
+    calls += 1;
+    const ruled = forceMailAction(letterText, false, chosen);
+    const key = chainKey(letter.fromEmail, letter.subject);
+    await db
+      .update(verdicts)
+      .set({
+        kind: ruled.action,
+        category: textSignals(letterText).category ?? 'иное',
+        summary: `${letter.fromName}: ${letter.subject}. Действие: ${actionWords(ruled.action)}`,
+        basis: ruled.forced ? 'Категория N1: письмо не уходит без подтверждения руководителя' : 'Тот же разбор действия, что для точности писем. Адрес не из отдела',
+      })
+      .where(eq(verdicts.id, letter.id));
+    await db
+      .insert(mailActions)
+      .values({ leaderId, chainKey: key, action: ruled.action, forced: ruled.forced, createdAt: new Date() })
+      .onConflictDoUpdate({ target: [mailActions.leaderId, mailActions.chainKey], set: { action: ruled.action, forced: ruled.forced } });
+    lines.push(actionWords(ruled.action));
+  }
+  return { lines, calls };
 }
 
 function actionWords(action: string): string {
