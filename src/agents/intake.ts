@@ -2,7 +2,7 @@
 import { randomUUID } from 'node:crypto';
 import { and, asc, count, desc, eq, ne } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
-import { authorities, decisions, kpis, leaders, mailActions, mailIn, people, revisions, tasks, verdicts } from '../db/schema.ts';
+import { authorities, decisions, emails, kpis, leaders, mailActions, mailIn, people, revisions, tasks, verdicts } from '../db/schema.ts';
 import { mailConfig, sendMail, type MailboxLetter } from '../mail.ts';
 import { sendDecisionCard } from '../telegram.ts';
 import { staffFromVerdict } from './dependence.ts';
@@ -16,6 +16,7 @@ import { letterHits } from './replay.ts';
 import { applyRevision, revisionPrompt } from './revisions.ts';
 import { listFlowRules } from './week.ts';
 import { clockFor, letterMoment, moscowStamp } from './scene.ts';
+import { changeWords, termChanges, type TermChange } from './terms.ts';
 
 const DUMMY: ModelVerdict = {
   вердикт: 'вернуть',
@@ -92,6 +93,10 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
   const revisionRows = await db.select().from(revisions).where(eq(revisions.leaderId, leaderId)).orderBy(asc(revisions.createdAt));
   const edits = revisionRows.map((row) => ({ category: row.category, instead: row.instead }));
   const history = await readHistory(`data/${leaderId}`).catch(() => []);
+  const catalog = await db
+    .select({ id: emails.externalId, fromEmail: emails.fromEmail, subject: emails.subject, body: emails.body })
+    .from(emails)
+    .where(eq(emails.leaderId, leaderId));
   const pastMail = await db
     .select({ fromEmail: mailIn.fromEmail, subject: mailIn.subject, received: mailIn.received, kind: verdicts.kind })
     .from(mailIn)
@@ -128,6 +133,7 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
         const ruled = forceMailAction(letterText, false, chosen);
         const signal = textSignals(letterText).category ?? 'иное';
         const key = chainKey(letter.fromEmail, letter.subject);
+        const outsideChanges = termChanges(await chainBefore(db, leaderId, key, letter, catalog), `${letter.subject}\n${letter.body}`);
         await db.insert(mailIn).values({
           leaderId,
           messageId: letter.messageId,
@@ -161,15 +167,20 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
           .values({ leaderId, chainKey: key, action: ruled.action, forced: ruled.forced, createdAt: new Date() })
           .onConflictDoUpdate({ target: [mailActions.leaderId, mailActions.chainKey], set: { action: ruled.action, forced: ruled.forced } });
         if (ruled.action === 'спросить_руководителя') {
-          const made = await askOutside(db, leaderRow, { id: letter.id, fromName: letter.fromName, fromEmail: letter.fromEmail, subject: letter.subject }, key, moment);
-          if (made) decisionRows.push(made);
+          const made = await askOutside(db, leaderRow, { id: letter.id, fromName: letter.fromName, fromEmail: letter.fromEmail, subject: letter.subject }, key, moment, outsideChanges);
+          if (made) {
+            for (const row of decisionRows) if (row.chainKey === key && row.status === 'ждёт' && row.id !== made.id) row.status = 'заменено';
+            decisionRows.push(made);
+          }
         }
         seen.add(letter.messageId);
         lines.push(`${letter.id}: ${actionWords(ruled.action)}`);
         continue;
       }
       const key = chainKey(letter.fromEmail, letter.subject);
-      const prior = decisionRows.find((row) => row.chainKey === key || row.id === letter.id) ?? null;
+      const prior = latestDecision(decisionRows, key, letter.id);
+      // Прежнее решение по цепочке принималось на прежних условиях: новые процент, сумма, срок или обязательство — не повтор.
+      const changes: TermChange[] = prior ? termChanges(await chainBefore(db, leaderId, key, letter, catalog, prior.subject), `${letter.subject}\n${letter.body}`) : [];
       const ownAuth = authRows.filter((row) => row.personId === person.externalId);
       const limit = discountLimit(ownAuth.map((row) => ({ area: row.area, limit: row.limitValue })));
       const covered = letterHits(letter, authority);
@@ -192,7 +203,7 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
           ask: false,
           send: covered.effect === 'сам',
         };
-      } else if (prior) {
+      } else if (prior && !changes.length) {
         ruled = enforce(DUMMY, `${letter.subject}\n${letter.body}`, limit, prior, boss);
       } else if (calls >= modelBudget) {
         deferred += 1;
@@ -201,10 +212,11 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
         const ownKpi = kpiRows.filter((row) => row.personId === person.externalId);
         const ownTasks = taskRows.filter((row) => row.ownerName === person.name);
         const ctx = k2Context(person, { authorities: authRows, kpi: kpiRows, tasks: taskRows, history, mail: pastMail, revisions: edits });
+        const modelBody = changes.length && prior ? `${letter.body}\n\n${changeNote(prior, changes)}` : letter.body;
         let steps = '';
         const judged = await withLlmScope(
           { agent: 'k2', leaderId, operationId: `k2:${letter.id}`, title: letter.subject.slice(0, 180) || 'Разбор письма' },
-          () => judgeWithTools({ purpose: `k2:${letter.id}`, profile: leaderRow.profile, subject: letter.subject, body: letter.body, ctx })
+          () => judgeWithTools({ purpose: `k2:${letter.id}`, profile: leaderRow.profile, subject: letter.subject, body: modelBody, ctx })
             .then((run) => {
               steps = stepsWords(run.steps);
               return run.verdict;
@@ -219,7 +231,7 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
                   person: personBlock(person, ownAuth, ownKpi),
                   tasks: ownTasks.map((row) => `${row.title}, срок ${row.dueOn}, ${row.status}`).join('\n'),
                   subject: letter.subject,
-                  body: letter.body,
+                  body: modelBody,
                   limit,
                   revisions: revisionPrompt(edits),
                 }),
@@ -231,12 +243,14 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
         );
         calls += 1;
         const letterText = `${letter.subject}\n${letter.body}`;
-        ruled = judged.model ? enforce(judged.model, letterText, limit, null, boss) : failedRuling(letterText, judged.error, boss);
+        ruled = judged.model ? enforce(judged.model, letterText, limit, prior, boss, changes) : failedRuling(letterText, judged.error, boss);
+        if (!judged.model && changes.length) ruled = { ...ruled, summary: `Условия изменились: ${changeWords(changes)}. ${ruled.summary}` };
         if (steps) ruled = { ...ruled, context: [ruled.context, steps].filter(Boolean).join('\n') };
       }
       ruled = { ...ruled, draft: applyRevision(ruled.draft, ruled.category, edits) };
 
       if (ruled.ask) {
+        if (changes.length) await supersede(db, leaderId, key, letter.id, decisionRows);
         await db.insert(decisions).values({
           id: letter.id,
           leaderId,
@@ -534,15 +548,18 @@ async function askOutside(
   letter: { id: string; fromName: string; fromEmail: string; subject: string },
   key: string,
   moment: Date,
+  changes: TermChange[] = [],
 ) {
   const existing = await db.select({ id: decisions.id }).from(decisions).where(and(eq(decisions.leaderId, leaderRow.id), eq(decisions.chainKey, key))).limit(1);
-  if (existing.length) return null;
+  if (existing.length && !changes.length) return null;
+  if (existing.length) await supersede(db, leaderRow.id, key, letter.id, []);
+  const changed = existing.length ? `Условия изменились: ${changeWords(changes)}. ` : '';
   const row = {
     id: letter.id,
     leaderId: leaderRow.id,
     chainKey: key,
     status: 'ждёт',
-    summary: letter.subject,
+    summary: `${changed}${letter.subject}`,
     draft: '',
     replyTo: letter.fromEmail,
     replyName: letter.fromName,
@@ -556,9 +573,9 @@ async function askOutside(
     await sendDecisionCard(
       cardText({
         who: `${letter.fromName}: ${letter.subject}`,
-        вывод: 'Письмо не из отдела и требует вашего подтверждения',
+        вывод: changed ? `${changed}Прежнее решение по этой переписке на новые условия не распространяется` : 'Письмо не из отдела и требует вашего подтверждения',
         рекомендация: 'Подтвердите, если разбираете его сами',
-        основание: 'Категория N1: без подтверждения письмо никуда не уходит',
+        основание: changed ? 'Категория N1 и новые условия в той же переписке: без подтверждения письмо никуда не уходит' : 'Категория N1: без подтверждения письмо никуда не уходит',
         риски: '',
         если_не_решить: 'Письмо останется без ответа',
         контекст: '',
@@ -602,4 +619,48 @@ function personBlock(
     `Полномочия: ${powers || 'нет'}`,
     kpiLine,
   ].join('\n');
+}
+
+// Прежние письма цепочки: лента ящика и каталог руководителя; тема прежнего решения — на случай, если писем нет.
+async function chainBefore(
+  db: Db,
+  leaderId: string,
+  key: string,
+  letter: { id: string; messageId: string },
+  catalog: { id: string; fromEmail: string; subject: string; body: string }[],
+  priorSubject = '',
+): Promise<string[]> {
+  const rows = await db
+    .select({ messageId: mailIn.messageId, syntheticId: mailIn.syntheticId, subject: mailIn.subject, body: mailIn.body })
+    .from(mailIn)
+    .where(and(eq(mailIn.leaderId, leaderId), eq(mailIn.chainKey, key)));
+  const texts = rows.filter((row) => row.messageId !== letter.messageId && row.syntheticId !== letter.id).map((row) => `${row.subject}\n${row.body}`);
+  for (const row of catalog) {
+    if (row.id === letter.id || chainKey(row.fromEmail, row.subject) !== key) continue;
+    texts.push(`${row.subject}\n${row.body}`);
+  }
+  if (priorSubject) texts.push(priorSubject);
+  return texts;
+}
+
+// Прежняя карточка «ждёт» той же цепочки снимается: её кнопки отвечают «Уже заменено», решать по старым условиям нельзя.
+async function supersede(db: Db, leaderId: string, key: string, keepId: string, rows: { id: string; chainKey: string; status: string }[]) {
+  await db
+    .update(decisions)
+    .set({ status: 'заменено', awaitingEdit: false })
+    .where(and(eq(decisions.leaderId, leaderId), eq(decisions.chainKey, key), eq(decisions.status, 'ждёт'), ne(decisions.id, keepId)));
+  for (const row of rows) if (row.chainKey === key && row.status === 'ждёт' && row.id !== keepId) row.status = 'заменено';
+}
+
+export function changeNote(prior: { status: string; summary: string }, changes: TermChange[]): string {
+  return `[Помощник: по этой переписке уже было решение «${prior.status}» (${prior.summary.slice(0, 200)}). Условия изменились: ${changeWords(changes)}. Разбери письмо заново по новым условиям.]`;
+}
+
+// Последнее решение цепочки: сначала то, что ещё ждёт руководителя, иначе самое позднее.
+export function latestDecision<T extends { id: string; chainKey: string; status: string; createdAt: Date }>(rows: T[], key: string, letterId: string): T | null {
+  const chain = rows.filter((row) => row.chainKey === key || row.id === letterId);
+  if (!chain.length) return null;
+  const waiting = chain.filter((row) => row.status === 'ждёт');
+  const pool = waiting.length ? waiting : chain;
+  return pool.reduce((best, row) => (row.createdAt.getTime() > best.createdAt.getTime() ? row : best));
 }

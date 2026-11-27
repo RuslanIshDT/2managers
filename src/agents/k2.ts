@@ -1,6 +1,7 @@
 // K2: вердикт по просьбе подчинённого. Модель предлагает, код не пускает категории N1 без руководителя.
 import { z } from 'zod';
 import { callJson, type ChatMessage, type JsonSchema, type ToolSpec } from '../llm.ts';
+import { changeWords, type TermChange } from './terms.ts';
 
 const FINISH = 'Доделайте просьбу: какое решение предлагаете, какой срок и что нужно от руководителя. Пока возвращаю вам.';
 
@@ -143,8 +144,15 @@ const SYSTEM = `Ты — агент полномочий руководител�
 Поля суть и основание заполняй при любом вердикте: в основании одной фразой назови полномочие, KPI, цель или правило из данных выше, которые привели к вердикту.
 Категорию «руководство» не ставь: её назначает код, если письмо от руководителя руководителя. Каждое текстовое поле короче 400 знаков. Эталонных меток писем у тебя нет.`;
 
+// Ответ и пересылка — та же цепочка: «Re:», «Fwd:», «Отв:» в начале темы не учитываются.
 export function chainKey(fromEmail: string, subject: string): string {
-  return `${fromEmail.trim().toLowerCase()}|${subject.trim().toLowerCase().replace(/\s+/g, ' ')}`;
+  let topic = subject.trim().toLowerCase().replace(/\s+/g, ' ');
+  for (let i = 0; i < 5; i += 1) {
+    const next = topic.replace(/^(?:re|fwd?|fw|отв|ответ|пересл)\s*(?:\[\d+\]|\(\d+\))?\s*:\s*/i, '');
+    if (next === topic) break;
+    topic = next;
+  }
+  return `${fromEmail.trim().toLowerCase()}|${topic}`;
 }
 
 export function textSignals(text: string): { category: RequestCategory | null; discountPercent: number | null } {
@@ -163,8 +171,17 @@ export function discountLimit(authorities: { area: string; limit: string }[]): n
   return Number.isFinite(value) ? value : null;
 }
 
-export function enforce(model: ModelVerdict, letterText: string, limit: number | null, prior: PriorDecision | null, boss: boolean): Ruled {
-  if (prior) {
+// changes — новые условия против прежних писем цепочки (terms.ts). С ними письмо не повтор:
+// прежнее решение принималось на прежних условиях, письмо разбирается заново.
+export function enforce(
+  model: ModelVerdict,
+  letterText: string,
+  limit: number | null,
+  prior: PriorDecision | null,
+  boss: boolean,
+  changes: TermChange[] = [],
+): Ruled {
+  if (prior && !changes.length) {
     return {
       kind: 'повтор',
       category: 'иное',
@@ -195,6 +212,11 @@ export function enforce(model: ModelVerdict, letterText: string, limit: number |
     category = 'деньги';
     reasons.push(`скидка ${signal.discountPercent}% выше полномочия ${limit}%`);
   }
+  if (changes.some((change) => change.kind === 'обязательство') && !N1.has(category)) {
+    category = 'обязательства_клиентам';
+    reasons.push('в цепочке появилось новое обязательство');
+  }
+  if (changes.length) reasons.push(`по цепочке уже было решение${prior ? ` «${prior.status}»` : ''}, условия изменились (${changeWords(changes)}) — это не повтор`);
   const mustAsk = N1.has(category) || boss;
   const noProposal = !hasProposal(letterText);
   const kind = mustAsk ? 'нужен_руководитель' : noProposal ? 'вернуть' : model.вердикт;
@@ -203,7 +225,7 @@ export function enforce(model: ModelVerdict, letterText: string, limit: number |
   return {
     kind,
     category,
-    summary: model.суть,
+    summary: changes.length ? `Условия изменились: ${changeWords(changes)}. ${model.суть}` : model.суть,
     draft,
     basis: !mustAsk && noProposal ? `Нет предложения. ${basis}` : basis,
     context: model.контекст,
