@@ -228,6 +228,15 @@ export async function readSyntheticInbox(): Promise<MailboxLetter[]> {
   }
 }
 
+export function letterById(letters: MailboxLetter[], id: string): MailboxLetter | null {
+  return letters.find((letter) => letter.id === id || letter.messageId === id) ?? null;
+}
+
+// Письмо из «Отправленных» по тому же номеру, что стоит в ссылке утренней сводки.
+export async function findOutgoing(id: string): Promise<MailboxLetter | null> {
+  return letterById(await readOutgoing(), id);
+}
+
 // Исходящие руководителя. Папка «Отправленные»; если почта не ответила — пусто, утро из-за этого не останавливается.
 export async function readOutgoing(limit = 40): Promise<MailboxLetter[]> {
   const cfg = mailConfig();

@@ -24,7 +24,8 @@ import { applyClick, applyLeaderAction, hideMailbox, pullInbox, requestFeed, sav
 import { acceptWeek, acceptWeekByChat, weekScene } from '../agents/week.ts';
 import { focusForLeader, sendFocus } from '../agents/focus-run.ts';
 import { mirrorForLeader, sendWeeklyNote, setSeriesFate } from '../agents/mirror-run.ts';
-import { checkMail, mailConfig, readSyntheticInbox } from '../mail.ts';
+import { checkMail, findOutgoing, mailConfig, readSyntheticInbox } from '../mail.ts';
+import { standOwner } from '../agents/live-sources.ts';
 import { applyOrigin, formOrigin } from '../http/origin.ts';
 import { assertAuditConfirm, exampleQuote, FLOW_AUDIT_QUEUE, type FlowAuditJob } from '../jobs/flow-audit-job.ts';
 import { answerCallback, editChoiceKeyboard, parseCallback, parseRuleCallback, parseStart, sendMessage, sendRulesCard, telegramConfigured } from '../telegram.ts';
@@ -140,8 +141,16 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       ? null
       : (await deps.db.select().from(emails).where(eq(emails.leaderId, leader.id))).find((row) => row.externalId === query.data.id);
     const found = letter ?? catalog;
-    if (!found) return reply.code(404).send({ error: 'Не найдено' });
-    return { title: found.subject, text: `${found.fromName}, ${found.received}\n\n${found.body}` };
+    if (found) return { title: found.subject, text: `${found.fromName}, ${found.received}\n\n${found.body}` };
+    if ((await standOwner(deps.db)) === leader.id) {
+      try {
+        const sent = await findOutgoing(query.data.id);
+        if (sent) return { title: sent.subject, text: `${sent.fromName}, ${sent.received}\n\n${sent.body}` };
+      } catch (error) {
+        console.error('Исходящее не открылось', error instanceof Error ? error.message : error);
+      }
+    }
+    return reply.code(404).send({ error: 'Не найдено' });
   });
 
   app.post('/api/login', async (request, reply) => {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { renderMorning, morningHtml } from '../src/agents/focus.ts';
+import { letterById, liveLetterId, parseMailboxSource } from '../src/mail.ts';
 import { oneOnOneBrief, type BriefInput, type BriefLetter } from '../src/agents/one-on-one.ts';
 
 const people = [
@@ -101,6 +102,24 @@ describe('контекст встречи один на один', () => {
     expect(brief('2026-12-22', [options, sent])).toEqual([]);
     const closed = brief('2026-12-15', [options], [{ key: 'QUEUE-7', title: 'Выбрать вариант запуска', owner: 'Наталья Фомина', status: 'закрыта' }]);
     expect(closed).toEqual([]);
+  });
+
+  it('письмо из отправленных находится по тому же номеру, что в ссылке', () => {
+    const messageId = '<sent-choice@example.test>';
+    const parsed = parseMailboxSource(
+      [
+        'From: Наталья Фомина <natalia@example.test>',
+        'To: <kirill@example.test>',
+        'Subject: Vybor',
+        'Date: Tue, 16 Dec 2026 11:00:00 +0300',
+        `Message-ID: ${messageId}`,
+        '',
+        'Берём второй.',
+      ].join('\n'),
+    );
+    expect(parsed?.id).toBe(liveLetterId(messageId));
+    expect(letterById(parsed ? [parsed] : [], parsed?.id ?? '')?.body).toContain('Берём второй');
+    expect(letterById([], messageId)).toBeNull();
   });
 
   it('блок стоит рядом со встречей и пропадает, когда пунктов нет', () => {
