@@ -846,34 +846,159 @@ function Mirror({
   );
 }
 
-// Документация: заголовки «##» и «###», абзацы, списки «- » и «1. », **жирный**. Без внешних библиотек.
-function Guide({ text }: { text: string }) {
+// Документация: «##» — вкладка сценария, «###» — подзаголовок, абзацы, списки «- » и «1. », **жирный».
+// Агент — пункт «- агент: **Имя** · модель — что сделал», его переменные — вложенные пункты «  - `Имя: значение · где`». Без внешних библиотек.
+interface GuideAgent {
+  name: string;
+  mode: string;
+  did: string;
+  vars: { name: string; value: string; where: string }[];
+}
+
+interface GuideTab {
+  label: string;
+  title: string;
+  blocks: string[];
+}
+
+const AGENT_LINE = /^- агент: \*\*(.+?)\*\*(?: · ([^—]+?))? — (.+)$/;
+const VAR_LINE = /^\s+- `(.+)`$/;
+
+function parseAgents(block: string): GuideAgent[] {
+  const agents: GuideAgent[] = [];
+  for (const line of block.split('\n')) {
+    const head = AGENT_LINE.exec(line);
+    if (head) {
+      agents.push({ name: head[1], mode: head[2]?.trim() ?? '', did: head[3], vars: [] });
+      continue;
+    }
+    const item = VAR_LINE.exec(line);
+    if (!item || !agents.length) continue;
+    const text = item[1];
+    const dot = text.lastIndexOf(' · ');
+    const body = dot >= 0 ? text.slice(0, dot) : text;
+    const colon = body.indexOf(': ');
+    agents[agents.length - 1].vars.push({
+      name: colon >= 0 ? body.slice(0, colon) : '',
+      value: colon >= 0 ? body.slice(colon + 2) : body,
+      where: dot >= 0 ? text.slice(dot + 3) : '',
+    });
+  }
+  return agents;
+}
+
+function parseGuide(text: string): { intro: string[]; tabs: GuideTab[] } {
+  const intro: string[] = [];
+  const tabs: GuideTab[] = [];
   const blocks = text.replace(/\r/g, '').split(/\n{2,}/).map((block) => block.trim()).filter(Boolean);
+  for (const block of blocks) {
+    if (block.startsWith('## ')) {
+      const title = block.slice(3);
+      const dot = title.indexOf('. ');
+      tabs.push({ label: dot > 0 ? title.slice(0, dot) : title, title, blocks: [] });
+      continue;
+    }
+    if (tabs.length) tabs[tabs.length - 1].blocks.push(block);
+    else intro.push(block);
+  }
+  return { intro, tabs };
+}
+
+function Guide({ text }: { text: string }) {
+  const { intro, tabs } = parseGuide(text);
+  const [active, setActive] = useState(0);
+  const tab = tabs[Math.min(active, tabs.length - 1)];
+  const agents = tab ? tab.blocks.filter((block) => block.startsWith('- агент:')).flatMap(parseAgents) : [];
+  const names = [...new Set(agents.map((agent) => agent.name))];
+  const jump = (name: string) => document.getElementById(`guide-agent-${names.indexOf(name)}`)?.scrollIntoView({ block: 'start', behavior: 'smooth' });
   return (
-    <Card className="max-w-3xl">
+    <Card className="max-w-4xl">
       <article className="grid gap-3 text-sm leading-relaxed">
-        {blocks.map((block, index) => {
-          if (block.startsWith('# ')) return <h2 key={index} className="text-xl font-semibold">{block.slice(2)}</h2>;
-          if (block.startsWith('## ')) return <h3 key={index} className="mt-4 text-lg font-semibold">{block.slice(3)}</h3>;
-          if (block.startsWith('### ')) return <h4 key={index} className="mt-2 font-semibold">{block.slice(4)}</h4>;
-          const lines = block.split('\n');
-          if (lines.every((line) => /^\d+\. /.test(line)))
-            return (
-              <ol key={index} className="ml-5 grid list-decimal gap-1">
-                {lines.map((line) => <li key={line}>{bold(line.replace(/^\d+\. /, ''))}</li>)}
-              </ol>
-            );
-          if (lines.every((line) => line.startsWith('- ')))
-            return (
-              <ul key={index} className="ml-5 grid list-disc gap-1">
-                {lines.map((line) => <li key={line}>{bold(line.slice(2))}</li>)}
-              </ul>
-            );
-          return <p key={index}>{bold(lines.join(' '))}</p>;
-        })}
+        {intro.map((block, index) => <GuideBlock key={index} block={block} />)}
+        <div className="flex flex-wrap gap-1 border-b border-[#d8dee8]">
+          {tabs.map((item, index) => (
+            <button
+              key={item.title}
+              type="button"
+              title={item.title}
+              className={`-mb-px rounded-t-md border px-3 py-1.5 text-sm ${index === active ? 'border-[#d8dee8] border-b-white bg-white font-semibold text-[#1c2430]' : 'border-transparent text-[#5d6878] hover:text-[#1c2430]'}`}
+              onClick={() => setActive(index)}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+        {tab ? (
+          <>
+            <h3 className="text-lg font-semibold">{tab.title}</h3>
+            {names.length ? (
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-[#5d6878]">Отработали:</span>
+                {names.map((name) => (
+                  <button key={name} type="button" onClick={() => jump(name)} className="rounded-full bg-[#1f5fbf] px-2.5 py-0.5 text-xs font-medium text-white">
+                    {name}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            {tab.blocks.map((block, index) =>
+              block.startsWith('- агент:') ? (
+                <div key={index} className="grid gap-2">
+                  {parseAgents(block).map((agent) => (
+                    <AgentCard key={agent.name} agent={agent} anchor={`guide-agent-${names.indexOf(agent.name)}`} />
+                  ))}
+                </div>
+              ) : (
+                <GuideBlock key={index} block={block} />
+              ),
+            )}
+          </>
+        ) : null}
       </article>
     </Card>
   );
+}
+
+function AgentCard({ agent, anchor }: { agent: GuideAgent; anchor: string }) {
+  return (
+    <div id={anchor} className="scroll-mt-4 rounded-md border border-[#d8dee8] p-3">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="rounded-full bg-[#1f5fbf] px-2.5 py-0.5 text-xs font-medium text-white">{agent.name}</span>
+        {agent.mode ? <span className="rounded-full bg-[#eef1f5] px-2 py-0.5 text-xs text-[#5d6878]">{agent.mode}</span> : null}
+      </div>
+      <p className="mt-2">{bold(agent.did.charAt(0).toUpperCase() + agent.did.slice(1))}</p>
+      {agent.vars.length ? (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {agent.vars.map((item) => (
+            <span key={`${item.name}${item.value}`} className="rounded-md border border-[#c9d6ea] bg-[#f5f8fd] px-2 py-0.5 text-xs">
+              {item.name ? <b>{item.name}: </b> : null}
+              {item.value}
+              {item.where ? <span className={item.where === 'код' ? 'text-[#8a94a3]' : 'text-[#1d7a46]'}> · {item.where}</span> : null}
+            </span>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function GuideBlock({ block }: { block: string }) {
+  if (block.startsWith('# ')) return <h2 className="text-xl font-semibold">{block.slice(2)}</h2>;
+  if (block.startsWith('### ')) return <h4 className="mt-2 font-semibold">{block.slice(4)}</h4>;
+  const lines = block.split('\n');
+  if (lines.every((line) => /^\d+\. /.test(line)))
+    return (
+      <ol className="ml-5 grid list-decimal gap-1">
+        {lines.map((line) => <li key={line}>{bold(line.replace(/^\d+\. /, ''))}</li>)}
+      </ol>
+    );
+  if (lines.every((line) => line.startsWith('- ')))
+    return (
+      <ul className="ml-5 grid list-disc gap-1">
+        {lines.map((line) => <li key={line}>{bold(line.slice(2))}</li>)}
+      </ul>
+    );
+  return <p>{bold(lines.join(' '))}</p>;
 }
 
 function bold(text: string) {
