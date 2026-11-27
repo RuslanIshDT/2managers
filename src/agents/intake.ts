@@ -10,7 +10,7 @@ import { kpiStatus, personAddresses } from './k1.ts';
 import { forceMailAction, judgeMail } from './accuracy.ts';
 import { cardText, chainKey, discountLimit, enforce, failedRuling, judgeLetter, letterPrompt, textSignals, type ModelVerdict, type Ruled } from './k2.ts';
 import { withLlmScope } from '../llm.ts';
-import { judgeWithTools, stepsWords, type K2Context } from './k2-tools.ts';
+import { judgeWithTools, k2Context, stepsWords } from './k2-tools.ts';
 import { readHistory } from './dependence.ts';
 import { letterHits } from './replay.ts';
 import { applyRevision, revisionPrompt } from './revisions.ts';
@@ -200,17 +200,7 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
       } else {
         const ownKpi = kpiRows.filter((row) => row.personId === person.externalId);
         const ownTasks = taskRows.filter((row) => row.ownerName === person.name);
-        const ctx: K2Context = {
-          person,
-          authorities: ownAuth,
-          kpi: ownKpi,
-          tasks: ownTasks,
-          history: history.filter((row) => row.personId === person.externalId),
-          thread: pastMail
-            .filter((row) => personAddresses(person).includes(row.fromEmail.toLowerCase()))
-            .map((row) => ({ subject: row.subject, received: row.received, verdict: row.kind ?? '' })),
-          revisions: edits,
-        };
+        const ctx = k2Context(person, { authorities: authRows, kpi: kpiRows, tasks: taskRows, history, mail: pastMail, revisions: edits });
         let steps = '';
         const judged = await withLlmScope(
           { agent: 'k2', leaderId, operationId: `k2:${letter.id}`, title: letter.subject.slice(0, 180) || 'Разбор письма' },

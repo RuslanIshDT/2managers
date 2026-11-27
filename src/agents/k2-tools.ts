@@ -144,3 +144,29 @@ export function stepsWords(steps: K2Run['steps']): string {
   });
   return `Помощник посмотрел: ${[...new Set(names)].join(', ')}`;
 }
+
+// Контекст инструментов для одного отправителя из уже загруженных данных руководителя. Общий для разбора ящика и замера.
+export function k2Context(
+  person: K2Person & { externalId: string; email: string; extraEmail?: string },
+  data: {
+    authorities: (K2Context['authorities'][number] & { personId: string })[];
+    kpi: (K2Context['kpi'][number] & { personId: string })[];
+    tasks: (K2Context['tasks'][number] & { ownerName: string })[];
+    history: (K2Context['history'][number] & { personId: string })[];
+    mail: { fromEmail: string; subject: string; received: string; kind: string | null }[];
+    revisions: K2Context['revisions'];
+  },
+): K2Context {
+  const addresses = [person.email, person.extraEmail ?? ''].map((value) => value.trim().toLowerCase()).filter(Boolean);
+  return {
+    person,
+    authorities: data.authorities.filter((row) => row.personId === person.externalId),
+    kpi: data.kpi.filter((row) => row.personId === person.externalId),
+    tasks: data.tasks.filter((row) => row.ownerName === person.name),
+    history: data.history.filter((row) => row.personId === person.externalId),
+    thread: data.mail
+      .filter((row) => addresses.includes(row.fromEmail.toLowerCase()))
+      .map((row) => ({ subject: row.subject, received: row.received, verdict: row.kind ?? '' })),
+    revisions: data.revisions,
+  };
+}

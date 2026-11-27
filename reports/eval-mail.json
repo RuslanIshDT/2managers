@@ -1,0 +1,1223 @@
+{
+  "model": "anthropic/claude-haiku-4.5",
+  "at": "27.11.2026, 14:46:56 МСК",
+  "costUsd": 0.73873395,
+  "calls": 167,
+  "minutes": 2.2,
+  "score": {
+    "total": 80,
+    "correct": 77,
+    "accuracy": 0.9625,
+    "needLeader": 40,
+    "caught": 40,
+    "recall": 1,
+    "falseAlarms": 3,
+    "precision": 0.9302325581395349,
+    "n1": 36,
+    "n1Caught": 36,
+    "missed": [],
+    "alarms": [
+      {
+        "id": "m025",
+        "subject": "Доступ к CRM для нового сотрудника",
+        "senderRole": "коллега",
+        "category": "доступы",
+        "expected": "делегировать",
+        "route": "mail",
+        "action": "спросить_руководителя",
+        "toLeader": true,
+        "tools": [],
+        "error": ""
+      },
+      {
+        "id": "m034",
+        "subject": "Доступ к CRM для нового сотрудника",
+        "senderRole": "коллега",
+        "category": "доступы",
+        "expected": "делегировать",
+        "route": "mail",
+        "action": "спросить_руководителя",
+        "toLeader": true,
+        "tools": [],
+        "error": ""
+      },
+      {
+        "id": "m043",
+        "subject": "Доступ к CRM для нового сотрудника",
+        "senderRole": "коллега",
+        "category": "доступы",
+        "expected": "делегировать",
+        "route": "mail",
+        "action": "спросить_руководителя",
+        "toLeader": true,
+        "tools": [],
+        "error": ""
+      }
+    ],
+    "byRole": [
+      {
+        "role": "клиент",
+        "total": 8,
+        "correct": 8
+      },
+      {
+        "role": "коллега",
+        "total": 17,
+        "correct": 14
+      },
+      {
+        "role": "подчинённый",
+        "total": 33,
+        "correct": 33
+      },
+      {
+        "role": "приглашение",
+        "total": 4,
+        "correct": 4
+      },
+      {
+        "role": "рассылка",
+        "total": 8,
+        "correct": 8
+      },
+      {
+        "role": "руководитель руководителя",
+        "total": 10,
+        "correct": 10
+      }
+    ],
+    "mailExact": {
+      "total": 37,
+      "correct": 34
+    },
+    "errors": 0,
+    "toolCalls": {
+      "person_card": 43,
+      "authorities": 32,
+      "kpi": 11,
+      "thread": 19,
+      "open_tasks": 7,
+      "past_decisions": 3
+    }
+  },
+  "rows": [
+    {
+      "id": "m001",
+      "subject": "Сроки запуска интеграции",
+      "senderRole": "клиент",
+      "category": "обязательства_клиентам",
+      "expected": "спросить_руководителя",
+      "route": "mail",
+      "action": "спросить_руководителя",
+      "toLeader": true,
+      "tools": [],
+      "error": ""
+    },
+    {
+      "id": "m002",
+      "subject": "Запрос коммерческого предложения",
+      "senderRole": "клиент",
+      "category": "продажи",
+      "expected": "делегировать",
+      "route": "mail",
+      "action": "делегировать",
+      "toLeader": false,
+      "tools": [],
+      "error": ""
+    },
+    {
+      "id": "m003",
+      "subject": "Новости продуктов за декабрь",
+      "senderRole": "рассылка",
+      "category": "рассылка",
+      "expected": "игнорировать",
+      "route": "mail",
+      "action": "игнорировать",
+      "toLeader": false,
+      "tools": [],
+      "error": ""
+    },
+    {
+      "id": "m004",
+      "subject": "Новости продуктов за декабрь",
+      "senderRole": "рассылка",
+      "category": "рассылка",
+      "expected": "игнорировать",
+      "route": "mail",
+      "action": "игнорировать",
+      "toLeader": false,
+      "tools": [],
+      "error": ""
+    },
+    {
+      "id": "m005",
+      "subject": "Приглашение спикером на конференцию",
+      "senderRole": "приглашение",
+      "category": "приглашение",
+      "expected": "спросить_руководителя",
+      "route": "mail",
+      "action": "спросить_руководителя",
+      "toLeader": true,
+      "tools": [],
+      "error": ""
+    },
+    {
+      "id": "m006",
+      "subject": "Запрос коммерческого предложения",
+      "senderRole": "клиент",
+      "category": "продажи",
+      "expected": "делегировать",
+      "route": "mail",
+      "action": "делегировать",
+      "toLeader": false,
+      "tools": [],
+      "error": ""
+    },
+    {
+      "id": "m007",
+      "subject": "Прогноз выполнения плана декабря",
+      "senderRole": "подчинённый",
+      "category": "отчёт",
+      "expected": "в_сводку",
+      "route": "k2",
+      "action": "вернуть",
+      "toLeader": false,
+      "tools": [
+        "person_card",
+        "authorities",
+        "kpi",
+        "thread"
+      ],
+      "error": ""
+    },
+    {
+      "id": "m008",
+      "subject": "Перенос встречи по e-com на среду",
+      "senderRole": "подчинённый",
+      "category": "календарь",
+      "expected": "авто",
+      "route": "k2",
+      "action": "вернуть",
+      "toLeader": false,
+      "tools": [
+        "person_card",
+        "authorities"
+      ],
+      "error": ""
+    },
+    {
+      "id": "m009",
+      "subject": "Отпуск сотрудника сервиса 20–30 декабря",
+      "senderRole": "подчинённый",
+      "category": "кадры",
+      "expected": "спросить_руководителя",
+      "route": "k2",
+      "action": "спросить_руководителя",
+      "toLeader": true,
+      "tools": [
+        "person_card",
+        "authorities"
+      ],
+      "error": ""
+    },
+    {
+      "id": "m010",
+      "subject": "Отпуск сотрудника сервиса 20–30 декабря",
+      "senderRole": "подчинённый",
+      "category": "кадры",
+      "expected": "спросить_руководителя",
+      "route": "k2",
+      "action": "спросить_руководителя",
+      "toLeader": true,
+      "tools": [
+        "person_card",
+        "authorities"
+      ],
+      "error": ""
+    },
+    {
+      "id": "m011",
+      "subject": "Прогноз выполнения плана декабря",
+      "senderRole": "подчинённый",
+      "category": "отчёт",
+      "expected": "в_сводку",
+      "route": "k2",
+      "action": "вернуть",
+      "toLeader": false,
+      "tools": [
+        "person_card",
+        "authorities",
+        "kpi",
+        "thread"
+      ],
+      "error": ""
+    },
+    {
+      "id": "m012",
+      "subject": "Кандидат на позицию аккаунт-менеджера",
+      "senderRole": "коллега",
+      "category": "кадры",
+      "expected": "спросить_руководителя",
+      "route": "mail",
+      "action": "спросить_руководителя",
+      "toLeader": true,
+      "tools": [],
+      "error": ""
+    },
+    {
+      "id": "m013",
+      "subject": "Перераспределение бюджета Q1",
+      "senderRole": "коллега",
+      "category": "деньги",
+      "expected": "спросить_руководителя",
+      "route": "mail",
+      "action": "спросить_руководителя",
+      "toLeader": true,
+      "tools": [],
+      "error": ""
+    },
+    {
+      "id": "m014",
+      "subject": "Кандидат на позицию аккаунт-менеджера",
+      "senderRole": "коллега",
+      "category": "кадры",
+      "expected": "спросить_руководителя",
+      "route": "mail",
+      "action": "спросить_руководителя",
+      "toLeader": true,
+      "tools": [],
+      "error": ""
+    },
+    {
+      "id": "m015",
+      "subject": "Перераспределение бюджета Q1",
+      "senderRole": "коллега",
+      "category": "деньги",
+      "expected": "спросить_руководителя",
+      "route": "mail",
+      "action": "спросить_руководителя",
+      "toLeader": true,
+      "tools": [],
+      "error": ""
+    },
+    {
+      "id": "m016",
+      "subject": "Перераспределение бюджета Q1",
+      "senderRole": "коллега",
+      "category": "деньги",
+      "expected": "спросить_руководителя",
+      "route": "mail",
+      "action": "спросить_руководителя",
+      "toLeader": true,
+      "tools": [],
+      "error": ""
+    },
+    {
+      "id": "m017",
+      "subject": "Итоги встречи с партнёром",
+      "senderRole": "руководитель руководителя",
+      "category": "руководство",
+      "expected": "спросить_руководителя",
+      "route": "k2",
+      "action": "спросить_руководителя",
+      "toLeader": true,
+      "tools": [
+        "person_card",
+        "thread",
+        "open_tasks",
+        "past_decisions"
+      ],
+      "error": ""
+    },
+    {
+      "id": "m018",
+      "subject": "Перераспределение бюджета Q1",
+      "senderRole": "коллега",
+      "category": "деньги",
+      "expected": "спросить_руководителя",
+      "route": "mail",
+      "action": "спросить_руководителя",
+      "toLeader": true,
+      "tools": [],
+      "error": ""
+    },
+    {
+      "id": "m019",
+      "subject": "Итоги встречи с партнёром",
+      "senderRole": "руководитель руководителя",
+      "category": "руководство",
+      "expected": "спросить_руководителя",
+      "route": "k2",
+      "action": "спросить_руководителя",
+      "toLeader": true,
+      "tools": [
+        "person_card",
+        "thread"
+      ],
+      "error": ""
+    },
+    {
+      "id": "m020",
+      "subject": "Дашборд продаж обновлён",
+      "senderRole": "подчинённый",
+      "category": "отчёт",
+      "expected": "в_сводку",
+      "route": "k2",
+      "action": "вернуть",
+      "toLeader": false,
+      "tools": [
+        "person_card",
+        "kpi",
+        "open_tasks"
+      ],
+      "error": ""
+    },
+    {
+      "id": "m021",
+      "subject": "Приглашение спикером на конференцию",
+      "senderRole": "приглашение",
+      "category": "приглашение",
+      "expected": "спросить_руководителя",
+      "route": "mail",
+      "action": "спросить_руководителя",
+      "toLeader": true,
+      "tools": [],
+      "error": ""
+    },
+    {
+      "id": "m022",
+      "subject": "Статус по партнёру «Облако Плюс»",
+      "senderRole": "подчинённый",
+      "category": "статус",
+      "expected": "в_сводку",
+      "route": "k2",
+      "action": "вернуть",
+      "toLeader": false,
+      "tools": [
+        "person_card",
+        "authorities",
+        "thread"
+      ],
+      "error": ""
+    },
+    {
+      "id": "m023",
+      "subject": "Сроки запуска интеграции",
+      "senderRole": "клиент",
+      "category": "обязательства_клиентам",
+      "expected": "спросить_руководителя",
+      "route": "mail",
+      "action": "спросить_руководителя",
+      "toLeader": true,
+      "tools": [],
+      "error": ""
+    },
+    {
+      "id": "m024",
+      "subject": "Дашборд продаж обновлён",
+      "senderRole": "подчинённый",
+      "category": "отчёт",
+      "expected": "в_сводку",
+      "route": "k2",
+      "action": "вернуть",
+      "toLeader": false,
+      "tools": [
+        "person_card",
+        "kpi",
+        "open_tasks"
+      ],
+      "error": ""
+    },
+    {
+      "id": "m025",
+      "subject": "Доступ к CRM для нового сотрудника",
+      "senderRole": "коллега",
+      "category": "доступы",
+      "expected": "делегировать",
+      "route": "mail",
+      "action": "спросить_руководителя",
+      "toLeader": true,
+      "tools": [],
+      "error": ""
+    },
+    {
+      "id": "m026",
+      "subject": "Подготовить тезисы к совету директоров",
+      "senderRole": "руководитель руководителя",
+      "category": "руководство",
+      "expected": "спросить_руководителя",
+      "route": "k2",
+      "action": "спросить_руководителя",
+      "toLeader": true,
+      "tools": [
+        "person_card",
+        "authorities"
+      ],
+      "error": ""
+    },
+    {
+      "id": "m027",
+      "subject": "Отпуск сотрудника сервиса 20–30 декабря",
+      "senderRole": "подчинённый",
+      "category": "кадры",
+      "expected": "спросить_руководителя",
+      "route": "k2",
+      "action": "спросить_руководителя",
+      "toLeader": true,
+      "tools": [
+        "person_card",
+        "authorities"
+      ],
+      "error": ""
+    },
+    {
+      "id": "m028",
+      "subject": "Дашборд продаж обновлён",
+      "senderRole": "подчинённый",
+      "category": "отчёт",
+      "expected": "в_сводку",
+      "route": "k2",
+      "action": "вернуть",
+      "toLeader": false,
+      "tools": [
+        "person_card",
+        "kpi",
+        "open_tasks"
+      ],
+      "error": ""
+    },
+    {
+      "id": "m029",
+      "subject": "Кандидат на позицию аккаунт-менеджера",
+      "senderRole": "коллега",
+      "category": "кадры",
+      "expected": "спросить_руководителя",
+      "route": "mail",
+      "action": "спросить_руководителя",
+      "toLeader": true,
+      "tools": [],
+      "error": ""
+    },
+    {
+      "id": "m030",
+      "subject": "Отпуск сотрудника сервиса 20–30 декабря",
+      "senderRole": "подчинённый",
+      "category": "кадры",
+      "expected": "спросить_руководителя",
+      "route": "k2",
+      "action": "спросить_руководителя",
+      "toLeader": true,
+      "tools": [
+        "person_card",
+        "authorities"
+      ],
+      "error": ""
+    },
+    {
+      "id": "m031",
+      "subject": "Кандидат на позицию аккаунт-менеджера",
+      "senderRole": "коллега",
+      "category": "кадры",
+      "expected": "спросить_руководителя",
+      "route": "mail",
+      "action": "спросить_руководителя",
+      "toLeader": true,
+      "tools": [],
+      "error": ""
+    },
+    {
+      "id": "m032",
+      "subject": "Статус по партнёру «Облако Плюс»",
+      "senderRole": "подчинённый",
+      "category": "статус",
+      "expected": "в_сводку",
+      "route": "k2",
+      "action": "вернуть",
+      "toLeader": false,
+      "tools": [
+        "person_card",
+        "authorities",
+        "thread"
+      ],
+      "error": ""
+    },
+    {
+      "id": "m033",
+      "subject": "Приглашение спикером на конференцию",
+      "senderRole": "приглашение",
+      "category": "приглашение",
+      "expected": "спросить_руководителя",
+      "route": "mail",
+      "action": "спросить_руководителя",
+      "toLeader": true,
+      "tools": [],
+      "error": ""
+    },
+    {
+      "id": "m034",
+      "subject": "Доступ к CRM для нового сотрудника",
+      "senderRole": "коллега",
+      "category": "доступы",
+      "expected": "делегировать",
+      "route": "mail",
+      "action": "спросить_руководителя",
+      "toLeader": true,
+      "tools": [],
+      "error": ""
+    },
+    {
+      "id": "m035",
+      "subject": "Статус по партнёру «Облако Плюс»",
+      "senderRole": "подчинённый",
+      "category": "статус",
+      "expected": "в_сводку",
+      "route": "k2",
+      "action": "вернуть",
+      "toLeader": false,
+      "tools": [
+        "person_card",
+        "authorities",
+        "thread"
+      ],
+      "error": ""
+    },
+    {
+      "id": "m036",
+      "subject": "Кандидат на позицию аккаунт-менеджера",
+      "senderRole": "коллега",
+      "category": "кадры",
+      "expected": "спросить_руководителя",
+      "route": "mail",
+      "action": "спросить_руководителя",
+      "toLeader": true,
+      "tools": [],
+      "error": ""
+    },
+    {
+      "id": "m037",
+      "subject": "Кандидат на позицию аккаунт-менеджера",
+      "senderRole": "коллега",
+      "category": "кадры",
+      "expected": "спросить_руководителя",
+      "route": "mail",
+      "action": "спросить_руководителя",
+      "toLeader": true,
+      "tools": [],
+      "error": ""
+    },
+    {
+      "id": "m038",
+      "subject": "Статус по партнёру «Облако Плюс»",
+      "senderRole": "подчинённый",
+      "category": "статус",
+      "expected": "в_сводку",
+      "route": "k2",
+      "action": "вернуть",
+      "toLeader": false,
+      "tools": [
+        "person_card",
+        "authorities",
+        "thread"
+      ],
+      "error": ""
+    },
+    {
+      "id": "m039",
+      "subject": "Статус по партнёру «Облако Плюс»",
+      "senderRole": "подчинённый",
+      "category": "статус",
+      "expected": "в_сводку",
+      "route": "k2",
+      "action": "вернуть",
+      "toLeader": false,
+      "tools": [
+        "person_card",
+        "authorities",
+        "thread"
+      ],
+      "error": ""
+    },
+    {
+      "id": "m040",
+      "subject": "Перераспределение бюджета Q1",
+      "senderRole": "коллега",
+      "category": "деньги",
+      "expected": "спросить_руководителя",
+      "route": "mail",
+      "action": "спросить_руководителя",
+      "toLeader": true,
+      "tools": [],
+      "error": ""
+    },
+    {
+      "id": "m041",
+      "subject": "Перенос встречи по e-com на среду",
+      "senderRole": "подчинённый",
+      "category": "календарь",
+      "expected": "авто",
+      "route": "k2",
+      "action": "вернуть",
+      "toLeader": false,
+      "tools": [
+        "person_card",
+        "authorities"
+      ],
+      "error": ""
+    },
+    {
+      "id": "m042",
+      "subject": "Итоги встречи с партнёром",
+      "senderRole": "руководитель руководителя",
+      "category": "руководство",
+      "expected": "спросить_руководителя",
+      "route": "k2",
+      "action": "спросить_руководителя",
+      "toLeader": true,
+      "tools": [
+        "person_card",
+        "thread"
+      ],
+      "error": ""
+    },
+    {
+      "id": "m043",
+      "subject": "Доступ к CRM для нового сотрудника",
+      "senderRole": "коллега",
+      "category": "доступы",
+      "expected": "делегировать",
+      "route": "mail",
+      "action": "спросить_руководителя",
+      "toLeader": true,
+      "tools": [],
+      "error": ""
+    },
+    {
+      "id": "m044",
+      "subject": "Жалоба клиента на сроки ответа",
+      "senderRole": "подчинённый",
+      "category": "клиенты",
+      "expected": "делегировать",
+      "route": "k2",
+      "action": "вернуть",
+      "toLeader": false,
+      "tools": [
+        "person_card",
+        "authorities",
+        "thread"
+      ],
+      "error": ""
+    },
+    {
+      "id": "m045",
+      "subject": "Подготовить тезисы к совету директоров",
+      "senderRole": "руководитель руководителя",
+      "category": "руководство",
+      "expected": "спросить_руководителя",
+      "route": "k2",
+      "action": "спросить_руководителя",
+      "toLeader": true,
+      "tools": [
+        "person_card",
+        "authorities"
+      ],
+      "error": ""
+    },
+    {
+      "id": "m046",
+      "subject": "Подтвердите участие в планёрке",
+      "senderRole": "подчинённый",
+      "category": "календарь",
+      "expected": "авто",
+      "route": "k2",
+      "action": "вернуть",
+      "toLeader": false,
+      "tools": [
+        "person_card",
+        "authorities"
+      ],
+      "error": ""
+    },
+    {
+      "id": "m047",
+      "subject": "Дашборд продаж обновлён",
+      "senderRole": "подчинённый",
+      "category": "отчёт",
+      "expected": "в_сводку",
+      "route": "k2",
+      "action": "вернуть",
+      "toLeader": false,
+      "tools": [
+        "person_card",
+        "kpi",
+        "open_tasks"
+      ],
+      "error": ""
+    },
+    {
+      "id": "m048",
+      "subject": "Кандидат на позицию аккаунт-менеджера",
+      "senderRole": "коллега",
+      "category": "кадры",
+      "expected": "спросить_руководителя",
+      "route": "mail",
+      "action": "спросить_руководителя",
+      "toLeader": true,
+      "tools": [],
+      "error": ""
+    },
+    {
+      "id": "m049",
+      "subject": "Подготовить тезисы к совету директоров",
+      "senderRole": "руководитель руководителя",
+      "category": "руководство",
+      "expected": "спросить_руководителя",
+      "route": "k2",
+      "action": "спросить_руководителя",
+      "toLeader": true,
+      "tools": [
+        "person_card",
+        "authorities"
+      ],
+      "error": ""
+    },
+    {
+      "id": "m050",
+      "subject": "Дашборд продаж обновлён",
+      "senderRole": "подчинённый",
+      "category": "отчёт",
+      "expected": "в_сводку",
+      "route": "k2",
+      "action": "вернуть",
+      "toLeader": false,
+      "tools": [
+        "person_card",
+        "kpi",
+        "open_tasks"
+      ],
+      "error": ""
+    },
+    {
+      "id": "m051",
+      "subject": "Кандидат на позицию аккаунт-менеджера",
+      "senderRole": "коллега",
+      "category": "кадры",
+      "expected": "спросить_руководителя",
+      "route": "mail",
+      "action": "спросить_руководителя",
+      "toLeader": true,
+      "tools": [],
+      "error": ""
+    },
+    {
+      "id": "m052",
+      "subject": "Подтвердите участие в планёрке",
+      "senderRole": "подчинённый",
+      "category": "календарь",
+      "expected": "авто",
+      "route": "k2",
+      "action": "вернуть",
+      "toLeader": false,
+      "tools": [
+        "person_card",
+        "authorities"
+      ],
+      "error": ""
+    },
+    {
+      "id": "m053",
+      "subject": "Перераспределение бюджета Q1",
+      "senderRole": "коллега",
+      "category": "деньги",
+      "expected": "спросить_руководителя",
+      "route": "mail",
+      "action": "спросить_руководителя",
+      "toLeader": true,
+      "tools": [],
+      "error": ""
+    },
+    {
+      "id": "m054",
+      "subject": "Новости продуктов за декабрь",
+      "senderRole": "рассылка",
+      "category": "рассылка",
+      "expected": "игнорировать",
+      "route": "mail",
+      "action": "игнорировать",
+      "toLeader": false,
+      "tools": [],
+      "error": ""
+    },
+    {
+      "id": "m055",
+      "subject": "Прогноз выполнения плана декабря",
+      "senderRole": "подчинённый",
+      "category": "отчёт",
+      "expected": "в_сводку",
+      "route": "k2",
+      "action": "вернуть",
+      "toLeader": false,
+      "tools": [
+        "person_card",
+        "authorities",
+        "kpi",
+        "thread"
+      ],
+      "error": ""
+    },
+    {
+      "id": "m056",
+      "subject": "Прогноз выполнения плана декабря",
+      "senderRole": "подчинённый",
+      "category": "отчёт",
+      "expected": "в_сводку",
+      "route": "k2",
+      "action": "вернуть",
+      "toLeader": false,
+      "tools": [
+        "person_card",
+        "authorities",
+        "kpi",
+        "thread"
+      ],
+      "error": ""
+    },
+    {
+      "id": "m057",
+      "subject": "Новости продуктов за декабрь",
+      "senderRole": "рассылка",
+      "category": "рассылка",
+      "expected": "игнорировать",
+      "route": "mail",
+      "action": "игнорировать",
+      "toLeader": false,
+      "tools": [],
+      "error": ""
+    },
+    {
+      "id": "m058",
+      "subject": "Приглашение спикером на конференцию",
+      "senderRole": "приглашение",
+      "category": "приглашение",
+      "expected": "спросить_руководителя",
+      "route": "mail",
+      "action": "спросить_руководителя",
+      "toLeader": true,
+      "tools": [],
+      "error": ""
+    },
+    {
+      "id": "m059",
+      "subject": "Запрос коммерческого предложения",
+      "senderRole": "клиент",
+      "category": "продажи",
+      "expected": "делегировать",
+      "route": "mail",
+      "action": "делегировать",
+      "toLeader": false,
+      "tools": [],
+      "error": ""
+    },
+    {
+      "id": "m060",
+      "subject": "Статус по партнёру «Облако Плюс»",
+      "senderRole": "подчинённый",
+      "category": "статус",
+      "expected": "в_сводку",
+      "route": "k2",
+      "action": "вернуть",
+      "toLeader": false,
+      "tools": [
+        "person_card",
+        "authorities",
+        "thread"
+      ],
+      "error": ""
+    },
+    {
+      "id": "m061",
+      "subject": "Подготовить тезисы к совету директоров",
+      "senderRole": "руководитель руководителя",
+      "category": "руководство",
+      "expected": "спросить_руководителя",
+      "route": "k2",
+      "action": "спросить_руководителя",
+      "toLeader": true,
+      "tools": [
+        "person_card",
+        "authorities"
+      ],
+      "error": ""
+    },
+    {
+      "id": "m062",
+      "subject": "Скидка 12% для «Ромашка-Ритейл» — нужно согласование",
+      "senderRole": "подчинённый",
+      "category": "деньги",
+      "expected": "спросить_руководителя",
+      "route": "k2",
+      "action": "спросить_руководителя",
+      "toLeader": true,
+      "tools": [
+        "person_card",
+        "authorities",
+        "past_decisions"
+      ],
+      "error": ""
+    },
+    {
+      "id": "m063",
+      "subject": "Отпуск сотрудника сервиса 20–30 декабря",
+      "senderRole": "подчинённый",
+      "category": "кадры",
+      "expected": "спросить_руководителя",
+      "route": "k2",
+      "action": "спросить_руководителя",
+      "toLeader": true,
+      "tools": [
+        "person_card",
+        "authorities"
+      ],
+      "error": ""
+    },
+    {
+      "id": "m064",
+      "subject": "Новости продуктов за декабрь",
+      "senderRole": "рассылка",
+      "category": "рассылка",
+      "expected": "игнорировать",
+      "route": "mail",
+      "action": "игнорировать",
+      "toLeader": false,
+      "tools": [],
+      "error": ""
+    },
+    {
+      "id": "m065",
+      "subject": "Дашборд продаж обновлён",
+      "senderRole": "подчинённый",
+      "category": "отчёт",
+      "expected": "в_сводку",
+      "route": "k2",
+      "action": "вернуть",
+      "toLeader": false,
+      "tools": [
+        "person_card",
+        "kpi",
+        "open_tasks"
+      ],
+      "error": ""
+    },
+    {
+      "id": "m066",
+      "subject": "Жалоба клиента на сроки ответа",
+      "senderRole": "подчинённый",
+      "category": "клиенты",
+      "expected": "делегировать",
+      "route": "k2",
+      "action": "вернуть",
+      "toLeader": false,
+      "tools": [
+        "person_card",
+        "authorities",
+        "thread"
+      ],
+      "error": ""
+    },
+    {
+      "id": "m067",
+      "subject": "Новости продуктов за декабрь",
+      "senderRole": "рассылка",
+      "category": "рассылка",
+      "expected": "игнорировать",
+      "route": "mail",
+      "action": "игнорировать",
+      "toLeader": false,
+      "tools": [],
+      "error": ""
+    },
+    {
+      "id": "m068",
+      "subject": "Сроки запуска интеграции",
+      "senderRole": "клиент",
+      "category": "обязательства_клиентам",
+      "expected": "спросить_руководителя",
+      "route": "mail",
+      "action": "спросить_руководителя",
+      "toLeader": true,
+      "tools": [],
+      "error": ""
+    },
+    {
+      "id": "m069",
+      "subject": "Перенос встречи по e-com на среду",
+      "senderRole": "подчинённый",
+      "category": "календарь",
+      "expected": "авто",
+      "route": "k2",
+      "action": "вернуть",
+      "toLeader": false,
+      "tools": [
+        "person_card",
+        "authorities"
+      ],
+      "error": ""
+    },
+    {
+      "id": "m070",
+      "subject": "Итоги встречи с партнёром",
+      "senderRole": "руководитель руководителя",
+      "category": "руководство",
+      "expected": "спросить_руководителя",
+      "route": "k2",
+      "action": "спросить_руководителя",
+      "toLeader": true,
+      "tools": [
+        "person_card",
+        "thread"
+      ],
+      "error": ""
+    },
+    {
+      "id": "m071",
+      "subject": "Запрос коммерческого предложения",
+      "senderRole": "клиент",
+      "category": "продажи",
+      "expected": "делегировать",
+      "route": "mail",
+      "action": "делегировать",
+      "toLeader": false,
+      "tools": [],
+      "error": ""
+    },
+    {
+      "id": "m072",
+      "subject": "Итоги встречи с партнёром",
+      "senderRole": "руководитель руководителя",
+      "category": "руководство",
+      "expected": "спросить_руководителя",
+      "route": "k2",
+      "action": "спросить_руководителя",
+      "toLeader": true,
+      "tools": [
+        "person_card",
+        "thread"
+      ],
+      "error": ""
+    },
+    {
+      "id": "m073",
+      "subject": "Прогноз выполнения плана декабря",
+      "senderRole": "подчинённый",
+      "category": "отчёт",
+      "expected": "в_сводку",
+      "route": "k2",
+      "action": "вернуть",
+      "toLeader": false,
+      "tools": [
+        "person_card",
+        "authorities",
+        "kpi",
+        "thread"
+      ],
+      "error": ""
+    },
+    {
+      "id": "m074",
+      "subject": "Новости продуктов за декабрь",
+      "senderRole": "рассылка",
+      "category": "рассылка",
+      "expected": "игнорировать",
+      "route": "mail",
+      "action": "игнорировать",
+      "toLeader": false,
+      "tools": [],
+      "error": ""
+    },
+    {
+      "id": "m075",
+      "subject": "Новости продуктов за декабрь",
+      "senderRole": "рассылка",
+      "category": "рассылка",
+      "expected": "игнорировать",
+      "route": "mail",
+      "action": "игнорировать",
+      "toLeader": false,
+      "tools": [],
+      "error": ""
+    },
+    {
+      "id": "m076",
+      "subject": "Подготовить тезисы к совету директоров",
+      "senderRole": "руководитель руководителя",
+      "category": "руководство",
+      "expected": "спросить_руководителя",
+      "route": "k2",
+      "action": "спросить_руководителя",
+      "toLeader": true,
+      "tools": [
+        "person_card",
+        "authorities"
+      ],
+      "error": ""
+    },
+    {
+      "id": "m077",
+      "subject": "Сроки запуска интеграции",
+      "senderRole": "клиент",
+      "category": "обязательства_клиентам",
+      "expected": "спросить_руководителя",
+      "route": "mail",
+      "action": "спросить_руководителя",
+      "toLeader": true,
+      "tools": [],
+      "error": ""
+    },
+    {
+      "id": "m078",
+      "subject": "Отпуск сотрудника сервиса 20–30 декабря",
+      "senderRole": "подчинённый",
+      "category": "кадры",
+      "expected": "спросить_руководителя",
+      "route": "k2",
+      "action": "спросить_руководителя",
+      "toLeader": true,
+      "tools": [
+        "person_card",
+        "authorities"
+      ],
+      "error": ""
+    },
+    {
+      "id": "m079",
+      "subject": "Скидка 12% для «Ромашка-Ритейл» — нужно согласование",
+      "senderRole": "подчинённый",
+      "category": "деньги",
+      "expected": "спросить_руководителя",
+      "route": "k2",
+      "action": "спросить_руководителя",
+      "toLeader": true,
+      "tools": [
+        "person_card",
+        "authorities",
+        "past_decisions"
+      ],
+      "error": ""
+    },
+    {
+      "id": "m080",
+      "subject": "Статус по партнёру «Облако Плюс»",
+      "senderRole": "подчинённый",
+      "category": "статус",
+      "expected": "в_сводку",
+      "route": "k2",
+      "action": "вернуть",
+      "toLeader": false,
+      "tools": [
+        "person_card",
+        "authorities",
+        "thread"
+      ],
+      "error": ""
+    }
+  ]
+}

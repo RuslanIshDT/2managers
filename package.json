@@ -18,7 +18,8 @@
     "requests": "node --env-file=.env src/scripts/requests.ts",
     "reset-stand": "node src/scripts/reset-stand.ts",
     "sync-materials": "node src/scripts/sync-materials.ts",
-    "e2e": "playwright test"
+    "e2e": "playwright test",
+    "eval": "node --env-file-if-exists=.env src/scripts/eval.ts"
   },
   "dependencies": {
     "@fastify/cookie": "11.0.2",
