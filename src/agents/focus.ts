@@ -83,6 +83,7 @@ export function adviceTitle(row: { name: string; cell: MatrixCell }): string | n
 export interface MorningInput {
   today: string;
   waiting: { who: string; what: string; days: number }[];
+  ownWeek: { title: string; dueOn: string }[];
   plan: { title: string; goal: string; minutes: number; why: string }[] | null;
   returned: { who: string; what: string }[];
   overdue: { title: string; owner: string; days: number }[];
@@ -98,6 +99,11 @@ export function renderMorning(input: MorningInput): string {
     input.waiting.length
       ? ['Ждут вашего решения:', ...input.waiting.map((row) => `— ${row.who}: ${row.what} (${waitWords(row.days)})`)]
       : ['Решений, которые ждут вас, нет.'],
+  );
+  blocks.push(
+    input.ownWeek.length
+      ? ['Ваши задачи со сроком в ближайшую неделю:', ...input.ownWeek.map((task) => `— ${task.title}, ${dueWords(task.dueOn, input.today)}`)]
+      : ['Ваших задач со сроком в ближайшую неделю нет.'],
   );
   if (input.plan === null) blocks.push(['Три дела на сегодня модель выберет при отправке.']);
   else if (!input.plan.length) blocks.push(['Три дела на сегодня: модель не выбрала ни одного.']);
@@ -118,6 +124,30 @@ export function renderMorning(input: MorningInput): string {
     `Время встреч на ваши цели: ${input.share.percent}% (${hours(input.share.onGoal)} из ${hours(input.share.total)} ч по календарю).`,
   ]);
   return blocks.map((block) => block.join('\n')).join('\n\n');
+}
+
+// Свои задачи руководителя, которые показываются всегда: срок в ближайшие 7 дней или уже прошёл (владелец 27.11.2026).
+export const OWN_WEEK_DAYS = 7;
+
+export function ownWeekTasks<T extends { dueOn: string; status: string }>(tasks: T[], today: string): T[] {
+  const until = addDays(today, OWN_WEEK_DAYS);
+  return tasks
+    .filter((task) => task.status !== 'сделана' && task.status !== 'закрыта')
+    .filter((task) => /^\d{4}-\d{2}-\d{2}$/.test(task.dueOn) && task.dueOn <= until)
+    .sort((a, b) => a.dueOn.localeCompare(b.dueOn));
+}
+
+function dueWords(dueOn: string, today: string): string {
+  const days = Math.round((Date.parse(`${dueOn}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86_400_000);
+  if (days < 0) return `срок был ${dateWords(dueOn)}, просрочено на ${dayCount(-days)}`;
+  if (days === 0) return `срок сегодня, ${dateWords(dueOn)}`;
+  if (days === 1) return `срок завтра, ${dateWords(dueOn)}`;
+  return `срок ${dateWords(dueOn)}, через ${dayCount(days)}`;
+}
+
+function addDays(day: string, delta: number): string {
+  const [year, month, date] = day.split('-').map(Number);
+  return new Date(Date.UTC(year, month - 1, date + delta)).toISOString().slice(0, 10);
 }
 
 function waitWords(days: number): string {

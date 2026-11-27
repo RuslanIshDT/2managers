@@ -5,7 +5,7 @@ import { decisions, focusPlans, freedSlots, leaders, meetings, seriesKind, tasks
 import { calendarAfter } from './free-time.ts';
 import { departmentForLeader } from './k1.ts';
 import { chooseFocus, classifySeries, type Candidate, type FocusPlan } from './conductor.ts';
-import { adviceTitle, departmentMatrix, goalMinutes, overdueLines, overdueTasks, renderMorning } from './focus.ts';
+import { adviceTitle, departmentMatrix, goalMinutes, overdueLines, overdueTasks, ownWeekTasks, renderMorning } from './focus.ts';
 import { withLlmScope } from '../llm.ts';
 import { textSignals } from './k2.ts';
 import { sendMessage } from '../telegram.ts';
@@ -68,6 +68,9 @@ async function sceneFor(db: Db, leaderId: string, leaderName: string) {
   const clock = clockFor(leaderId);
   const today = clock.today;
   const ownTasks = taskRows.filter((row) => row.ownerName === leaderName && row.status !== 'сделана' && row.status !== 'закрыта');
+  // Задачи руководителя со сроком в ближайшую неделю идут отдельным блоком всегда, поэтому в выбор трёх дел не входят.
+  const ownWeek = ownWeekTasks(ownTasks, today);
+  const weekIds = new Set(ownWeek.map((row) => row.externalId));
   const overdue = overdueTasks(
     taskRows
       .filter((row) => row.ownerName !== leaderName)
@@ -92,7 +95,7 @@ async function sceneFor(db: Db, leaderId: string, leaderName: string) {
     .map((row) => ({ who: row.replyName, what: row.subject || row.summary }));
   const goalOf = (name: string) => department.people.find((person) => person.name === name)?.goal ?? '';
   const candidates: Candidate[] = [
-    ...ownTasks.map((row) => ({
+    ...ownTasks.filter((row) => !weekIds.has(row.externalId)).map((row) => ({
       id: `task:${row.externalId}`,
       kind: 'задача',
       title: row.title,
@@ -109,7 +112,15 @@ async function sceneFor(db: Db, leaderId: string, leaderName: string) {
     meetingRows.map((row) => ({ minutes: row.minutes, summary: row.summary, goal: row.goal })),
     department.people.flatMap((person) => [person.goal, person.leaderGoal]),
   );
-  const morning = { today, waiting, returned, overdue, todayMeetings: titlesOn(meetingRows, today), share };
+  const morning = {
+    today,
+    waiting,
+    ownWeek: ownWeek.map((row) => ({ title: row.title, dueOn: row.dueOn })),
+    returned,
+    overdue,
+    todayMeetings: titlesOn(meetingRows, today),
+    share,
+  };
   return {
     matrix,
     share,

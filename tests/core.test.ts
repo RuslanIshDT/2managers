@@ -21,7 +21,7 @@ import { parseMailboxSource, syntheticSource } from '../src/mail.ts';
 import { applyOrigin, formOrigin, requestOrigin } from '../src/http/origin.ts';
 import { mailConfig } from '../src/mail.ts';
 import { staffCard } from '../src/agents/dependence.ts';
-import { adviceTitle, departmentMatrix, goalMinutes, overdueLines, overdueTasks, renderMorning } from '../src/agents/focus.ts';
+import { adviceTitle, departmentMatrix, goalMinutes, overdueLines, overdueTasks, ownWeekTasks, renderMorning } from '../src/agents/focus.ts';
 import { applyChoice } from '../src/agents/conductor.ts';
 import { burningSeries, noteToSend, pendingNotes, weeklyNotes } from '../src/agents/mirror.ts';
 import { letterHits, replayWeek, ruleEffect, rulesFromAudit, trustOffers, waitingHours } from '../src/agents/replay.ts';
@@ -387,6 +387,7 @@ describe('дирижёр', () => {
     const text = renderMorning({
       today: '2026-12-11',
       waiting: [],
+      ownWeek: [],
       plan: plan.today,
       returned: [],
       overdue: [],
@@ -399,6 +400,18 @@ describe('дирижёр', () => {
     expect(text).not.toContain('Лишнее');
   });
 });
+
+const emptyMorning = {
+  today: '2026-12-11',
+  waiting: [],
+  ownWeek: [],
+  plan: null,
+  returned: [],
+  overdue: [],
+  todayMeetings: [],
+  openItems: [],
+  share: { onGoal: 0, total: 0, percent: 0 },
+};
 
 describe('утро и матрица', () => {
   it('тихая проблема — тот, кто отстаёт и не пишет; у другого отдела её нет', async () => {
@@ -445,6 +458,10 @@ describe('утро и матрица', () => {
         { who: 'Ольга', what: 'Скидка 12%', days: 1 },
         { who: 'Мария', what: 'Отпуск', days: 0 },
       ],
+      ownWeek: [
+        { title: 'Отчёт совету', dueOn: '2026-11-25' },
+        { title: 'Согласовать бюджет', dueOn: '2026-11-29' },
+      ],
       plan: null,
       returned: [{ who: 'Анна', what: 'Перенос встречи' }],
       overdue: late,
@@ -454,6 +471,18 @@ describe('утро и матрица', () => {
     });
     // Решения, которые ждут руководителя, — первым блоком после заголовка.
     expect(morning.split('\n\n')[1]).toBe('Ждут вашего решения:\n— Ольга: Скидка 12% (ждёт 1 день)\n— Мария: Отпуск (ждёт меньше дня)');
+    // Свои задачи на неделе — сразу после решений, всегда, с понятным сроком.
+    expect(morning.split('\n\n')[2]).toBe(
+      'Ваши задачи со сроком в ближайшую неделю:\n— Отчёт совету, срок был 25 ноября, просрочено на 2 дня\n— Согласовать бюджет, срок 29 ноября, через 2 дня',
+    );
+    const own = [
+      { title: 'Бюджет', dueOn: '2026-12-13', status: 'в работе' },
+      { title: 'Тезисы', dueOn: '2026-12-26', status: 'в работе' },
+      { title: 'Старое', dueOn: '2026-12-01', status: 'сделана' },
+      { title: 'Сегодня', dueOn: '2026-12-11', status: 'новая' },
+    ];
+    expect(ownWeekTasks(own, '2026-12-11').map((task) => task.title)).toEqual(['Сегодня', 'Бюджет']);
+    expect(renderMorning({ ...emptyMorning, ownWeek: [] })).toContain('Ваших задач со сроком в ближайшую неделю нет.');
     expect(morning).toContain('План на 27 ноября');
     expect(morning).toContain('— Анна: Перенос встречи');
     expect(morning).toContain('Сдать линию');
