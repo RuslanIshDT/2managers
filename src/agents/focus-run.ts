@@ -10,6 +10,7 @@ import { withLlmScope } from '../llm.ts';
 import { textSignals } from './k2.ts';
 import { sendMessage } from '../telegram.ts';
 import { morningQuestions } from './protocol-context.ts';
+import { oneOnOneForDay } from './one-on-one.ts';
 import { clockFor, dateWords, moscowDay, shiftDay, waitedDays } from './scene.ts';
 import { liveSources, type LiveMeeting, type LiveTask } from './live-sources.ts';
 import { sendTaskReminders } from './reminders.ts';
@@ -37,7 +38,13 @@ export async function sendFocus(db: Db, leaderId: string) {
     () => chooseFocus({ purpose: `k4:${leaderId}`, profile: leader.profile, candidates: scene.candidates, names: scene.names }),
   );
   const questions = await morningQuestions(db, leaderId, scene.meetings, scene.morning.today, shiftDay(scene.morning.today, 1));
-  const text = renderMorning({ ...scene.morning, plan: plan.today, questions, notes: live.notes, rules });
+  let oneOnOne: { name: string; lines: { text: string; sources: string[] }[] }[] = [];
+  try {
+    oneOnOne = await oneOnOneForDay(db, leaderId, leader.name, scene.morning.today, live.meetings ?? scene.meetings, live.tasks);
+  } catch (err) {
+    console.error('Сводка к встрече один на один не собралась', err instanceof Error ? err.message : err);
+  }
+  const text = renderMorning({ ...scene.morning, plan: plan.today, questions, notes: live.notes, rules, oneOnOne });
   try {
     await sendTaskReminders(db, leaderId, leader.name, live.tasks, clockFor(leaderId).today);
   } catch (err) {

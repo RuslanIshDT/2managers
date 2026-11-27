@@ -113,6 +113,7 @@ export interface MorningInput {
   returned: { who: string; what: string }[];
   overdue: { title: string; owner: string; days: number }[];
   todayMeetings: string[];
+  oneOnOne?: { name: string; lines: { text: string; sources: string[] }[] }[];
   questions: { title: string; items: string[] }[];
   share: { onGoal: number; total: number; percent: number };
   notes?: string[];
@@ -138,7 +139,7 @@ export function renderMorning(input: MorningInput): string {
       : ['Ваших задач со сроком в ближайшую неделю нет.']
     ).join('\n'),
   );
-  parts.set('meetings', input.todayMeetings.length ? `Встречи сегодня: ${input.todayMeetings.join('; ')}.` : 'Сегодня встреч в календаре нет.');
+  parts.set('meetings', meetingsBlock(input));
   parts.set(
     'plan',
     input.plan === null
@@ -164,6 +165,17 @@ export function renderMorning(input: MorningInput): string {
   }
   if (input.notes?.length) blocks.push(input.notes.join('\n'));
   return blocks.join('\n\n');
+}
+
+function meetingsBlock(input: MorningInput): string {
+  const line = input.todayMeetings.length ? `Встречи сегодня: ${input.todayMeetings.join('; ')}.` : 'Сегодня встреч в календаре нет.';
+  const briefs = (input.oneOnOne ?? []).filter((block) => block.lines.length);
+  if (!briefs.length) return line;
+  const blocks = briefs.map((block) => {
+    const lines = block.lines.flatMap((item) => [`— ${item.text}`, ...item.sources.map((source) => `  ${source}`)]);
+    return [`Что ${block.name} ждёт от вас:`, ...lines].join('\n');
+  });
+  return [line, ...blocks].join('\n\n');
 }
 
 // Свои задачи руководителя, которые показываются всегда: срок в ближайшие 7 дней или уже прошёл (владелец 27.11.2026).
