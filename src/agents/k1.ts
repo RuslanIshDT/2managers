@@ -179,10 +179,22 @@ export async function loadDepartment(db: Db, leaderId: string, dir = 'data/synth
   if (checked.errors.length === 0) {
     await db.transaction(async (tx) => {
       await tx.update(people).set({ zone: '', goal: '', leaderGoal: '' }).where(eq(people.leaderId, leaderId));
+      const current = await tx.select().from(people).where(eq(people.leaderId, leaderId));
       for (const card of checked.cards) {
+        const row = current.find((person) => person.externalId === card.personId);
+        const file = data.people.find((person) => person.id === card.personId);
+        const patch: { zone: string; goal: string; leaderGoal: string; email?: string; extraEmail?: string } = {
+          zone: card.zone,
+          goal: card.goal,
+          leaderGoal: card.leaderGoal,
+        };
+        if (row && file && row.email.trim() && file.email.trim() && row.email.toLowerCase() !== file.email.toLowerCase()) {
+          patch.email = file.email;
+          if (!row.extraEmail.trim()) patch.extraEmail = row.email;
+        }
         await tx
           .update(people)
-          .set({ zone: card.zone, goal: card.goal, leaderGoal: card.leaderGoal })
+          .set(patch)
           .where(and(eq(people.leaderId, leaderId), eq(people.externalId, card.personId)));
       }
       await tx.delete(kpis).where(eq(kpis.leaderId, leaderId));
@@ -232,6 +244,17 @@ export async function loadDepartment(db: Db, leaderId: string, dir = 'data/synth
   return { errors: checked.errors, loaded: checked.cards.length };
 }
 
+export function personAddresses(person: { email: string; extraEmail?: string }): string[] {
+  return [person.email, person.extraEmail ?? ''].map((value) => value.trim().toLowerCase()).filter(Boolean);
+}
+
+function countedMail(mail: Map<string, number>, email: string, extra: string): number {
+  const keys = new Set(personAddresses({ email, extraEmail: extra }));
+  let sum = 0;
+  for (const key of keys) sum += mail.get(key) ?? 0;
+  return sum;
+}
+
 export async function departmentForLeader(db: Db, leaderId: string) {
   const [rows, kpiRows, authRows, mailRows, run] = await Promise.all([
     db.select().from(people).where(eq(people.leaderId, leaderId)),
@@ -265,7 +288,7 @@ export async function departmentForLeader(db: Db, leaderId: string) {
         zone: person.zone,
         goal: person.goal,
         leaderGoal: person.leaderGoal,
-        emails: mail.get(person.email.toLowerCase()) ?? 0,
+        emails: countedMail(mail, person.email, person.extraEmail),
         kpis: seriesOf(points),
         authorities: authRows
           .filter((row) => row.personId === person.externalId)

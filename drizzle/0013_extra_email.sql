@@ -1,0 +1,1 @@
+ALTER TABLE people ADD COLUMN IF NOT EXISTS extra_email text NOT NULL DEFAULT '';

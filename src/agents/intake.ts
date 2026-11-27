@@ -6,7 +6,7 @@ import { authorities, decisions, kpis, leaders, mailIn, people, revisions, tasks
 import { mailConfig, sendMail, type MailboxLetter } from '../mail.ts';
 import { sendDecisionCard } from '../telegram.ts';
 import { staffFromVerdict } from './dependence.ts';
-import { kpiStatus } from './k1.ts';
+import { kpiStatus, personAddresses } from './k1.ts';
 import { cardText, chainKey, discountLimit, enforce, judgeLetter, letterPrompt, type ModelVerdict, type Ruled } from './k2.ts';
 import { withLlmScope } from '../llm.ts';
 import { letterHits } from './replay.ts';
@@ -96,7 +96,7 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
   for (const letter of pending) {
     if (isOwnAddress(letter.fromEmail, mailbox)) continue;
     if (seen.has(letter.messageId)) continue;
-    const person = persons.find((row) => row.email.toLowerCase() === letter.fromEmail.toLowerCase());
+    const person = persons.find((row) => personAddresses(row).includes(letter.fromEmail.toLowerCase()));
     const boss = person?.role === 'руководитель руководителя';
     if (!person || (person.role !== 'подчинённый' && !boss)) {
       if (letter.marked !== false) continue;

@@ -184,10 +184,26 @@ async function categoriesByLetter(db: Db, leaderId: string): Promise<Map<string,
   return map;
 }
 
+export async function ownProposal(db: Db, leaderId: string): Promise<FlowRule[]> {
+  const stored = await db.select().from(flowReports).where(eq(flowReports.leaderId, leaderId)).limit(1);
+  const pieces = piecesOf(stored[0]?.report);
+  if (!pieces.length) return [];
+  const [history, persons] = await Promise.all([
+    historyOf(leaderId),
+    db.select().from(people).where(eq(people.leaderId, leaderId)),
+  ]);
+  const emailByPerson = new Map(persons.map((person) => [person.externalId, person.email]));
+  return rulesFromAudit(pieces, trustOffers(history), emailByPerson, await categoriesByLetter(db, leaderId));
+}
+
 async function readPieces(db: Db, leaderId: string): Promise<AuditPiece[]> {
   const stored = await db.select().from(flowReports).where(eq(flowReports.leaderId, leaderId)).limit(1);
   const report = stored[0]?.report ?? JSON.parse(await readFile('reports/flow-audit.json', 'utf8'));
-  const items = (report as { items?: unknown }).items;
+  return piecesOf(report);
+}
+
+function piecesOf(report: unknown): AuditPiece[] {
+  const items = (report as { items?: unknown } | null)?.items;
   if (!Array.isArray(items)) return [];
   const pieces: AuditPiece[] = [];
   for (const raw of items) {

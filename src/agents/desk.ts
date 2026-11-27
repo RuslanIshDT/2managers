@@ -5,7 +5,7 @@ import { authorities, decisions, emails, focusPlans, kpis, llmCalls, meetings, p
 import { readHistory } from './dependence.ts';
 import { kpiStatus } from './k1.ts';
 import { letterHits, meetingHits, replayWeek, trustOffers, type FlowRule, type HistoryRow } from './replay.ts';
-import { listFlowRules } from './week.ts';
+import { listFlowRules, ownProposal } from './week.ts';
 
 const LETTER_MINUTES = 4;
 const SAFETY =
@@ -27,7 +27,8 @@ export interface WorkItem {
   title: string;
   wait: string;
   minutes: string;
-  kind: 'decision' | 'talk' | 'right' | 'series' | 'task';
+  kind: 'decision' | 'talk' | 'right' | 'series' | 'task' | 'rules';
+  lines: { id: string; title: string }[];
   origin: Origin;
 }
 
@@ -65,6 +66,7 @@ export interface DeskInput {
   authorities: { personId: string; area: string; limit: string; unit: string }[];
   history: HistoryRow[];
   series: { title: string; open: boolean }[];
+  relief: { letters: number; meetings: number } | null;
   tasks: { title: string; minutes: number; goal: string }[];
   calls: { purpose: string; at: string }[];
 }
@@ -91,6 +93,17 @@ export function buildDesk(input: DeskInput): Desk {
   const offers = trustOffers(input.history).map((offer) => ({ ...offer, name: names.get(offer.personId) ?? '' }));
 
   const work: WorkItem[] = [];
+  if (!input.accepted && input.relief && (input.relief.letters > 0 || input.relief.meetings > 0)) {
+    work.push({
+      id: 'rules:week',
+      title: `Примите правила недели: уйдёт ${countWords(input.relief.letters, 'письмо', 'письма', 'писем')} и ${countWords(input.relief.meetings, 'встреча', 'встречи', 'встреч')}`,
+      wait: '',
+      minutes: '',
+      kind: 'rules',
+      lines: [],
+      origin: made('k10', 'Правила потока', 'Подсчёт по отчёту аудита этого руководителя, правила ещё не записаны', 'Посчитано по данным', []),
+    });
+  }
   for (const decision of input.decisions.filter((row) => row.status === 'ждёт')) {
     const letter =
       input.letters.find((row) => row.subject === decision.summary) ??
@@ -105,6 +118,7 @@ export function buildDesk(input: DeskInput): Desk {
       wait: decision.createdAt ? `Ждёт с ${dateWords(decision.createdAt)}` : '',
       minutes: '',
       kind: 'decision',
+      lines: [],
       origin: made('k2', 'Проверка полномочий', rows.filter(Boolean).join('. '), howModel(input.calls, 'k2', 'скидка в тексте письма выше полномочия этого человека'), rows),
     });
   }
@@ -116,6 +130,7 @@ export function buildDesk(input: DeskInput): Desk {
       wait: person.laggingWeeks.length ? `KPI отстаёт ${countWords(person.laggingWeeks.length, 'неделю', 'недели', 'недель')}` : '',
       minutes: '',
       kind: 'talk',
+      lines: [],
       origin: made('k8', 'Контроль KPI', `${person.name}: писем ${person.emails}. ${weeks}`, 'Посчитано по данным', person.laggingWeeks.map((row) => `${person.name}, ${row.name}, ${dateWords(row.week)}`)),
     });
   }
@@ -127,6 +142,7 @@ export function buildDesk(input: DeskInput): Desk {
       wait: '',
       minutes: '',
       kind: 'right',
+      lines: [],
       origin: made(
         'k12',
         'Доверие по решениям',
@@ -136,25 +152,38 @@ export function buildDesk(input: DeskInput): Desk {
       ),
     });
   }
-  for (const series of input.series.filter((row) => row.open)) {
-    const related = input.meetings.filter((meeting) => meeting.summary === series.title);
-    const minutes = related.reduce((sum, meeting) => sum + (meeting.minutes > 0 ? meeting.minutes : 0), 0);
+  const openSeries = input.series.filter((row) => row.open);
+  if (openSeries.length) {
+    const lines = openSeries.map((series) => {
+      const minutes = input.meetings
+        .filter((meeting) => meeting.summary === series.title)
+        .reduce((sum, meeting) => sum + (meeting.minutes > 0 ? meeting.minutes : 0), 0);
+      const time = minutes > 0 ? `, ${countWords(minutes, 'минута', 'минуты', 'минут')}` : '';
+      return { id: `series:${series.title}`, title: `${series.title}${time}` };
+    });
+    const minutes = openSeries.reduce((sum, series) => {
+      return sum + input.meetings.filter((meeting) => meeting.summary === series.title).reduce((part, meeting) => part + (meeting.minutes > 0 ? meeting.minutes : 0), 0);
+    }, 0);
+    const time = calendarWords(minutes);
     work.push({
-      id: `series:${series.title}`,
-      title: `Отпустите «${series.title}»`,
+      id: 'series:all',
+      title: `Отпустите ${countWords(openSeries.length, 'серию', 'серии', 'серий')}${time ? ` — ${time}` : ''}`,
       wait: '',
-      minutes: minutes > 0 ? `${countWords(minutes, 'минута', 'минуты', 'минут')} в календаре` : '',
+      minutes: '',
       kind: 'series',
-      origin: made('k15', 'Календарь с нуля', `Серия «${series.title}»`, 'Посчитано по данным', related.map((meeting) => meeting.minutes > 0 ? `${meeting.summary}, ${meeting.minutes} мин` : meeting.summary)),
+      lines,
+      origin: made('k15', 'Календарь с нуля', 'Открытые серии встреч и их длительность в календаре', 'Посчитано по данным', lines.map((line) => line.title)),
     });
   }
-  for (const task of input.tasks) {
+  const waiting = input.decisions.filter((row) => row.status === 'ждёт').map((row) => row.summary);
+  for (const task of input.tasks.filter((task) => !waiting.some((summary) => sameMatter(task.title, summary)) && !staleQuiet(task.title, input.people))) {
     work.push({
       id: `task:${task.title}`,
       title: shown(`Сделайте: ${task.title}`),
       wait: '',
       minutes: task.minutes > 0 ? `${countWords(task.minutes, 'минута', 'минуты', 'минут')}, так назвала модель` : '',
       kind: 'task',
+      lines: [],
       origin: made('k4', 'Три дела на сегодня', task.goal ? `Цель: ${task.goal}` : 'План на сегодня', howModel(input.calls, 'k4', ''), task.goal ? [task.goal] : []),
     });
   }
@@ -200,7 +229,7 @@ export function buildDesk(input: DeskInput): Desk {
   const indexRows = picture.remaining.map((row) => shown(row));
   done.push({
     text: input.accepted
-      ? `До вас доходит ${picture.after}% потока: ${countWords(picture.stillLetters, 'письмо', 'письма', 'писем')} и ${countWords(picture.stillMeetings, 'встреча', 'встречи', 'встреч')} из ${picture.letters} и ${picture.meetings}`
+      ? `Было ${picture.before}% → стало ${picture.after}%. До вас доходит ${countWords(picture.stillLetters, 'письмо', 'письма', 'писем')} и ${countWords(picture.stillMeetings, 'встреча', 'встречи', 'встреч')} из ${picture.letters} и ${picture.meetings}`
       : `Весь поток пока доходит до вас: ${countWords(picture.letters, 'письмо', 'письма', 'писем')} и ${countWords(picture.meetings, 'встреча', 'встречи', 'встреч')}. Правил, которые его убирают, нет`,
     origin: made('k11', 'Индекс зависимости', input.accepted ? 'Доля писем и встреч, которые правило не закрыло' : 'Принятых правил нет, поэтому доля — весь каталог', 'Посчитано по данным', indexRows),
   });
@@ -247,12 +276,22 @@ export async function deskForLeader(db: Db, leaderId: string, series: { title: s
   }
   const mailByPerson = new Map<string, number>();
   for (const letter of letterRows) {
-    const person = personRows.find((row) => row.email.toLowerCase() === letter.fromEmail.toLowerCase());
+    const person = personRows.find((row) => addressesOf(row).includes(letter.fromEmail.toLowerCase()));
     if (!person) continue;
     mailByPerson.set(person.externalId, (mailByPerson.get(person.externalId) ?? 0) + 1);
   }
   const plan = planRows[0]?.plan as { today?: { title?: string; minutes?: number; goal?: string }[] } | undefined;
   const verdictByLetter = new Map(verdictRows.map((row) => [row.messageId, row.category]));
+  const letters = letterRows.map((row) => ({
+    fromName: row.fromName,
+    fromEmail: row.fromEmail,
+    subject: row.subject,
+    body: row.body,
+    received: row.received,
+  }));
+  const meetingList = meetingRows.map((row) => ({ summary: row.summary, minutes: row.minutes }));
+  const proposal = rules.length ? [] : await ownProposal(db, leaderId);
+  const preview = replayWeek(letters, meetingList, proposal, proposal.length > 0);
   return buildDesk({
     accepted: rules.length > 0,
     decisions: decisionRows.map((row) => ({
@@ -271,15 +310,10 @@ export async function deskForLeader(db: Db, leaderId: string, series: { title: s
       basis: row.basis,
       createdAt: row.createdAt.toISOString(),
     })),
-    letters: letterRows.map((row) => ({
-      fromName: row.fromName,
-      fromEmail: row.fromEmail,
-      subject: row.subject,
-      body: row.body,
-      received: row.received,
-    })),
-    meetings: meetingRows.map((row) => ({ summary: row.summary, minutes: row.minutes })),
+    letters,
+    meetings: meetingList,
     rules,
+    relief: proposal.length ? { letters: preview.stoppedLetters + preview.digestLetters, meetings: preview.stoppedMeetings + preview.digestMeetings } : null,
     people: personRows
       .filter((row) => row.role === 'подчинённый')
       .map((row) => ({
@@ -362,7 +396,41 @@ function howModel(calls: { purpose: string; at: string }[], prefix: string, rule
 }
 
 function cleanWork(item: WorkItem): WorkItem {
-  return { ...item, title: shown(item.title), wait: shown(item.wait), minutes: shown(item.minutes), origin: cleanOrigin(item.origin) };
+  return {
+    ...item,
+    title: shown(item.title),
+    wait: shown(item.wait),
+    minutes: shown(item.minutes),
+    lines: item.lines.map((line) => ({ id: line.id, title: shown(line.title) })),
+    origin: cleanOrigin(item.origin),
+  };
+}
+
+function addressesOf(person: { email: string; extraEmail: string }): string[] {
+  return [person.email, person.extraEmail].map((value) => value.trim().toLowerCase()).filter((value, index, all) => value && all.indexOf(value) === index);
+}
+
+function staleQuiet(title: string, people: DeskInput['people']): boolean {
+  const text = title.toLowerCase();
+  if (!text.includes('писем 0') && !text.includes('тихая проблема')) return false;
+  return people.some((person) => person.emails > 0 && person.name.trim() && text.includes(person.name.toLowerCase()));
+}
+
+function sameMatter(task: string, summary: string): boolean {
+  const left = task.trim().toLowerCase();
+  const right = summary.trim().toLowerCase();
+  if (left.length < 8 || right.length < 8) return false;
+  return left.includes(right) || right.includes(left);
+}
+
+function calendarWords(minutes: number): string {
+  if (minutes <= 0) return '';
+  if (minutes < 60) return `${countWords(minutes, 'минута', 'минуты', 'минут')} в календаре`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  const head = countWords(hours, 'час', 'часа', 'часов');
+  if (!rest) return `${head} в календаре`;
+  return `${head} ${countWords(rest, 'минута', 'минуты', 'минут')} в календаре`;
 }
 
 function cleanOrigin(origin: Origin): Origin {

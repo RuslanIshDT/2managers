@@ -140,7 +140,8 @@ interface WorkItem {
   title: string;
   wait: string;
   minutes: string;
-  kind: 'decision' | 'talk' | 'right' | 'series' | 'task';
+  kind: 'decision' | 'talk' | 'right' | 'series' | 'task' | 'rules';
+  lines: { id: string; title: string }[];
   origin: Origin;
 }
 
@@ -930,15 +931,25 @@ function WorkCard({
             Открыть в отделе
           </Button>
         ) : null}
-        {item.kind === 'right' ? (
+        {item.kind === 'right' || item.kind === 'rules' ? (
           <Button type="button" disabled={pending} onClick={onAccept}>
             Принять
           </Button>
         ) : null}
-        {item.kind === 'series' ? (
-          <Button type="button" variant="outline" disabled={pending} onClick={() => onSeries(item.id.slice('series:'.length), 'отпустить')}>
-            Отпустить
-          </Button>
+        {item.kind === 'series' && item.lines.length ? (
+          <details className="mt-2 text-sm">
+            <summary>Список</summary>
+            <ul className="mt-2 grid gap-2">
+              {item.lines.map((line) => (
+                <li key={line.id} className="flex flex-wrap items-center gap-2">
+                  <span>{line.title}</span>
+                  <Button type="button" variant="outline" disabled={pending} onClick={() => onSeries(line.id.slice('series:'.length), 'отпустить')}>
+                    Отпустить
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          </details>
         ) : null}
       </span>
     </Card>
@@ -1366,7 +1377,7 @@ interface CostView {
   month: string;
   byAgent: { agent: string; name: string; operations: number; total: string; average: string }[];
   byModel: { model: string; operations: number; total: string }[];
-  recent: { id: string; at: string; agent: string; title: string; model: string; calls: number; price: string; trace: string }[];
+  recent: { id: string; at: string; agent: string; title: string; model: string; calls: number; price: string; trace: string; group: number; groupWords: string }[];
 }
 
 function ModelsPanel({ data, onSaved }: { data: ModelSettings | null; onSaved: () => void }) {
@@ -1451,7 +1462,15 @@ function CostPanel({ data }: { data: CostView | null }) {
           <ul className="grid gap-2 text-sm">
             {data.recent.map((row) => (
               <li key={row.id}>
-                {dayWords(row.at)} · {row.agent} · {row.title} · {row.model} · вызовов {row.calls} · {row.price}
+                {row.group > 1 ? (
+                  <>
+                    {row.agent} — {row.groupWords}, {row.price}
+                  </>
+                ) : (
+                  <>
+                    {dayWords(row.at)} · {row.agent} · {row.title} · {row.model} · вызовов {row.calls} · {row.price}
+                  </>
+                )}
                 {row.trace ? (
                   <>
                     {' '}

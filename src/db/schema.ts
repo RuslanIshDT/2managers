@@ -27,6 +27,7 @@ export const people = pgTable(
     role: text('role').notNull(),
     reportsTo: text('reports_to').notNull(),
     email: text('email').notNull(),
+    extraEmail: text('extra_email').notNull().default(''),
     zone: text('zone').notNull().default(''),
     goal: text('goal').notNull().default(''),
     leaderGoal: text('leader_goal').notNull().default(''),

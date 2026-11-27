@@ -686,14 +686,35 @@ describe('главная T34', () => {
       letters: [{ fromName: 'Кира', fromEmail: 'kira@example.com', subject: 'Статус сделки', body: '', received: '2026-11-25T10:00:00' }],
       meetings: [{ summary: 'Планёрка направления', minutes: 40 }],
       rules: [rule, meetingRule],
-      people: [{ id: 'a', name: 'Кира', emails: 0, laggingWeeks: [{ name: 'План', week: '2026-11-23' }] }],
+      people: [
+        { id: 'a', name: 'Кира', emails: 0, laggingWeeks: [{ name: 'План', week: '2026-11-23' }] },
+        { id: 'b', name: 'Инга', emails: 7, laggingWeeks: [] },
+      ],
       authorities: [{ personId: 'a', area: 'скидка', limit: '9', unit: '%' }],
       history: [],
-      series: [{ title: 'Планёрка направления', open: true }],
-      tasks: [{ title: 'Разобрать бюджет', minutes: 25, goal: 'План квартала' }],
+      series: [{ title: 'Планёрка направления', open: true }, { title: 'Статус направления', open: true }],
+      relief: null,
+      tasks: [
+        { title: 'Разобрать бюджет', minutes: 25, goal: 'План квартала' },
+        { title: 'Скидка 15% клиенту, ответ до пятницы', minutes: 10, goal: 'Продажи' },
+        { title: 'Инга: KPI отстаёт, писем 0, тихая проблема', minutes: 20, goal: '' },
+        { title: 'Кира: писем 0, тихая проблема', minutes: 15, goal: '' },
+      ],
       calls: [],
     };
     const desk = buildDesk(input);
+    expect(desk.work.filter((item) => item.kind === 'series')).toHaveLength(1);
+    expect(desk.work.find((item) => item.kind === 'series')?.title).toContain('2 серии');
+    expect(desk.work.find((item) => item.kind === 'series')?.lines).toHaveLength(2);
+    expect(desk.work.some((item) => item.title.includes('Скидка 15%'))).toBe(true);
+    expect(desk.work.filter((item) => item.title.includes('Скидка 15%'))).toHaveLength(1);
+    expect(desk.work.some((item) => item.title.includes('Инга'))).toBe(false);
+    expect(desk.work.some((item) => item.title.includes('Кира: писем 0'))).toBe(true);
+    expect(desk.done.some((line) => line.text.startsWith('Было 100% → стало'))).toBe(true);
+    const pending = buildDesk({ ...input, accepted: false, rules: [], relief: { letters: 12, meetings: 4 } });
+    expect(pending.work[0]?.kind).toBe('rules');
+    expect(pending.work[0]?.title).toContain('12 писем');
+    expect(pending.work[0]?.title).toContain('4 встречи');
     expect(desk.work[0]?.kind).toBe('decision');
     expect(desk.work[0]?.title.startsWith('Решите:')).toBe(true);
     expect(desk.work[0]?.origin.data).toContain('Кира');
@@ -747,7 +768,7 @@ describe('модели и стоимость T35', () => {
     const ivan = costView(
       [
         op('ivan', 'k2', 0.02, true, '2026-11-26T10:00:00Z'),
-        op('ivan', 'k2', null, false, '2026-11-26T11:00:00Z'),
+        op('ivan', 'k2', null, false, '2026-11-26T11:00:00Z', 'Другой разбор'),
         op('ivan', 'k5', 0, true, '2026-11-24T10:00:00Z'),
         op('ivan', 'k4', 1, true, '2026-10-31T20:00:00Z'),
       ],
@@ -764,6 +785,14 @@ describe('модели и стоимость T35', () => {
     expect(marina.today).toBe('$0');
     expect(marina.recent[0]?.trace).toBe('');
     expect(JSON.stringify(ivan)).not.toContain('marina');
+    const folded = costView(
+      [op('ivan', 'accuracy', 0.02, true, '2026-11-26T12:00:00Z', 'Разбор'), op('ivan', 'accuracy', 0.03, true, '2026-11-26T12:01:00Z', 'Разбор'), op('ivan', 'accuracy', 0.03, true, '2026-11-26T12:02:00Z', 'Разбор')],
+      now,
+      '',
+    );
+    expect(folded.recent).toHaveLength(1);
+    expect(folded.recent[0]?.groupWords).toBe('3 разбора');
+    expect(folded.recent[0]?.price).toBe('$0.08');
   });
 
   it('выключенный Langfuse не роняет вызов', async () => {
@@ -779,12 +808,12 @@ describe('модели и стоимость T35', () => {
   });
 });
 
-function op(leaderId: string, agent: string, cost: number | null, priced: boolean, createdAt: string): OperationRow {
+function op(leaderId: string, agent: string, cost: number | null, priced: boolean, createdAt: string, title = 'Разбор'): OperationRow {
   return {
     id: `${leaderId}-${agent}-${createdAt}`,
     leaderId,
     agent,
-    title: 'Разбор',
+    title,
     model: 'model/test',
     calls: 1,
     tokensIn: 10,

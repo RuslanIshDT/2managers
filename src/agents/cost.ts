@@ -23,7 +23,7 @@ export interface CostView {
   month: string;
   byAgent: { agent: string; name: string; operations: number; total: string; average: string }[];
   byModel: { model: string; operations: number; total: string }[];
-  recent: { id: string; at: string; agent: string; title: string; model: string; calls: number; price: string; trace: string }[];
+  recent: { id: string; at: string; agent: string; title: string; model: string; calls: number; price: string; trace: string; group: number; groupWords: string }[];
 }
 
 export function costView(rows: OperationRow[], now: Date, traceBase: string): CostView {
@@ -46,19 +46,7 @@ export function costView(rows: OperationRow[], now: Date, traceBase: string): Co
       };
     }),
     byModel: byModel(mine),
-    recent: [...mine]
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-      .slice(0, 20)
-      .map((row) => ({
-        id: row.id,
-        at: row.createdAt,
-        agent: MODEL_AGENTS.find((agent) => agent.id === row.agent)?.name ?? row.agent,
-        title: row.title,
-        model: row.model,
-        calls: row.calls,
-        price: row.priced ? priceWords(row.costUsd) : 'нет цены',
-        trace: row.traceId && traceBase ? `${traceBase.replace(/\/+$/, '')}/traces/${row.traceId}` : '',
-      })),
+    recent: collapse(mine, traceBase),
   };
 }
 
@@ -73,6 +61,50 @@ function averageWords(rows: OperationRow[], unit: string): string {
   if (!priced.length) return `${unit} — нет цены`;
   const avg = priced.reduce((sum, row) => sum + (row.costUsd ?? 0), 0) / priced.length;
   return `${unit} — ${priceWords(avg)}`;
+}
+
+function collapse(rows: OperationRow[], traceBase: string): CostView['recent'] {
+  const sorted = [...rows].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const groups: OperationRow[][] = [];
+  for (const row of sorted) {
+    const last = groups[groups.length - 1];
+    const prev = last?.[0];
+    if (prev && prev.agent === row.agent && prev.title === row.title && prev.model === row.model) last.push(row);
+    else groups.push([row]);
+  }
+  return groups.slice(0, 20).map((group) => {
+    const first = group[0];
+    if (!first) return { id: '', at: '', agent: '', title: '', model: '', calls: 0, price: 'нет цены', trace: '', group: 0, groupWords: '' };
+    const priced = group.every((row) => row.priced && row.costUsd !== null);
+    const name = MODEL_AGENTS.find((agent) => agent.id === first.agent)?.name ?? first.agent;
+    return {
+      id: first.id,
+      at: first.createdAt,
+      agent: name,
+      title: first.title,
+      model: first.model,
+      calls: group.reduce((sum, row) => sum + row.calls, 0),
+      price: priced ? priceWords(group.reduce((sum, row) => sum + (row.costUsd ?? 0), 0)) : 'нет цены',
+      trace: first.traceId && traceBase ? `${traceBase.replace(/\/+$/, '')}/traces/${first.traceId}` : '',
+      group: group.length,
+      groupWords: bunchWords(first.agent, group.length),
+    };
+  });
+}
+
+function bunchWords(agent: string, count: number): string {
+  if (agent === 'k5') return countWords(count, 'аудит', 'аудита', 'аудитов');
+  if (agent === 'k4') return countWords(count, 'сообщение', 'сообщения', 'сообщений');
+  if (agent === 'protocol') return countWords(count, 'протокол', 'протокола', 'протоколов');
+  return countWords(count, 'разбор', 'разбора', 'разборов');
+}
+
+function countWords(n: number, one: string, few: string, many: string): string {
+  const abs = Math.abs(n);
+  const tail = abs % 10;
+  const hundred = abs % 100;
+  const word = tail === 1 && hundred !== 11 ? one : tail >= 2 && tail <= 4 && (hundred < 12 || hundred > 14) ? few : many;
+  return `${n} ${word}`;
 }
 
 function byModel(rows: OperationRow[]): { model: string; operations: number; total: string }[] {
