@@ -3,6 +3,7 @@
 import { eq, isNotNull } from 'drizzle-orm';
 import { pickDiscountAboveLimit } from '../agents/reset-stand.ts';
 import { chainKey } from '../agents/k2.ts';
+import { parseMoscow } from '../agents/scene.ts';
 import { createDb, createPool, migrate } from '../db/client.ts';
 import { authorities, decisions, emails, leaders, mailIn, people, rules, verdicts } from '../db/schema.ts';
 
@@ -63,7 +64,12 @@ const removed = {
 };
 
 if (letter) {
-  const now = new Date();
+  const key = chainKey(letter.fromEmail, letter.subject);
+  const first = catalog
+    .filter((row) => chainKey(row.fromEmail, row.subject) === key)
+    .map((row) => row.received)
+    .sort()[0];
+  const now = parseMoscow(first ?? letter.received) ?? new Date();
   await db.insert(decisions).values({
     id: letter.id,
     leaderId,

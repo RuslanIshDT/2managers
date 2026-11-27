@@ -6,6 +6,7 @@ import { emails, flowReports, noteSent, seriesFate, seriesKind } from '../db/sch
 import { departmentForLeader } from './k1.ts';
 import { burningSeries, pendingNotes, weeklyNotes, type SeriesView } from './mirror.ts';
 import { listFlowRules } from './week.ts';
+import { leaderMustConfirm } from './k2.ts';
 import { mailConfig, sendMail } from '../mail.ts';
 
 export async function mirrorForLeader(db: Db, leaderId: string) {
@@ -31,7 +32,8 @@ export async function mirrorForLeader(db: Db, leaderId: string) {
   );
   const fate = new Map(fateRows.map((row) => [row.seriesKey, row]));
   const kinds = new Map(kindRows.map((row) => [row.seriesKey, row.kind]));
-  const series = burningSeries(view).map((item) => ({
+  const guarded = new Set(kindRows.filter((row) => leaderMustConfirm(row.category)).map((row) => row.seriesKey));
+  const series = burningSeries(view).filter((item) => !guarded.has(item.title)).map((item) => ({
     ...item,
     action: fate.get(item.title)?.action ?? '',
     reason: fate.get(item.title)?.reason ?? '',

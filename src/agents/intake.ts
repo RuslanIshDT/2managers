@@ -13,6 +13,7 @@ import { withLlmScope } from '../llm.ts';
 import { letterHits } from './replay.ts';
 import { applyRevision, revisionPrompt } from './revisions.ts';
 import { listFlowRules } from './week.ts';
+import { clockFor, letterMoment, moscowStamp } from './scene.ts';
 
 const DUMMY: ModelVerdict = {
   вердикт: 'вернуть',
@@ -92,11 +93,14 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
   let calls = 0;
   let deferred = 0;
 
+  const clock = clockFor(leaderId);
   const mailbox = mailConfig()?.user ?? '';
   const pending = [...letters].sort((a, b) => a.received.localeCompare(b.received) || a.id.localeCompare(b.id));
   for (const letter of pending) {
     if (isOwnAddress(letter.fromEmail, mailbox)) continue;
     if (seen.has(letter.messageId)) continue;
+    const moment = letterMoment(letter.received, letter.marked !== false, clock);
+    const stamp = moscowStamp(moment);
     const person = persons.find((row) => personAddresses(row).includes(letter.fromEmail.toLowerCase()));
     const boss = person?.role === 'руководитель руководителя';
     if (!person || (person.role !== 'подчинённый' && !boss)) {
@@ -118,7 +122,7 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
         leaderId,
         messageId: letter.messageId,
         syntheticId: '',
-        received: letter.received,
+        received: stamp,
         fromName: letter.fromName,
         fromEmail: letter.fromEmail,
         subject: letter.subject,
@@ -147,52 +151,8 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
         .values({ leaderId, chainKey: key, action: ruled.action, forced: ruled.forced, createdAt: new Date() })
         .onConflictDoUpdate({ target: [mailActions.leaderId, mailActions.chainKey], set: { action: ruled.action, forced: ruled.forced } });
       if (ruled.action === 'спросить_руководителя') {
-        if (!leaderRow.telegramChatId) throw new Error('Telegram-чат руководителя не привязан');
-        await db.insert(decisions).values({
-          id: letter.id,
-          leaderId,
-          chainKey: key,
-          status: 'ждёт',
-          summary: letter.subject,
-          draft: '',
-          replyTo: letter.fromEmail,
-          replyName: letter.fromName,
-          subject: letter.subject,
-          awaitingEdit: false,
-          createdAt: new Date(),
-        });
-        try {
-          await sendDecisionCard(
-            cardText({
-              who: `${letter.fromName}: ${letter.subject}`,
-              вывод: 'Письмо не из отдела и требует вашего подтверждения',
-              рекомендация: 'Подтвердите, если разбираете его сами',
-              основание: 'Категория N1: без подтверждения письмо никуда не уходит',
-              риски: '',
-              если_не_решить: 'Письмо останется без ответа',
-              контекст: '',
-              draft: '',
-            }),
-            letter.id,
-            leaderRow.telegramChatId,
-          );
-        } catch (err) {
-          await db.delete(decisions).where(eq(decisions.id, letter.id));
-          throw err;
-        }
-        decisionRows.push({
-          id: letter.id,
-          leaderId,
-          chainKey: key,
-          status: 'ждёт',
-          summary: letter.subject,
-          draft: '',
-          replyTo: letter.fromEmail,
-          replyName: letter.fromName,
-          subject: letter.subject,
-          awaitingEdit: false,
-          createdAt: new Date(),
-        });
+        const made = await askOutside(db, leaderRow, { id: letter.id, fromName: letter.fromName, fromEmail: letter.fromEmail, subject: letter.subject }, key, moment);
+        if (made) decisionRows.push(made);
       }
       seen.add(letter.messageId);
       lines.push(`${letter.id}: ${actionWords(ruled.action)}`);
@@ -263,7 +223,7 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
         replyName: letter.fromName,
         subject: letter.subject,
         awaitingEdit: false,
-        createdAt: new Date(),
+        createdAt: moment,
       });
       try {
         const staff = staffFromVerdict({
@@ -299,7 +259,7 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
         replyName: letter.fromName,
         subject: letter.subject,
         awaitingEdit: false,
-        createdAt: new Date(),
+        createdAt: moment,
       });
     } else if (ruled.send) {
       await deliverReply(letter.fromName, letter.fromEmail, letter.subject, ruled.draft);
@@ -314,7 +274,7 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
         replyName: letter.fromName,
         subject: letter.subject,
         awaitingEdit: false,
-        createdAt: new Date(),
+        createdAt: moment,
       });
       decisionRows.push({
         id: letter.id,
@@ -327,7 +287,7 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
         replyName: letter.fromName,
         subject: letter.subject,
         awaitingEdit: false,
-        createdAt: new Date(),
+        createdAt: moment,
       });
     }
 
@@ -335,7 +295,7 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
       leaderId,
       messageId: letter.messageId,
       syntheticId: letter.id,
-      received: letter.received,
+      received: stamp,
       fromName: letter.fromName,
       fromEmail: letter.fromEmail,
       subject: letter.subject,
@@ -358,7 +318,7 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
       risks: ruled.risks,
       ifNot: ruled.ifNot,
       createdAt: new Date(),
-    });
+    }).onConflictDoNothing();
     seen.add(letter.messageId);
     lines.push(`${letter.id}: ${ruled.kind}`);
   }
@@ -478,6 +438,7 @@ export async function rejudgeOutside(db: Db, leaderId: string, modelBudget: numb
       fromEmail: mailIn.fromEmail,
       subject: mailIn.subject,
       body: mailIn.body,
+      received: mailIn.received,
     })
     .from(verdicts)
     .innerJoin(mailIn, and(eq(mailIn.leaderId, verdicts.leaderId), eq(mailIn.messageId, verdicts.messageId)))
@@ -507,9 +468,60 @@ export async function rejudgeOutside(db: Db, leaderId: string, modelBudget: numb
       .insert(mailActions)
       .values({ leaderId, chainKey: key, action: ruled.action, forced: ruled.forced, createdAt: new Date() })
       .onConflictDoUpdate({ target: [mailActions.leaderId, mailActions.chainKey], set: { action: ruled.action, forced: ruled.forced } });
+    if (ruled.action === 'спросить_руководителя') {
+      const id = letter.messageId.replace(/[<>]/g, '').slice(0, 80);
+      await askOutside(db, leaderRow, { id, fromName: letter.fromName, fromEmail: letter.fromEmail, subject: letter.subject }, key, letterMoment(letter.received, true, clockFor(leaderId)));
+    }
     lines.push(actionWords(ruled.action));
   }
   return { lines, calls };
+}
+
+// Письмо не из отдела, которое нельзя без руководителя (N1 или разбор сказал «спросить»): решение «ждёт» и карточка с кнопками.
+async function askOutside(
+  db: Db,
+  leaderRow: { id: string; telegramChatId: string | null },
+  letter: { id: string; fromName: string; fromEmail: string; subject: string },
+  key: string,
+  moment: Date,
+) {
+  const existing = await db.select({ id: decisions.id }).from(decisions).where(and(eq(decisions.leaderId, leaderRow.id), eq(decisions.chainKey, key))).limit(1);
+  if (existing.length) return null;
+  if (!leaderRow.telegramChatId) throw new Error('Telegram-чат руководителя не привязан');
+  const row = {
+    id: letter.id,
+    leaderId: leaderRow.id,
+    chainKey: key,
+    status: 'ждёт',
+    summary: letter.subject,
+    draft: '',
+    replyTo: letter.fromEmail,
+    replyName: letter.fromName,
+    subject: letter.subject,
+    awaitingEdit: false,
+    createdAt: moment,
+  };
+  await db.insert(decisions).values(row);
+  try {
+    await sendDecisionCard(
+      cardText({
+        who: `${letter.fromName}: ${letter.subject}`,
+        вывод: 'Письмо не из отдела и требует вашего подтверждения',
+        рекомендация: 'Подтвердите, если разбираете его сами',
+        основание: 'Категория N1: без подтверждения письмо никуда не уходит',
+        риски: '',
+        если_не_решить: 'Письмо останется без ответа',
+        контекст: '',
+        draft: '',
+      }),
+      letter.id,
+      leaderRow.telegramChatId,
+    );
+  } catch (err) {
+    await db.delete(decisions).where(eq(decisions.id, letter.id));
+    throw err;
+  }
+  return row;
 }
 
 function actionWords(action: string): string {

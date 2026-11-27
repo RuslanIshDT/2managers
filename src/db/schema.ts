@@ -227,6 +227,7 @@ export const seriesKind = pgTable(
     leaderId: text('leader_id').notNull(),
     seriesKey: text('series_key').notNull(),
     kind: text('kind').notNull(),
+    category: text('category').notNull().default(''),
   },
   (t) => [primaryKey({ columns: [t.leaderId, t.seriesKey] })],
 );

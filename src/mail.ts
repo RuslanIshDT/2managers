@@ -34,6 +34,7 @@ export async function checkMail(): Promise<MailStatus> {
     auth: { user: cfg.user, pass: cfg.password },
     logger: false,
   });
+  client.on('error', (err: unknown) => console.error('IMAP', err instanceof Error ? err.message : err));
   await client.connect();
   try {
     const status = await client.status('INBOX', { messages: true });
@@ -153,6 +154,7 @@ export async function appendSynthetic(letters: SyntheticLetter[]): Promise<numbe
     auth: { user: cfg.user, pass: cfg.password },
     logger: false,
   });
+  client.on('error', (err: unknown) => console.error('IMAP', err instanceof Error ? err.message : err));
   await client.connect();
   try {
     const existing = new Set((await readSynthetic(client)).map((letter) => letter.id));
@@ -184,6 +186,7 @@ export async function readSyntheticInbox(): Promise<MailboxLetter[]> {
     auth: { user: cfg.user, pass: cfg.password },
     logger: false,
   });
+  client.on('error', (err: unknown) => console.error('IMAP', err instanceof Error ? err.message : err));
   await client.connect();
   try {
     return await readSynthetic(client);

@@ -1,11 +1,11 @@
 // Кладёт задачи и встречи руководителя в Трекер и в календарь «Стенд». Повтор не плодит копии.
 import { eq } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
-import { emails, meetings, people, protocols, tasks } from '../db/schema.ts';
+import { emails, meetings, protocols, tasks } from '../db/schema.ts';
 import { calendarConfig, ensureStandCalendar, listStandEvents, putEvent } from '../yandex/calendar.ts';
 import { createIssue, listOurIssues, trackerConfig } from '../yandex/tracker.ts';
 import { attendeeNames, eventFile, issueDraft, meetingStart, relatedSubjects, standEvent, taskUnique } from './materials.ts';
-import { protocolRelease } from './protocol.ts';
+import { releaseFor } from './protocol.ts';
 
 export interface StandSnapshot {
   tracker: { ok: boolean; detail: string; issues: { key: string; summary: string; deadline: string }[] };
@@ -14,10 +14,11 @@ export interface StandSnapshot {
 
 const cache = new Map<string, { at: number; value: StandSnapshot }>();
 
-export async function standView(leaderId: string): Promise<StandSnapshot> {
+export async function standView(leaderId: string, db?: Db): Promise<StandSnapshot> {
   const hit = cache.get(leaderId);
   if (hit && Date.now() - hit.at < 60_000) return hit.value;
-  const value = await loadStand(leaderId);
+  const known = db ? new Set((await db.select({ id: tasks.externalId }).from(tasks).where(eq(tasks.leaderId, leaderId))).map((row) => taskUnique(leaderId, row.id))) : null;
+  const value = await loadStand(leaderId, known);
   cache.set(leaderId, { at: Date.now(), value });
   return value;
 }
@@ -26,7 +27,6 @@ export async function syncLeader(db: Db, leaderId: string): Promise<string> {
   const subjects = (await db.select({ subject: emails.subject }).from(emails).where(eq(emails.leaderId, leaderId))).map((row) => row.subject);
   const taskRows = await db.select().from(tasks).where(eq(tasks.leaderId, leaderId));
   const meetingRows = await db.select().from(meetings).where(eq(meetings.leaderId, leaderId));
-  const known = await db.select({ name: people.name, email: people.email }).from(people).where(eq(people.leaderId, leaderId));
   const protocolRows = await db.select().from(protocols).where(eq(protocols.leaderId, leaderId));
   let created = 0;
   let existed = 0;
@@ -74,10 +74,11 @@ export async function syncLeader(db: Db, leaderId: string): Promise<string> {
     }
     for (const row of protocolRows) {
       if (row.status !== 'утверждён') continue;
-      const release = protocolRelease(row.body, known, row.createdAt, row.id);
-      const ics = release.ics.replace(/^UID:.*$/m, `UID:${leaderId}:protocol-${row.id}@ecompras`);
+      const release = await releaseFor(db, leaderId, row);
+      const uid = release.eventUid || `${leaderId}:protocol-${row.id}`;
+      const ics = release.eventUid ? release.ics : release.ics.replace(/^UID:.*$/m, `UID:${uid}@ecompras`);
       try {
-        await putEvent(href, eventFile(`${leaderId}:protocol-${row.id}`), ics);
+        await putEvent(href, eventFile(uid), ics);
         written += 1;
       } catch {
         calendarFailed += 1;
@@ -90,12 +91,12 @@ export async function syncLeader(db: Db, leaderId: string): Promise<string> {
   return `${trackerText} ${calendarText}`;
 }
 
-async function loadStand(leaderId: string): Promise<StandSnapshot> {
+async function loadStand(leaderId: string, known: Set<string> | null): Promise<StandSnapshot> {
   const prefix = taskUnique(leaderId, '');
   const tracker = trackerConfig()
     ? await listOurIssues()
         .then((issues) => {
-          const own = issues.filter((issue) => issue.unique.startsWith(prefix)).map(({ key, summary, deadline }) => ({ key, summary, deadline }));
+          const own = issues.filter((issue) => issue.unique.startsWith(prefix) && (!known || known.has(issue.unique))).map(({ key, summary, deadline }) => ({ key, summary, deadline }));
           return { ok: true, detail: `В Трекере ${own.length}`, issues: own };
         })
         .catch((error: unknown) => ({ ok: false, detail: error instanceof Error ? error.message : 'Трекер не ответил', issues: [] }))

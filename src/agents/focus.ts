@@ -1,4 +1,5 @@
 // Утро руководителя и матрица отдела. Модель не вызывается, имена берутся из данных.
+import { dateWords } from './scene.ts';
 export type MatrixCell = 'один_на_один' | 'помочь' | 'расширить' | 'не_трогать';
 
 export interface MatrixInput {
@@ -79,7 +80,7 @@ export function morningLines(input: {
 }): string[] {
   const lines = ['Утро. Что действительно ваше:'];
   if (input.tasks.length) {
-    for (const task of input.tasks) lines.push(`— ${task.title}, срок ${task.dueOn}`);
+    for (const task of input.tasks) lines.push(`— ${task.title}, срок ${dateWords(task.dueOn)}`);
   } else {
     lines.push('— своих задач со сроком нет');
   }

@@ -8,6 +8,7 @@ export interface Candidate {
   title: string;
   detail: string;
   goal: string;
+  person?: string;
 }
 
 export interface Choice {
@@ -57,7 +58,18 @@ export const choiceSchema: JsonSchema = {
   },
 };
 
-export function applyChoice(candidates: Candidate[], chosen: Choice[]): FocusPlan {
+// Объяснение модели проверяет код: без служебных идентификаторов и без чужих имён, иначе — основание из данных.
+export function checkedWhy(why: string, source: Candidate, names: string[]): string {
+  const text = why.trim();
+  const foreign = names.filter((name) => name && name !== source.person && !source.title.includes(name));
+  const stems = foreign.flatMap((name) => name.split(/\s+/).filter((part) => part.length >= 4).map((part) => part.slice(0, part.length - 1)));
+  const mentions = stems.some((stem) => new RegExp(`(^|[^А-Яа-яЁё])${stem}`).test(text));
+  const ids = /\b[a-z_]+:[\w-]+|\b[a-z]\d{2,3}\b/i.test(text);
+  if (mentions || ids || !text) return source.detail;
+  return text;
+}
+
+export function applyChoice(candidates: Candidate[], chosen: Choice[], names: string[] = []): FocusPlan {
   const byId = new Map(candidates.map((row) => [row.id, row]));
   const used = new Set<string>();
   const today: FocusPlan['today'] = [];
@@ -71,7 +83,7 @@ export function applyChoice(candidates: Candidate[], chosen: Choice[]): FocusPla
       title: source.title,
       goal: item.goal.trim(),
       minutes: Math.round(item.minutes),
-      why: item.why.trim(),
+      why: checkedWhy(item.why, source, names),
     });
   }
   return { today, later: candidates.filter((row) => !used.has(row.id)).map((row) => row.title) };
@@ -97,7 +109,7 @@ export function renderPlan(input: {
   return lines.join('\n');
 }
 
-export async function chooseFocus(input: { purpose: string; profile: string; candidates: Candidate[] }): Promise<FocusPlan> {
+export async function chooseFocus(input: { purpose: string; profile: string; candidates: Candidate[]; names?: string[] }): Promise<FocusPlan> {
   const result = await callJson<unknown>({
     purpose: input.purpose,
     system: [
@@ -112,11 +124,17 @@ export async function chooseFocus(input: { purpose: string; profile: string; can
   });
   const parsed = choiceZod.safeParse(result.data);
   if (!parsed.success) throw new Error('Ответ модели не совпал со схемой трёх дел');
-  return applyChoice(input.candidates, parsed.data.today);
+  return applyChoice(input.candidates, parsed.data.today, input.names ?? []);
 }
 
 const seriesZod = z.object({
-  series: z.array(z.object({ title: z.string(), kind: z.enum(['решение', 'статус', 'один_на_один', 'внешняя']) })),
+  series: z.array(
+    z.object({
+      title: z.string(),
+      kind: z.enum(['решение', 'статус', 'один_на_один', 'внешняя']),
+      category: z.enum(['деньги', 'кадры', 'обязательства_клиентам', 'руководство', 'иное']),
+    }),
+  ),
 });
 
 export const seriesSchema: JsonSchema = {
@@ -129,10 +147,11 @@ export const seriesSchema: JsonSchema = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['title', 'kind'],
+        required: ['title', 'kind', 'category'],
         properties: {
           title: { type: 'string' },
           kind: { type: 'string', enum: ['решение', 'статус', 'один_на_один', 'внешняя'] },
+          category: { type: 'string', enum: ['деньги', 'кадры', 'обязательства_клиентам', 'руководство', 'иное'] },
         },
       },
     },
@@ -142,12 +161,17 @@ export const seriesSchema: JsonSchema = {
 export async function classifySeries(input: {
   purpose: string;
   series: { title: string; attendees: string[] }[];
-}): Promise<{ title: string; kind: string }[]> {
+  profile?: string;
+}): Promise<{ title: string; kind: string; category: string }[]> {
   if (input.series.length === 0) return [];
   const result = await callJson<unknown>({
     purpose: input.purpose,
-    system: 'По названию и участникам определи вид встречи: решение, статус, один_на_один или внешняя. Не добавляй встречи, которых нет в списке.',
-    user: JSON.stringify(input.series),
+    system: [
+      'По названию и участникам определи вид встречи: решение, статус, один_на_один или внешняя.',
+      'И категорию по правилам профиля «Никогда без подтверждения руководителя»: деньги, кадры, обязательства_клиентам, руководство или иное — что решается на этой встрече.',
+      'Не добавляй встречи, которых нет в списке.',
+    ].join(' '),
+    user: [input.profile ? `Профиль:\n${input.profile.trim()}` : '', `Встречи: ${JSON.stringify(input.series)}`].filter(Boolean).join('\n\n'),
     schemaName: 'series_kind',
     schema: seriesSchema,
   });

@@ -1,12 +1,13 @@
 // Протокол по расшифровке. Текст встречи в репозиторий не входит: его читает стенд с диска.
 // После «Утвердить» протокол уходит в тестовый ящик, задачи пишутся в базу и в Трекер, встреча — в календарь «Стенд» и файлом .ics.
-import { readdir, readFile, stat } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { desc, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import type { Db } from '../db/client.ts';
-import { leaders, people, protocols, tasks } from '../db/schema.ts';
+import { leaders, meetings, people, protocols, tasks } from '../db/schema.ts';
+import { clockFor } from './scene.ts';
 import { callJson, withLlmScope, type JsonSchema } from '../llm.ts';
 import { mailConfig, sendMail } from '../mail.ts';
 import { sendMessage } from '../telegram.ts';
@@ -80,7 +81,7 @@ export function renderProtocol(draft: ProtocolDraft): string {
   if (draft.open.length) {
     lines.push('', 'Открытые вопросы:', ...draft.open.map((item) => `— ${esc(item)}`));
   }
-  return lines.join('\n').slice(0, 3500);
+  return lines.join('\n').slice(0, 4000);
 }
 
 export function parseProtocolCallback(data: string): string | null {
@@ -122,17 +123,71 @@ export function morningOpenItems(open: string[]): string {
   return ['', 'Открытые вопросы прошлого протокола:', ...open.map((item) => `— ${esc(item)}`)].join('\n');
 }
 
-export function protocolRelease(body: string, known: { name: string; email: string }[], at: Date, id = 'protocol'): ProtocolRelease {
+export interface NextMeeting {
+  uid: string;
+  startsAt: string;
+  minutes: number;
+  summary: string;
+}
+
+export interface KnownPerson {
+  name: string;
+  email: string;
+}
+
+// Встреча, по которой написана расшифровка: «2026-12-10T10-00 Планёрка направления-transcript.txt».
+export function meetingOfSource(source: string): { title: string; startsAt: string } | null {
+  const match = /^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2}) (.+?)-transcript\.txt$/.exec(source.trim());
+  if (!match) return null;
+  return { title: match[4].trim(), startsAt: `${match[1]}T${match[2]}:${match[3]}` };
+}
+
+// Следующая встреча той же серии в календаре руководителя: на ней проверяются открытые вопросы.
+export function nextOfSeries(
+  meeting: { title: string; startsAt: string } | null,
+  rows: { uid: string; startsAt: string; minutes: number; summary: string }[],
+): NextMeeting | null {
+  if (!meeting) return null;
+  const later = rows
+    .filter((row) => row.summary.trim().toLowerCase() === meeting.title.toLowerCase() && row.startsAt > meeting.startsAt)
+    .sort((a, b) => a.startsAt.localeCompare(b.startsAt));
+  const row = later[0];
+  return row ? { uid: row.uid, startsAt: row.startsAt, minutes: row.minutes, summary: row.summary } : null;
+}
+
+export function protocolRelease(
+  body: string,
+  known: KnownPerson[],
+  at: Date,
+  id = 'protocol',
+  next: NextMeeting | null = null,
+  meetingDay = '',
+  leaderId = '',
+): ProtocolRelease {
   const theme = body.split('\n')[0]?.trim() || 'Встреча по протоколу';
   const participants = participantNames(body);
   const steps = sectionLines(body, 'Дальше:').map((line) => line.replace(/^—\s*/, '').trim()).filter(Boolean);
-  const when = followUpStart(at);
-  const dueOn = moscowDate(when);
-  const tasks = steps.map((title) => ({ title: title.slice(0, 240), owner: ownerOf(title, participants), dueOn }));
+  const open = sectionLines(body, 'Открытые вопросы:').map((line) => line.replace(/^—\s*/, '').trim()).filter(Boolean);
+  const when = next ? meetingStartAt(next.startsAt) : followUpStart(at);
+  const minutes = next && next.minutes > 0 ? next.minutes : 30;
+  const fallbackDue = moscowDate(when);
+  const year = (meetingDay || fallbackDue).slice(0, 4);
+  const tasks = steps.map((title) => ({
+    title: title.slice(0, 240),
+    owner: ownerOf(title, participants, known),
+    dueOn: dueOf(title, meetingDay, year) ?? fallbackDue,
+  }));
   const named = participants.map((name) => {
     const person = known.find((row) => row.name.toLowerCase() === name.toLowerCase() && row.email.trim());
     return person ? `${name} <${person.email}>` : name;
   });
+  const meetingTitle = next ? next.summary : theme;
+  const agenda = [
+    open.length ? `Открытые вопросы прошлого протокола: ${open.join('; ')}.` : '',
+    steps.length ? `Шаги: ${steps.join('; ')}.` : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
   const text = [
     named.length ? `Кому: ${named.join('; ')}.` : 'Кому: участники в протоколе не названы.',
     'Адреса из каталога писем не принимают, поэтому письмо ушло в тестовый ящик. Настоящие адресаты названы выше.',
@@ -140,15 +195,31 @@ export function protocolRelease(body: string, known: { name: string; email: stri
     '',
     body.replace(/\nРассылка участникам — заглушка, письма не уходят\./g, '').trim(),
     '',
-    `Встреча: ${theme}. ${dueOn}, 10:00 по Москве, 30 минут.`,
+    next
+      ? `Следующая встреча: ${meetingTitle}, ${dayWords(moscowDate(when))}, ${moscowTime(when)} по Москве. В повестке — открытые вопросы этого протокола.`
+      : `Встреча: ${theme}. ${dayWords(fallbackDue)}, ${moscowTime(when)} по Москве, ${minutes} минут.`,
   ].join('\n');
+  const uid = next && leaderId ? `${leaderId}:${next.uid}` : `protocol-${id}`;
   return {
     subject: `Протокол: ${theme}`.slice(0, 180),
     text,
     tasks,
-    ics: invitation({ uid: `protocol-${id}`, start: when, summary: theme, description: steps.join('\n') }),
+    ics: next && leaderId
+      ? invitation({ uid, start: when, minutes, summary: meetingTitle, description: agenda }).replace(`UID:${uid}@ecompras`, `UID:${uid}`)
+      : invitation({ uid, start: when, minutes, summary: meetingTitle, description: agenda || steps.join('\n') }),
     when,
+    eventUid: next && leaderId ? `${leaderId}:${next.uid}` : '',
   };
+}
+
+export async function releaseFor(db: Db, leaderId: string, row: { id: string; body: string; source: string; createdAt: Date }) {
+  const [known, meetingRows] = await Promise.all([
+    db.select({ name: people.name, email: people.email }).from(people).where(eq(people.leaderId, leaderId)),
+    db.select().from(meetings).where(eq(meetings.leaderId, leaderId)),
+  ]);
+  const meeting = meetingOfSource(row.source);
+  const next = nextOfSeries(meeting, meetingRows.map((item) => ({ uid: item.uid, startsAt: item.startsAt, minutes: item.minutes, summary: item.summary })));
+  return protocolRelease(row.body, known, clockFor(leaderId, row.createdAt).now, row.id, next, meeting?.startsAt.slice(0, 10) ?? '', leaderId);
 }
 
 export async function approveProtocol(db: Db, id: string, chatId: string): Promise<string> {
@@ -159,8 +230,7 @@ export async function approveProtocol(db: Db, id: string, chatId: string): Promi
   if (row.status === 'утверждён') return 'Уже утверждён';
   const mailbox = mailConfig();
   if (!mailbox) return 'Яндекс Почта не настроена';
-  const known = await db.select({ name: people.name, email: people.email }).from(people).where(eq(people.leaderId, leader.id));
-  const release = protocolRelease(row.body, known, row.createdAt, row.id);
+  const release = await releaseFor(db, leader.id, row);
   for (const [index, task] of release.tasks.entries()) {
     await db
       .insert(tasks)
@@ -180,8 +250,8 @@ export async function approveProtocol(db: Db, id: string, chatId: string): Promi
   if (calendarConfig()) {
     try {
       await publishApproved(leader.id, [], {
-        uid: `${leader.id}:protocol-${row.id}`,
-        ics: release.ics.replace(/^UID:.*$/m, `UID:${leader.id}:protocol-${row.id}@ecompras`),
+        uid: release.eventUid || `${leader.id}:protocol-${row.id}`,
+        ics: release.eventUid ? release.ics : release.ics.replace(/^UID:.*$/m, `UID:${leader.id}:protocol-${row.id}@ecompras`),
       });
       placed = true;
     } catch {
@@ -244,10 +314,55 @@ function sectionLines(body: string, title: string): string[] {
     .filter(Boolean);
 }
 
-function ownerOf(title: string, participants: string[]): string {
-  const found = participants.filter((name) => title.toLowerCase().includes(name.toLowerCase()));
-  found.sort((a, b) => b.length - a.length);
-  return found[0] ?? 'не назван';
+// Исполнитель — человек из оргструктуры руководителя: полное имя в шаге, иначе имя или фамилия, если они однозначны.
+export function ownerOf(title: string, participants: string[], known: KnownPerson[] = []): string {
+  const text = title.toLowerCase();
+  const full = [...known.map((row) => row.name), ...participants].filter((name) => name && text.includes(name.toLowerCase()));
+  full.sort((a, b) => b.length - a.length);
+  if (full[0]) return full[0];
+  const words = new Set(text.replace(/ё/g, 'е').split(/[^a-zа-я]+/i).filter(Boolean));
+  const hits = known.filter((row) =>
+    row.name
+      .toLowerCase()
+      .replace(/ё/g, 'е')
+      .split(/\s+/)
+      .some((part) => part.length >= 3 && words.has(part)),
+  );
+  return hits.length === 1 ? hits[0].name : 'не назван';
+}
+
+const MONTHS = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
+
+// Срок из шага: «до 14 декабря», «до 14.12», «сегодня» — день встречи.
+export function dueOf(step: string, meetingDay: string, year: string): string | null {
+  const text = step.toLowerCase();
+  const found: string[] = [];
+  for (const match of text.matchAll(/(?:до|к)\s+(\d{1,2})\s+([а-я]+)/g)) {
+    const month = MONTHS.indexOf(match[2]);
+    if (month >= 0) found.push(`${year}-${String(month + 1).padStart(2, '0')}-${match[1].padStart(2, '0')}`);
+  }
+  for (const match of text.matchAll(/(?:до|к)\s+(\d{1,2})\.(\d{1,2})/g)) {
+    found.push(`${year}-${match[2].padStart(2, '0')}-${match[1].padStart(2, '0')}`);
+  }
+  if (meetingDay && /сегодня/.test(text)) found.push(meetingDay);
+  found.sort();
+  return found[0] ?? null;
+}
+
+function meetingStartAt(value: string): Date {
+  const [date, time = '10:00'] = value.split('T');
+  const [y, m, d] = date.split('-').map(Number);
+  const [hh, mm] = time.split(':').map(Number);
+  return new Date(Date.UTC(y, m - 1, d, (hh || 0) - 3, mm || 0));
+}
+
+function moscowTime(at: Date): string {
+  return new Date(at.getTime() + 3 * 60 * 60 * 1000).toISOString().slice(11, 16);
+}
+
+function dayWords(iso: string): string {
+  const [, m, d] = iso.split('-').map(Number);
+  return `${d} ${MONTHS[m - 1] ?? ''}`.trim();
 }
 
 export function followUpStart(at: Date): Date {
@@ -264,8 +379,8 @@ function moscowDate(at: Date): string {
   return `${moscow.getUTCFullYear()}-${month}-${day}`;
 }
 
-function invitation(input: { uid: string; start: Date; summary: string; description: string }): string {
-  const end = new Date(input.start.getTime() + 30 * 60 * 1000);
+function invitation(input: { uid: string; start: Date; minutes?: number; summary: string; description: string }): string {
+  const end = new Date(input.start.getTime() + (input.minutes ?? 30) * 60 * 1000);
   const stamp = icsTime(new Date());
   const lines = [
     'BEGIN:VCALENDAR',
@@ -299,24 +414,31 @@ interface ProtocolRelease {
   tasks: { title: string; owner: string; dueOn: string }[];
   ics: string;
   when: Date;
+  eventUid: string;
 }
 
-async function smallestTranscript(dir: string): Promise<{ name: string; text: string }> {
-  const names = (await readdir(dir)).filter((name) => name.endsWith('-transcript.txt'));
-  if (!names.length) throw new Error('Расшифровок нет');
-  const sized = await Promise.all(names.map(async (name) => ({ name, size: (await stat(join(dir, name))).size })));
-  sized.sort((a, b) => a.size - b.size);
-  const picked = sized[0];
-  if (!picked) throw new Error('Расшифровок нет');
-  const text = await readFile(join(dir, picked.name), 'utf8');
-  return { name: picked.name, text: text.slice(0, MAX_TRANSCRIPT) };
+// Расшифровки лежат в каталоге руководителя (data/<руководитель>/meetings). Берётся последняя встреча по имени файла.
+async function latestTranscript(dir: string): Promise<{ name: string; text: string }> {
+  let names: string[] = [];
+  try {
+    names = (await readdir(dir)).filter((name) => name.endsWith('-transcript.txt'));
+  } catch {
+    names = [];
+  }
+  if (!names.length) throw new Error('В каталоге руководителя нет расшифровок встреч');
+  names.sort((a, b) => b.localeCompare(a));
+  const picked = names[0];
+  const text = await readFile(join(dir, picked), 'utf8');
+  return { name: picked, text: text.slice(0, MAX_TRANSCRIPT) };
 }
 
-export async function writeProtocol(db: Db, leaderId: string, dir = process.env.MEETINGS_DIR || '/app/meetings'): Promise<{ id: string }> {
+export async function writeProtocol(db: Db, leaderId: string, dir = `data/${leaderId}/meetings`): Promise<{ id: string }> {
   const [leader] = await db.select().from(leaders).where(eq(leaders.id, leaderId)).limit(1);
   if (!leader?.telegramChatId) throw new Error('Telegram-чат руководителя не привязан');
-  const source = await smallestTranscript(dir);
-  const arrived = (await stat(join(dir, source.name))).mtime;
+  const arrived = new Date();
+  const source = await latestTranscript(dir);
+  const meeting = meetingOfSource(source.name);
+  const staff = await db.select({ name: people.name, position: people.position }).from(people).where(eq(people.leaderId, leaderId));
   const result = await withLlmScope(
     { agent: 'protocol', leaderId, operationId: `protocol:${leaderId}:${Date.now()}`, title: 'Протокол встречи' },
     () => callJson<unknown>({
@@ -325,8 +447,14 @@ export async function writeProtocol(db: Db, leaderId: string, dir = process.env.
       'Ты пишешь протокол встречи по расшифровке.',
       'Тема, участники, короткие заметки, решения, дальнейшие шаги, предложения помощника и открытые вопросы.',
       'Не выдумывай людей и решений, которых нет в тексте. Каждый пункт короче 250 знаков.',
+      'Участников называй полным именем из списка людей руководителя. Каждый дальнейший шаг начинай с полного имени ответственного, срок пиши датой: «до 14 декабря»; «сегодня» — это день встречи. Шагов не больше 12: у каждого, кому на встрече дали поручение, есть свой шаг, мелкие поручения одному человеку объединяй.',
     ].join(' '),
-    user: source.text,
+    user: [
+      meeting ? `Встреча: ${meeting.title}, ${meeting.startsAt.replace('T', ' ')} по Москве.` : '',
+      `Люди руководителя: ${staff.map((row) => `${row.name} (${row.position})`).join('; ')}.`,
+      '',
+      source.text,
+    ].join('\n'),
     schemaName: 'protocol',
     schema,
   }),
@@ -339,10 +467,10 @@ export async function writeProtocol(db: Db, leaderId: string, dir = process.env.
   const draft: ProtocolDraft = {
     theme: parsed.data.theme.trim().slice(0, 180),
     participants: clip(parsed.data.participants, 12),
-    notes: clip(parsed.data.notes, 6),
+    notes: clip(parsed.data.notes, 5),
     decisions: clip(parsed.data.decisions, 6),
-    next: clip(parsed.data.next, 6),
-    proposals: clip(parsed.data.proposals, 4),
+    next: clip(parsed.data.next, 12),
+    proposals: clip(parsed.data.proposals, 3),
     open: clip(parsed.data.open, 5),
   };
   const id = randomUUID().replace(/-/g, '').slice(0, 8);

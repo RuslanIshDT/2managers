@@ -98,6 +98,7 @@ interface MirrorScene {
 
 interface Cabinet {
   name: string;
+  scene?: string;
   profile: string;
   linkCode: string;
   counts: { people: number; emails: number; meetings: number; tasks: number };
@@ -491,7 +492,10 @@ export function App() {
   return (
     <main className="mx-auto max-w-3xl px-4 py-8">
       <div className="mb-4 flex items-start justify-between gap-4">
-        <h1 className="text-2xl font-semibold">{cabinet?.name ?? user.name}</h1>
+        <div>
+          <h1 className="text-2xl font-semibold">{cabinet?.name ?? user.name}</h1>
+          {cabinet?.scene ? <p className="text-sm text-[#5d6878]">{cabinet.scene}</p> : null}
+        </div>
         <Button type="button" variant="outline" onClick={logout}>
           Выйти
         </Button>

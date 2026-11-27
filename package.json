@@ -17,7 +17,8 @@
     "tg:chats": "node --env-file=.env src/scripts/audit-telegram.ts --chats",
     "requests": "node --env-file=.env src/scripts/requests.ts",
     "reset-stand": "node src/scripts/reset-stand.ts",
-    "sync-materials": "node src/scripts/sync-materials.ts"
+    "sync-materials": "node src/scripts/sync-materials.ts",
+    "e2e": "playwright test"
   },
   "dependencies": {
     "@fastify/cookie": "11.0.2",
@@ -33,6 +34,7 @@
     "zod": "3.25.76"
   },
   "devDependencies": {
+    "@playwright/test": "^1.65.1",
     "@radix-ui/react-slot": "1.2.4",
     "@tailwindcss/vite": "4.1.17",
     "@types/node": "24.10.1",
@@ -44,8 +46,8 @@
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
     "drizzle-kit": "0.31.7",
-    "tailwindcss": "4.1.17",
     "tailwind-merge": "3.4.0",
+    "tailwindcss": "4.1.17",
     "typescript": "5.9.3",
     "vite": "6.4.1",
     "vitest": "3.2.4"

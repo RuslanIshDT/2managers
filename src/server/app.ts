@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { sceneWords } from '../agents/scene.ts';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { asc, count, desc, eq, sql } from 'drizzle-orm';
@@ -191,6 +192,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     );
     return {
       name: leader.name,
+      scene: sceneWords(leader.id),
       profile: hideMailbox((profileRow[0]?.profile ?? '').slice(0, 700), mailConfig()?.user ?? ''),
       linkCode: profileRow[0]?.linkCode ?? '',
       counts: {
@@ -230,7 +232,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       }))), taskRows),
       revisions: await deps.db.select().from(revisions).where(eq(revisions.leaderId, leader.id)).orderBy(asc(revisions.createdAt)),
       lastAudit: last[0] ? { status: last[0].status, mode: last[0].reason, at: last[0].startedAt.toISOString() } : null,
-      stand: await standView(leader.id),
+      stand: await standView(leader.id, deps.db),
     };
   });
 

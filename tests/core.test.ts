@@ -466,8 +466,9 @@ describe('пересчёт недели', () => {
     const second = trustOffers(secondHistory);
     expect(first).toHaveLength(1);
     expect(first[0]?.limit).toBe(8);
-    expect(second[0]?.limit).toBeNull();
-    expect(second[0]?.area).toBe('бюджет');
+    expect(second).toHaveLength(0);
+    expect(trustOffers(firstHistory, [{ personId: 'a', area: 'скидка', limit: '8' }])).toHaveLength(0);
+    expect(trustOffers(firstHistory, [{ personId: 'a', area: 'скидка', limit: '5' }])[0]?.limit).toBe(8);
     const pieces = [
       { kind: 'письма' as const, key: 'a@example|скидка клиенту', title: 'Скидка', verdict: 'не_должно', change: 'сам', cause: 'в_полномочиях_отправителя' },
       { kind: 'встречи' as const, key: 'Планёрка', title: 'Планёрка', verdict: 'в_другом_виде', change: 'реже', cause: 'встреча_без_решения' },
@@ -512,7 +513,7 @@ describe('пересчёт недели', () => {
     expect(letterHits({ fromEmail: 'a@example', subject: 'Скидка новая', body: 'Скидка 8%' }, rules)?.effect).toBe('сам');
     expect(letterHits({ fromEmail: 'a@example', subject: 'Скидка новая', body: 'Скидка 12%' }, rules)).toBeNull();
     const other = rulesFromAudit(pieces, second, new Map([['b', 'b@example']]));
-    expect(other.some((rule) => rule.personId === 'b' && rule.limitValue === '')).toBe(true);
+    expect(other.some((rule) => rule.personId === 'b' && rule.limitValue === '')).toBe(false);
     expect(other.some((rule) => rule.personId === 'a')).toBe(false);
     expect(staffCard({ вывод: '', рекомендация: 'да', основание: '', риски: '', если_не_решить: '', контекст: '' })).toBeNull();
     expect(waitingHours([{ status: 'ждёт', createdAt: new Date('2026-11-26T08:00:00Z') }], new Date('2026-11-26T10:30:00Z'))).toBe(2.5);

@@ -69,18 +69,30 @@ export function subjectKey(subject: string): string {
   return subject.replace(/^((re|fw|fwd|напоминание|повтор)\s*:\s*)+/i, '').trim().toLowerCase();
 }
 
+// Предел из утверждённых решений: наибольшее число с единицей в теме («Скидка 9%», «Сверхурочные 3 часа»).
 export function limitFromApprovals(rows: HistoryRow[]): number | null {
-  const percents = rows
-    .map((row) => {
-      const match = /(\d+(?:[.,]\d+)?)\s*%/.exec(row.subject);
-      return match ? Number(match[1].replace(',', '.')) : null;
-    })
-    .filter((value): value is number => value !== null && Number.isFinite(value));
-  if (!percents.length) return null;
-  return Math.max(...percents);
+  return limitWithUnit(rows)?.value ?? null;
 }
 
-export function trustOffers(rows: HistoryRow[]): TrustOffer[] {
+export function limitWithUnit(rows: HistoryRow[]): { value: number; unit: string } | null {
+  const found = rows
+    .map((row) => {
+      const match = /(\d+(?:[.,]\d+)?)\s*(%|ч\b|час[а-я]*|₽|руб[а-я]*)/i.exec(row.subject);
+      if (!match) return null;
+      const value = Number(match[1].replace(',', '.'));
+      const raw = match[2].toLowerCase();
+      const unit = raw === '%' ? '%' : raw.startsWith('ч') ? 'ч' : '₽';
+      return Number.isFinite(value) ? { value, unit } : null;
+    })
+    .filter((item): item is { value: number; unit: string } => item !== null);
+  if (!found.length) return null;
+  const unit = found[0].unit;
+  const same = found.filter((item) => item.unit === unit);
+  return { value: Math.max(...same.map((item) => item.value)), unit };
+}
+
+// Право предлагается только с числовым пределом и только если он выше того, что у человека уже есть.
+export function trustOffers(rows: HistoryRow[], current: { personId: string; area: string; limit: string }[] = []): TrustOffer[] {
   const groups = new Map<string, HistoryRow[]>();
   for (const row of rows) {
     const key = `${row.personId}\t${row.area}`;
@@ -96,14 +108,17 @@ export function trustOffers(rows: HistoryRow[]): TrustOffer[] {
       if (row.outcome !== 'утверждено') break;
       streakRows.push(row);
     }
-    const limit = limitFromApprovals(streakRows);
-    const ready = streakRows.length >= STREAK;
+    const found = limitWithUnit(streakRows);
     const sample = sorted[0];
-    const limitText = limit === null ? 'без числового предела в утверждённых решениях' : `до ${limit}%`;
+    const have = current.find((row) => row.personId === sample.personId && row.area.toLowerCase() === sample.area.toLowerCase());
+    const haveValue = have ? Number(have.limit.replace(',', '.')) : NaN;
+    const above = found !== null && (!Number.isFinite(haveValue) || found.value > haveValue);
+    const ready = streakRows.length >= STREAK && above;
+    const limitText = found ? `до ${found.value}${found.unit === '%' ? '%' : ` ${found.unit}`}` : '';
     offers.push({
       personId: sample.personId,
       area: sample.area,
-      limit,
+      limit: found?.value ?? null,
       streak: streakRows.length,
       ready,
       title: ready ? `Дать право решать самостоятельно «${sample.area}» ${limitText}: ${streakRows.length} утверждений подряд без правок` : '',
@@ -123,7 +138,7 @@ export function rulesFromAudit(
     const split = piece.kind === 'письма' ? piece.key.indexOf('|') : -1;
     const fromEmail = split >= 0 ? piece.key.slice(0, split) : '';
     const subject = subjectKey(split >= 0 ? piece.key.slice(split + 1) : piece.title);
-    const category = piece.kind === 'письма' ? categoryByKey.get(`${fromEmail.toLowerCase()}|${subject}`) ?? '' : '';
+    const category = piece.kind === 'письма' ? categoryByKey.get(`${fromEmail.toLowerCase()}|${subject}`) ?? '' : categoryByKey.get(`встреча|${subject}`) ?? '';
     const effect = ruleEffect(piece.verdict, category);
     if (!effect) continue;
     if (piece.kind === 'письма') {

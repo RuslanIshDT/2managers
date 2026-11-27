@@ -1,8 +1,9 @@
 // Принятие правил недели и сцена «до и после». Модель не вызывается.
 import { readFile } from 'node:fs/promises';
+import { clockFor } from './scene.ts';
 import { eq } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
-import { decisions, emailEtalon, emails, flowReports, leaders, meetings, people, rules, verdicts } from '../db/schema.ts';
+import { authorities, decisions, emailEtalon, seriesKind, emails, flowReports, leaders, meetings, people, rules, verdicts } from '../db/schema.ts';
 import { readHistory, staffFromVerdict, type StaffCard } from './dependence.ts';
 import { leaderMustConfirm } from './k2.ts';
 import {
@@ -57,7 +58,7 @@ export async function weekScene(db: Db, leaderId: string) {
     accepted,
   );
   await closeReturned(db, decisionRows, verdictRows);
-  const offers = trustOffers(history);
+  const offers = trustOffers(history, await currentRights(db, leaderId));
   const asks = verdictRows.filter((row) => row.kind === 'нужен_руководитель');
   const asked = [...asks].reverse().find((row) => row.recommendation.trim()) ?? asks.at(-1);
   const staff: StaffCard | null = asked
@@ -89,7 +90,7 @@ export async function weekScene(db: Db, leaderId: string) {
     offers: offers.map((offer) => offer.title),
     rules: ruleRows.length,
     askPercent: askShare(verdictRows.map((row) => row.kind)),
-    waitingHours: waitingHours(decisionRows, new Date()),
+    waitingHours: waitingHours(decisionRows, clockFor(leaderId).now),
     staff,
     waiting: decisionRows
       .filter((row) => row.status === 'ждёт')
@@ -133,7 +134,7 @@ async function closeReturned(
 
 export async function acceptWeek(db: Db, leaderId: string) {
   const [history, persons, pieces] = await Promise.all([historyOf(leaderId), db.select().from(people).where(eq(people.leaderId, leaderId)), readPieces(db, leaderId)]);
-  const offers = trustOffers(history);
+  const offers = trustOffers(history, await currentRights(db, leaderId));
   const emailByPerson = new Map(persons.map((person) => [person.externalId, person.email]));
   const built = rulesFromAudit(pieces, offers, emailByPerson, await categoriesByLetter(db, leaderId));
   const now = new Date();
@@ -168,9 +169,10 @@ export async function acceptWeekByChat(db: Db, chatId: string): Promise<string> 
 }
 
 async function categoriesByLetter(db: Db, leaderId: string): Promise<Map<string, string>> {
-  const [marks, rows] = await Promise.all([
+  const [marks, rows, kinds] = await Promise.all([
     db.select().from(emailEtalon).where(eq(emailEtalon.leaderId, leaderId)),
     db.select().from(emails).where(eq(emails.leaderId, leaderId)),
+    db.select().from(seriesKind).where(eq(seriesKind.leaderId, leaderId)),
   ]);
   const byId = new Map(marks.map((row) => [row.externalId, row.category]));
   const map = new Map<string, string>();
@@ -181,6 +183,7 @@ async function categoriesByLetter(db: Db, leaderId: string): Promise<Map<string,
     const prev = map.get(key);
     if (!prev || leaderMustConfirm(category)) map.set(key, category);
   }
+  for (const row of kinds) if (row.category) map.set(`встреча|${subjectKey(row.seriesKey)}`, row.category);
   return map;
 }
 
@@ -193,7 +196,7 @@ export async function ownProposal(db: Db, leaderId: string): Promise<FlowRule[]>
     db.select().from(people).where(eq(people.leaderId, leaderId)),
   ]);
   const emailByPerson = new Map(persons.map((person) => [person.externalId, person.email]));
-  return rulesFromAudit(pieces, trustOffers(history), emailByPerson, await categoriesByLetter(db, leaderId));
+  return rulesFromAudit(pieces, trustOffers(history, await currentRights(db, leaderId)), emailByPerson, await categoriesByLetter(db, leaderId));
 }
 
 async function readPieces(db: Db, leaderId: string): Promise<AuditPiece[]> {
@@ -221,4 +224,9 @@ function piecesOf(report: unknown): AuditPiece[] {
     });
   }
   return pieces;
+}
+
+async function currentRights(db: Db, leaderId: string) {
+  const rows = await db.select().from(authorities).where(eq(authorities.leaderId, leaderId));
+  return rows.map((row) => ({ personId: row.personId, area: row.area, limit: row.limitValue }));
 }

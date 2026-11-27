@@ -6,8 +6,10 @@ import { departmentForLeader } from './k1.ts';
 import { chooseFocus, classifySeries, renderPlan, type Candidate, type FocusPlan } from './conductor.ts';
 import { departmentMatrix, goalMinutes, morningLines, overdueLines, overdueTasks } from './focus.ts';
 import { withLlmScope } from '../llm.ts';
+import { textSignals } from './k2.ts';
 import { sendMessage } from '../telegram.ts';
 import { latestProtocol, morningOpenItems } from './protocol.ts';
+import { clockFor, dateWords, previousWorkday, waitedDays } from './scene.ts';
 
 export async function focusForLeader(db: Db, leaderId: string, leaderName: string) {
   const scene = await sceneFor(db, leaderId, leaderName);
@@ -23,9 +25,9 @@ export async function sendFocus(db: Db, leaderId: string) {
   const scene = await sceneFor(db, leaderId, leader.name);
   const plan = await withLlmScope(
     { agent: 'k4', leaderId, operationId: `k4:${leaderId}:${Date.now()}`, title: 'Утреннее сообщение' },
-    () => chooseFocus({ purpose: `k4:${leaderId}`, profile: leader.profile, candidates: scene.candidates }),
+    () => chooseFocus({ purpose: `k4:${leaderId}`, profile: leader.profile, candidates: scene.candidates, names: scene.names }),
   );
-  await classifyNewSeries(db, leaderId);
+  await classifyNewSeries(db, leaderId, leader.profile);
   const text = [
     renderPlan({
       plan,
@@ -67,7 +69,8 @@ async function sceneFor(db: Db, leaderId: string, leaderName: string) {
       lagging: person.kpis.some((kpi) => kpi.weeks.some((week) => week.status === 'отстаёт')),
     })),
   );
-  const today = moscowDay(new Date());
+  const clock = clockFor(leaderId);
+  const today = clock.today;
   const ownTasks = taskRows.filter((row) => row.ownerName === leaderName);
   const overdue = overdueTasks(
     taskRows
@@ -81,15 +84,16 @@ async function sceneFor(db: Db, leaderId: string, leaderName: string) {
       id: `task:${row.externalId}`,
       kind: 'задача',
       title: row.title,
-      detail: `срок ${row.dueOn}, статус ${row.status}`,
+      detail: `срок ${dateWords(row.dueOn)}, статус ${row.status}`,
       goal: '',
     })),
     ...waiting.map((row) => ({
       id: `wait:${row.id}`,
       kind: 'решение',
       title: `${row.replyName}: ${row.summary}`,
-      detail: `ждёт ${waitedDays(row.createdAt)} дн.`,
+      detail: waitWords(waitedDays(row.createdAt, clock.now)),
       goal: '',
+      person: row.replyName,
     })),
     ...department.people
       .filter((person) => person.kpis.some((kpi) => kpi.weeks.some((week) => week.status === 'отстаёт')))
@@ -99,6 +103,7 @@ async function sceneFor(db: Db, leaderId: string, leaderName: string) {
         title: `KPI отстаёт: ${person.name}`,
         detail: person.goal,
         goal: person.goal,
+        person: person.name,
       })),
     ...matrix.map((row) => ({
       id: `matrix:${row.name}`,
@@ -106,9 +111,10 @@ async function sceneFor(db: Db, leaderId: string, leaderName: string) {
       title: `${row.name}: ${row.basis}`,
       detail: row.basis,
       goal: department.people.find((person) => person.name === row.name)?.goal ?? '',
+      person: row.name,
     })),
   ];
-  const yesterday = shiftDay(today, -1);
+  const yesterday = previousWorkday(today);
   const share = goalMinutes(
     meetingRows.map((row) => ({ minutes: row.minutes, summary: row.summary })),
     department.people.flatMap((person) => [person.goal, person.leaderGoal]),
@@ -131,6 +137,7 @@ async function sceneFor(db: Db, leaderId: string, leaderName: string) {
     matrix,
     share,
     candidates,
+    names: department.people.map((person) => person.name),
     draft,
     overdue: overdueLines(overdue),
     yesterday: titlesOn(meetingRows, yesterday),
@@ -138,12 +145,12 @@ async function sceneFor(db: Db, leaderId: string, leaderName: string) {
   };
 }
 
-async function classifyNewSeries(db: Db, leaderId: string) {
+export async function classifyNewSeries(db: Db, leaderId: string, profile = '') {
   const [known, rows] = await Promise.all([
     db.select().from(seriesKind).where(eq(seriesKind.leaderId, leaderId)),
     db.select().from(meetings).where(eq(meetings.leaderId, leaderId)),
   ]);
-  const seen = new Set(known.map((row) => row.seriesKey));
+  const seen = new Set(known.filter((row) => row.category).map((row) => row.seriesKey));
   const byTitle = new Map<string, string[]>();
   for (const row of rows) {
     if (seen.has(row.summary) || byTitle.has(row.summary)) continue;
@@ -152,10 +159,15 @@ async function classifyNewSeries(db: Db, leaderId: string) {
   const fresh = [...byTitle.entries()].map(([title, attendees]) => ({ title, attendees }));
   const classified = await withLlmScope(
     { agent: 'k15', leaderId, operationId: `k15:${leaderId}:${Date.now()}`, title: 'Вид встреч' },
-    () => classifySeries({ purpose: `k4:series:${leaderId}`, series: fresh }),
+    () => classifySeries({ purpose: `k4:series:${leaderId}`, series: fresh, profile }),
   );
-  if (!classified.length) return;
-  await db.insert(seriesKind).values(classified.map((row) => ({ leaderId, seriesKey: row.title, kind: row.kind }))).onConflictDoNothing();
+  for (const row of classified) {
+    const category = seriesCategory(row.title, row.category);
+    await db
+      .insert(seriesKind)
+      .values({ leaderId, seriesKey: row.title, kind: row.kind, category })
+      .onConflictDoUpdate({ target: [seriesKind.leaderId, seriesKind.seriesKey], set: { kind: row.kind, category } });
+  }
 }
 
 function attendeeNames(value: unknown): string[] {
@@ -175,18 +187,23 @@ function meetingDay(startsAt: string): string {
   return `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6, 8)}`;
 }
 
-function moscowDay(date: Date): string {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow', year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
-}
-
-function shiftDay(day: string, delta: number): string {
-  const [year, month, date] = day.split('-').map(Number);
-  const next = new Date(Date.UTC(year, month - 1, date + delta));
-  return next.toISOString().slice(0, 10);
-}
-
-function waitedDays(from: Date): number {
-  return Math.max(0, Math.floor((Date.now() - from.getTime()) / 86_400_000));
+function waitWords(days: number): string {
+  if (days < 1) return 'ждёт меньше дня';
+  return `ждёт ${days} дн.`;
 }
 
 export type { FocusPlan };
+
+// Категорию встречи предлагает модель, код перепроверяет по признакам в названии: N1 в названии сильнее «иное».
+export function seriesCategory(title: string, model: string): string {
+  const signal = textSignals(title).category ?? titleSignal(title);
+  if (signal && model === 'иное') return signal;
+  return model || signal || 'иное';
+}
+
+function titleSignal(title: string): string | null {
+  if (/бюджет|скидк|закупк/i.test(title)) return 'деньги';
+  if (/найм|интервью|кандидат|оффер|отпуск|увольн/i.test(title)) return 'кадры';
+  if (/жалоб|договор|(^|[^А-Яа-яЁё])КП([^А-Яа-яЁё]|$)|коммерческ|гарант/i.test(title)) return 'обязательства_клиентам';
+  return null;
+}

@@ -236,16 +236,20 @@ export function cardText(input: {
 }
 
 export async function judgeLetter(input: { purpose: string; prompt: string }): Promise<ModelVerdict> {
-  const result = await callJson<unknown>({
-    purpose: input.purpose,
-    system: SYSTEM,
-    user: input.prompt,
-    schemaName: 'k2_verdict',
-    schema,
-  });
-  const parsed = modelZod.safeParse(result.data);
-  if (!parsed.success) throw new Error('Ответ модели не совпал со схемой вердикта');
-  return parsed.data;
+  let detail = '';
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const result = await callJson<unknown>({
+      purpose: input.purpose,
+      system: SYSTEM,
+      user: attempt === 1 ? input.prompt : `${input.prompt}\n\nПрошлый ответ не прошёл проверку (${detail}). Заполни все поля по схеме.`,
+      schemaName: 'k2_verdict',
+      schema,
+    });
+    const parsed = modelZod.safeParse(result.data);
+    if (parsed.success) return parsed.data;
+    detail = parsed.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.code}`).join('; ').slice(0, 300);
+  }
+  throw new Error(`Ответ модели не совпал со схемой вердикта: ${detail}`.slice(0, 200));
 }
 
 export function letterPrompt(input: {
