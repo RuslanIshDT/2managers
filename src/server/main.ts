@@ -73,7 +73,7 @@ await boss.work<{ leaderId: string }>('protocol', async (jobs) => {
       const result = await writeProtocol(db, job.data.leaderId);
       await db
         .update(agentRuns)
-        .set({ status: 'done', finishedAt: new Date(), detail: `протокол ${result.id} в Telegram, рассылка — заглушка` })
+        .set({ status: 'done', finishedAt: new Date(), detail: `протокол ${result.id} в Telegram, после утверждения уйдёт письмом` })
         .where(eq(agentRuns.id, job.id));
     } catch (err) {
       await db

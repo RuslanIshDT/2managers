@@ -43,7 +43,12 @@ export async function checkMail(): Promise<MailStatus> {
   }
 }
 
-export async function sendMail(to: string, subject: string, text: string) {
+export async function sendMail(
+  to: string,
+  subject: string,
+  text: string,
+  attachments: { filename: string; content: string; contentType: string }[] = [],
+) {
   const cfg = mailConfig();
   if (!cfg) throw new Error('Яндекс Почта не настроена');
   const transport = nodemailer.createTransport({
@@ -57,6 +62,7 @@ export async function sendMail(to: string, subject: string, text: string) {
     to,
     subject,
     text: `${text}\n\n— ИИ-помощник руководителя`,
+    attachments,
   });
   return { messageId: info.messageId };
 }

@@ -569,7 +569,7 @@ export function App() {
       {section === 'tasks' ? (
         <Card className="mb-4">
           <h2 className="text-lg font-semibold">Задачи</h2>
-          <p className="mb-3 text-sm text-[#5d6878]">Заглушка. Трекер не подключён, список из файла. Разбор ниже считает помощник.</p>
+          <p className="mb-3 text-sm text-[#5d6878]">Трекер не подключён. В списке задачи файла и задачи из утверждённого протокола. Разбор ниже считает помощник.</p>
           <ul className="grid gap-2 text-sm">
             {(cabinet?.control.tasks ?? []).map((item) => (
               <li key={item.title}>
@@ -585,8 +585,8 @@ export function App() {
       {section === 'mailing' ? (
         <StubList
           title="Рассылка протокола"
-          note="Заглушка. После утверждения письма участникам не уходят."
-          rows={['Кнопка «Утвердить» в Telegram меняет только статус. Почтовой рассылки нет.']}
+          note="После «Утвердить» письмо с протоколом и приглашением .ics уходит в тестовый ящик. Настоящие адресаты названы в тексте. Календарь не подключён."
+          rows={['Задачи из протокола записываются в базу и видны на экране задач.']}
         />
       ) : null}
       {section === 'settings' ? (
@@ -650,8 +650,8 @@ export function App() {
           </Button>
           <p className="mt-2 text-sm text-[#5d6878]">
             {cabinet?.protocol
-              ? `Протокол в Telegram: ${cabinet.protocol.status}. Открытых вопросов: ${cabinet.protocol.open}. Рассылка участникам — заглушка, письма не уходят.`
-              : 'Расшифровка читается с диска стенда и в репозиторий не входит. Рассылка — заглушка.'}
+              ? `Протокол в Telegram: ${cabinet.protocol.status}. Открытых вопросов: ${cabinet.protocol.open}. После «Утвердить» письмо и приглашение уходят в тестовый ящик.`
+              : 'Расшифровка читается с диска стенда и в репозиторий не входит.'}
           </p>
           <span className="mt-3 flex flex-wrap gap-2">
             <Button type="button" variant="outline" onClick={() => setSection('tasks')}>
@@ -661,7 +661,7 @@ export function App() {
               Календарь, заглушка
             </Button>
             <Button type="button" variant="outline" onClick={() => setSection('mailing')}>
-              Рассылка, заглушка
+              Рассылка протокола
             </Button>
           </span>
         </div>

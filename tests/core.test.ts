@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { costView, moscowStart, type OperationRow } from '../src/agents/cost.ts';
 import { modelsWithSchema, priceWords } from '../src/agents/models.ts';
 import { sendTrace } from '../src/langfuse.ts';
+import { followUpStart, protocolRelease } from '../src/agents/protocol.ts';
 import { providerHeaders } from '../src/llm.ts';
 import { hashPassword, hashToken, verifyPassword } from '../src/auth.ts';
 import { checkDepartment, readDepartment } from '../src/agents/k1.ts';
@@ -551,7 +552,7 @@ describe('протокол', () => {
       open: ['Кто ведёт понедельник'],
     });
     expect(text).toContain('План &lt;недели&gt;');
-    expect(text).toContain('Рассылка участникам — заглушка');
+    expect(text).not.toContain('заглушка');
     expect(morningOpenItems(['Кто ведёт понедельник'])).toContain('прошлого протокола');
     expect(parseProtocolCallback('p:approve:ab12cd34')).toBe('ab12cd34');
     expect(parseProtocolCallback('d:approve:ab12cd34')).toBeNull();
@@ -727,7 +728,8 @@ describe('главная T34', () => {
     expect(meetingLine?.text).not.toContain('оценка');
     expect(desk.work[0]?.minutes).toBe('');
     expect(desk.helpers.filter((card) => /^k\d+$/.test(card.id))).toHaveLength(15);
-    expect(desk.helpers.filter((card) => card.mode === 'заглушка').map((card) => card.id)).toEqual(['stub-tasks', 'stub-calendar', 'stub-mail']);
+    expect(desk.helpers.filter((card) => card.mode === 'заглушка').map((card) => card.id)).toEqual(['stub-tasks', 'stub-calendar']);
+    expect(desk.helpers.find((card) => card.id === 'r5')?.mode).toBe('код');
     for (const item of [...desk.work, ...desk.done]) {
       expect(item.origin.who).not.toBe('');
       expect(item.origin.data).not.toBe('');
@@ -831,6 +833,24 @@ describe('модели и стоимость T35', () => {
     delete process.env.LANGFUSE_HOST;
     delete process.env.LANGFUSE_PUBLIC_KEY;
     delete process.env.LANGFUSE_SECRET_KEY;
+  });
+});
+
+describe('протокол после утверждения', () => {
+  it('собирает письмо, задачи и приглашение из текста протокола', () => {
+    const body = ['Сверка плана', '', 'Участники: Анна, Борис.', '', 'Дальше:', '— Анна пришлёт план.', '— Сверить цифры.', ''].join('\n');
+    const at = new Date('2026-11-27T08:00:00Z');
+    const release = protocolRelease(body, [{ name: 'Анна', email: 'anna@example.com' }], at, 'abc');
+    expect(followUpStart(at).toISOString()).toBe('2026-11-30T07:00:00.000Z');
+    expect(release.tasks.map((task) => task.owner)).toEqual(['Анна', 'не назван']);
+    expect(release.tasks[0]?.dueOn).toBe('2026-11-30');
+    expect(release.text).toContain('Анна <anna@example.com>');
+    expect(release.text).toContain('Борис');
+    expect(release.text).toContain('тестовый ящик');
+    expect(release.text).not.toContain('заглушка');
+    expect(release.ics).toContain('METHOD:REQUEST');
+    expect(release.ics).toContain('DTSTART:20261130T070000Z');
+    expect(release.ics).toContain('SUMMARY:Сверка плана');
   });
 });
 

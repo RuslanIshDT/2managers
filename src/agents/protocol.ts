@@ -1,13 +1,14 @@
 // Протокол по расшифровке. Текст встречи в репозиторий не входит: его читает стенд с диска.
-// Утверждение — кнопка в Telegram. Рассылка участникам здесь не делается.
+// После «Утвердить» протокол уходит в тестовый ящик, задачи пишутся в базу, встреча — файлом .ics.
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { desc, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import type { Db } from '../db/client.ts';
-import { leaders, protocols } from '../db/schema.ts';
+import { leaders, people, protocols, tasks } from '../db/schema.ts';
 import { callJson, withLlmScope, type JsonSchema } from '../llm.ts';
+import { mailConfig, sendMail } from '../mail.ts';
 import { sendMessage } from '../telegram.ts';
 
 const MAX_TRANSCRIPT = 12_000;
@@ -76,7 +77,6 @@ export function renderProtocol(draft: ProtocolDraft): string {
   if (draft.open.length) {
     lines.push('', 'Открытые вопросы:', ...draft.open.map((item) => `— ${esc(item)}`));
   }
-  lines.push('', 'Рассылка участникам — заглушка, письма не уходят.');
   return lines.join('\n').slice(0, 3500);
 }
 
@@ -108,18 +108,144 @@ export function morningOpenItems(open: string[]): string {
   return ['', 'Открытые вопросы прошлого протокола:', ...open.map((item) => `— ${esc(item)}`)].join('\n');
 }
 
+export function protocolRelease(body: string, known: { name: string; email: string }[], at: Date, id = 'protocol'): ProtocolRelease {
+  const theme = body.split('\n')[0]?.trim() || 'Встреча по протоколу';
+  const participants = participantNames(body);
+  const steps = sectionLines(body, 'Дальше:').map((line) => line.replace(/^—\s*/, '').trim()).filter(Boolean);
+  const when = followUpStart(at);
+  const dueOn = moscowDate(when);
+  const tasks = steps.map((title) => ({ title: title.slice(0, 240), owner: ownerOf(title, participants), dueOn }));
+  const named = participants.map((name) => {
+    const person = known.find((row) => row.name.toLowerCase() === name.toLowerCase() && row.email.trim());
+    return person ? `${name} <${person.email}>` : name;
+  });
+  const text = [
+    named.length ? `Кому: ${named.join('; ')}.` : 'Кому: участники в протоколе не названы.',
+    'Адреса из каталога писем не принимают, поэтому письмо ушло в тестовый ящик. Настоящие адресаты названы выше.',
+    'Календарь не подключён: приглашение на встречу во вложении.',
+    '',
+    body.replace(/\nРассылка участникам — заглушка, письма не уходят\./g, '').trim(),
+    '',
+    `Встреча: ${theme}. ${dueOn}, 10:00 по Москве, 30 минут.`,
+  ].join('\n');
+  return {
+    subject: `Протокол: ${theme}`.slice(0, 180),
+    text,
+    tasks,
+    ics: invitation({ uid: `protocol-${id}`, start: when, summary: theme, description: steps.join('\n') }),
+    when,
+  };
+}
+
 export async function approveProtocol(db: Db, id: string, chatId: string): Promise<string> {
   const [leader] = await db.select().from(leaders).where(eq(leaders.telegramChatId, chatId)).limit(1);
   if (!leader) return 'Чат не привязан';
-  const [row] = await db
-    .select()
-    .from(protocols)
-    .where(eq(protocols.id, id))
-    .limit(1);
+  const [row] = await db.select().from(protocols).where(eq(protocols.id, id)).limit(1);
   if (!row || row.leaderId !== leader.id) return 'Протокол не найден';
   if (row.status === 'утверждён') return 'Уже утверждён';
-  await db.update(protocols).set({ status: 'утверждён' }).where(eq(protocols.id, id));
-  return 'Протокол утверждён. Рассылка — заглушка, письма не ушли.';
+  const mailbox = mailConfig();
+  if (!mailbox) return 'Яндекс Почта не настроена';
+  const known = await db.select({ name: people.name, email: people.email }).from(people).where(eq(people.leaderId, leader.id));
+  const release = protocolRelease(row.body, known, row.createdAt, row.id);
+  for (const [index, task] of release.tasks.entries()) {
+    await db
+      .insert(tasks)
+      .values({
+        leaderId: leader.id,
+        externalId: `protocol-${row.id}-${index + 1}`,
+        title: task.title,
+        ownerName: task.owner,
+        dueOn: task.dueOn,
+        status: 'в работе',
+        source: 'протокол',
+      })
+      .onConflictDoNothing();
+  }
+  await sendMail(mailbox.user, release.subject, release.text, [
+    { filename: 'vstrecha.ics', content: release.ics, contentType: 'text/calendar; charset=utf-8; method=REQUEST' },
+  ]);
+  await db.update(protocols).set({ status: 'утверждён' }).where(eq(protocols.id, row.id));
+  const count = release.tasks.length;
+  return `Протокол утверждён. Письмо с приглашением ушло в тестовый ящик, задач записано: ${count}.`;
+}
+
+function participantNames(body: string): string[] {
+  const line = sectionLines(body, 'Участники:')[0] ?? '';
+  return line
+    .replace(/^Участники:\s*/i, '')
+    .replace(/\([^)]*\)/g, '')
+    .split(',')
+    .map((name) => name.replace(/\.$/, '').trim())
+    .filter((name) => name.length > 1);
+}
+
+function sectionLines(body: string, title: string): string[] {
+  const start = body.indexOf(title);
+  if (start < 0) return [];
+  const rest = body.slice(start + title.length);
+  const next = rest.search(/\n\n/);
+  const block = next < 0 ? rest : rest.slice(0, next);
+  return block
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function ownerOf(title: string, participants: string[]): string {
+  const found = participants.filter((name) => title.toLowerCase().includes(name.toLowerCase()));
+  found.sort((a, b) => b.length - a.length);
+  return found[0] ?? 'не назван';
+}
+
+export function followUpStart(at: Date): Date {
+  const moscow = new Date(at.getTime() + 3 * 60 * 60 * 1000);
+  const day = moscow.getUTCDay();
+  const add = day === 1 ? 7 : (8 - day) % 7;
+  return new Date(Date.UTC(moscow.getUTCFullYear(), moscow.getUTCMonth(), moscow.getUTCDate() + add, 7, 0, 0));
+}
+
+function moscowDate(at: Date): string {
+  const moscow = new Date(at.getTime() + 3 * 60 * 60 * 1000);
+  const month = String(moscow.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(moscow.getUTCDate()).padStart(2, '0');
+  return `${moscow.getUTCFullYear()}-${month}-${day}`;
+}
+
+function invitation(input: { uid: string; start: Date; summary: string; description: string }): string {
+  const end = new Date(input.start.getTime() + 30 * 60 * 1000);
+  const stamp = icsTime(new Date());
+  const lines = [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//ecompras//protocol//RU',
+    'METHOD:REQUEST',
+    'BEGIN:VEVENT',
+    `UID:${input.uid}@ecompras`,
+    `DTSTAMP:${stamp}`,
+    `DTSTART:${icsTime(input.start)}`,
+    `DTEND:${icsTime(end)}`,
+    `SUMMARY:${icsText(input.summary)}`,
+    `DESCRIPTION:${icsText(input.description)}`,
+    'END:VEVENT',
+    'END:VCALENDAR',
+  ];
+  return lines.join('\r\n');
+}
+
+function icsTime(at: Date): string {
+  return at.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+}
+
+function icsText(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/[,;]/g, (char) => `\\${char}`).slice(0, 400);
+}
+
+interface ProtocolRelease {
+  subject: string;
+  text: string;
+  tasks: { title: string; owner: string; dueOn: string }[];
+  ics: string;
+  when: Date;
 }
 
 async function smallestTranscript(dir: string): Promise<{ name: string; text: string }> {
