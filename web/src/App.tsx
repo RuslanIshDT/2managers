@@ -893,9 +893,11 @@ function parseGuide(text: string): { intro: string[]; tabs: GuideTab[] } {
   const blocks = text.replace(/\r/g, '').split(/\n{2,}/).map((block) => block.trim()).filter(Boolean);
   for (const block of blocks) {
     if (block.startsWith('## ')) {
-      const title = block.slice(3);
+      // «## [Telegram] Сценарий 1. …» — в квадратных скобках имя вкладки; без скобок — начало заголовка до точки.
+      const named = /^\[(.+?)\]\s*(.+)$/.exec(block.slice(3));
+      const title = named ? named[2] : block.slice(3);
       const dot = title.indexOf('. ');
-      tabs.push({ label: dot > 0 ? title.slice(0, dot) : title, title, blocks: [] });
+      tabs.push({ label: named ? named[1] : dot > 0 ? title.slice(0, dot) : title, title, blocks: [] });
       continue;
     }
     if (tabs.length) tabs[tabs.length - 1].blocks.push(block);
