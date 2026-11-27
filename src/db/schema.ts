@@ -262,6 +262,7 @@ export const protocols = pgTable('protocols', {
   steps: jsonb('steps').notNull().default([]),
   prior: jsonb('prior').notNull().default([]),
   agreed: jsonb('agreed').notNull().default([]),
+  mailed: jsonb('mailed').$type<string[] | null>(),
 });
 
 export const taskReminders = pgTable(

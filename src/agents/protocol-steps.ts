@@ -222,6 +222,30 @@ export interface ProtocolLetter {
   text: string;
 }
 
+export function letterKey(name: string): string {
+  return name.trim().toLowerCase().replace(/ё/g, 'е');
+}
+
+// null — протокол утверждён до учёта отправки, повторно не рассылаем. Массив — кому письмо уже ушло.
+export function storedMailed(value: unknown): string[] | null {
+  if (!Array.isArray(value)) return null;
+  return value.filter((item): item is string => typeof item === 'string').map(letterKey);
+}
+
+export function lettersToSend<T extends { toName: string }>(letters: T[], mailed: string[]): T[] {
+  const sent = new Set(mailed);
+  return letters.filter((letter) => !sent.has(letterKey(letter.toName)));
+}
+
+export function mailResultLine(input: { sent: number; total: number; failed: string[]; again: boolean }): string {
+  const arrived = input.total - input.failed.length;
+  const head = input.again
+    ? `Дослано писем: ${input.sent}. Всего ушло: ${arrived} из ${input.total}.`
+    : `Писем в тестовый ящик: ${input.sent} из ${input.total}.`;
+  if (!input.failed.length) return head;
+  return `${head} Не ушли: ${input.failed.join(', ')}. Повторное «Утвердить» дошлёт только их.`;
+}
+
 function letterHead(name: string, email: string): string {
   const who = email ? `Кому: ${name} <${email}>` : `Кому: ${name}`;
   return `${who}\nСтенд отправляет письма помощника в тестовый ящик, получатель назван выше.`;

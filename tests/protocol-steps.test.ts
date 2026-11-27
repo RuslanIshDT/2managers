@@ -6,14 +6,18 @@ import {
   cleanSteps,
   openWithMeetings,
   priorEffects,
+  lettersToSend,
+  mailResultLine,
   protocolLetters,
   reminderItems,
+  storedMailed,
   reminderLetters,
   replaceSection,
   scheduledMeetings,
   stepLine,
 } from '../src/agents/protocol-steps.ts';
 import { isLeaderTask } from '../src/agents/focus.ts';
+import { assigneeLogin } from '../src/yandex/tracker.ts';
 
 // Люди и поручения выдуманы: этого протокола нет в синтетике.
 const known = [
@@ -107,6 +111,36 @@ describe('письмо каждому участнику', () => {
     expect(toLeader?.text).toContain('— Человек 1: отчёт, до 14 декабря');
     expect(toLeader?.text).toContain('— Человек 2: поручений нет');
     expect(toLeader?.subject).toBe('Протокол: Смена цеха');
+  });
+
+  it('повтор досылает только тех, кому письмо не ушло; старый протокол без списка не трогает', () => {
+    const letters = [
+      { toName: 'Инга Волкова' },
+      { toName: 'Борис Ким' },
+      { toName: 'Алёна Север' },
+    ];
+    expect(storedMailed(null)).toBeNull();
+    expect(storedMailed(['инга волкова', 'Алена Север'])).toEqual(['инга волкова', 'алена север']);
+    expect(lettersToSend(letters, ['инга волкова', 'алена север']).map((letter) => letter.toName)).toEqual(['Борис Ким']);
+    expect(mailResultLine({ sent: 2, total: 3, failed: ['Борис Ким'], again: false })).toBe(
+      'Писем в тестовый ящик: 2 из 3. Не ушли: Борис Ким. Повторное «Утвердить» дошлёт только их.',
+    );
+    expect(mailResultLine({ sent: 1, total: 3, failed: [], again: true })).toBe('Дослано писем: 1. Всего ушло: 3 из 3.');
+  });
+});
+
+describe('исполнитель в Трекере', () => {
+  const users = [
+    { login: 'inga', display: 'Инга Волкова', email: 'inga@example.test' },
+    { login: 'boris', display: 'Другое имя', email: 'boris@example.test' },
+  ];
+
+  it('назначает по имени или адресу, чужого и «не назван» не назначает', () => {
+    expect(assigneeLogin('Инга Волкова', users)).toBe('inga');
+    expect(assigneeLogin('инга волкова', users)).toBe('inga');
+    expect(assigneeLogin('Борис Ким', users, 'boris@example.test')).toBe('boris');
+    expect(assigneeLogin('Борис Ким', users)).toBe('');
+    expect(assigneeLogin('не назван', users, 'inga@example.test')).toBe('');
   });
 });
 

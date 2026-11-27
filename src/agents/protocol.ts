@@ -26,9 +26,13 @@ import {
   openWithMeetings,
   priorEffects,
   priorLine,
+  letterKey,
+  lettersToSend,
+  mailResultLine,
   protocolLetters,
   protocolPlace,
   protocolTaskDescription,
+  storedMailed,
   scheduledMeetings,
   stepLine,
   storedMeetings,
@@ -313,24 +317,83 @@ export async function releaseFor(db: Db, leaderId: string, row: { id: string; bo
   return protocolRelease(row.body, known, clockFor(leaderId, row.createdAt).now, row.id, next, meeting?.startsAt.slice(0, 10) ?? '', leaderId, storedSteps(row.steps));
 }
 
+async function outgoingFor(
+  db: Db,
+  leader: { id: string; name: string },
+  row: { id: string; body: string; source: string; createdAt: Date; steps?: unknown },
+) {
+  const release = await releaseFor(db, leader.id, row);
+  const meeting = meetingOfSource(row.source);
+  const known = await db.select({ name: people.name, email: people.email }).from(people).where(eq(people.leaderId, leader.id));
+  const letters = protocolLetters({
+    theme: plainBody(row.body).split('\n')[0]?.trim() || 'Встреча',
+    body: row.body,
+    tasks: release.tasks,
+    participants: participantNames(plainBody(row.body)),
+    known,
+    leaderName: leader.name,
+    place: protocolPlace(meeting),
+  });
+  return { release, meeting, known, letters };
+}
+
+async function sendProtocolLetters(
+  db: Db,
+  id: string,
+  mailboxUser: string,
+  letters: { toName: string; subject: string; text: string }[],
+  ics: string,
+  mailed: string[],
+): Promise<{ mailed: string[]; failed: string[] }> {
+  const sent = new Set(mailed);
+  const failed: string[] = [];
+  let next = [...mailed];
+  const attachment = [{ filename: 'vstrecha.ics', content: ics, contentType: 'text/calendar; charset=utf-8; method=REQUEST' }];
+  for (const letter of letters) {
+    const key = letterKey(letter.toName);
+    if (sent.has(key)) continue;
+    try {
+      await sendMail(mailboxUser, letter.subject, letter.text, attachment);
+      next = [...next, key];
+      sent.add(key);
+      await db.update(protocols).set({ mailed: next }).where(eq(protocols.id, id));
+    } catch (err) {
+      console.error('Письмо протокола не ушло', err instanceof Error ? err.message : err);
+      failed.push(letter.toName);
+    }
+  }
+  return { mailed: next, failed };
+}
+
 export async function approveProtocol(db: Db, id: string, chatId: string): Promise<string> {
   const [leader] = await db.select().from(leaders).where(eq(leaders.telegramChatId, chatId)).limit(1);
   if (!leader) return 'Чат не привязан';
   const [row] = await db.select().from(protocols).where(eq(protocols.id, id)).limit(1);
   if (!row || row.leaderId !== leader.id) return 'Протокол не найден';
-  if (row.status === 'утверждён') return 'Уже утверждён';
+  if (row.status === 'утверждён') {
+    const mailed = storedMailed(row.mailed);
+    if (!mailed) return 'Уже утверждён';
+    const outgoing = await outgoingFor(db, leader, row);
+    const pending = lettersToSend(outgoing.letters, mailed);
+    if (!pending.length) return 'Уже утверждён';
+    const mailbox = mailConfig();
+    if (!mailbox) return 'Яндекс Почта не настроена';
+    const result = await sendProtocolLetters(db, row.id, mailbox.user, pending, outgoing.release.ics, mailed);
+    return mailResultLine({ sent: result.mailed.length - mailed.length, total: outgoing.letters.length, failed: result.failed, again: true });
+  }
   const mailbox = mailConfig();
   if (!mailbox) return 'Яндекс Почта не настроена';
-  const release = await releaseFor(db, leader.id, row);
-  const meeting = meetingOfSource(row.source);
-  const taskRows = release.tasks.map((task, index) => ({
+  const outgoing = await outgoingFor(db, leader, row);
+  const emailOf = new Map(outgoing.known.map((person) => [person.name.toLowerCase(), person.email]));
+  const taskRows = outgoing.release.tasks.map((task, index) => ({
     externalId: `protocol-${row.id}-${index + 1}`,
     title: task.title,
     ownerName: task.owner,
+    ownerEmail: emailOf.get(task.owner.toLowerCase()) ?? '',
     dueOn: task.dueOn,
     status: 'в работе',
     source: 'протокол',
-    description: protocolTaskDescription(task.owner, meeting),
+    description: protocolTaskDescription(task.owner, outgoing.meeting),
   }));
   for (const task of taskRows) {
     await db
@@ -349,15 +412,16 @@ export async function approveProtocol(db: Db, id: string, chatId: string): Promi
   }
   const priorNote = await applyPrior(db, leader.id, row);
   // Статус — до календаря: описание встреч темы строится из утверждённых протоколов.
-  await db.update(protocols).set({ status: 'утверждён', awaitingEdit: false }).where(eq(protocols.id, row.id));
+  // Пустой список отправки пишется сразу: сбой письма не выглядит как «уже всё ушло».
+  await db.update(protocols).set({ status: 'утверждён', awaitingEdit: false, mailed: [] }).where(eq(protocols.id, row.id));
   let placed = false;
   if (calendarConfig()) {
     try {
-      if (meeting) await refreshSeries(db, leader.id, meeting.title);
+      if (outgoing.meeting) await refreshSeries(db, leader.id, outgoing.meeting.title);
       else
         await publishApproved(leader.id, [], {
           uid: `${leader.id}:protocol-${row.id}`,
-          ics: release.ics.replace(/^UID:.*$/m, `UID:${leader.id}:protocol-${row.id}@ecompras`),
+          ics: outgoing.release.ics.replace(/^UID:.*$/m, `UID:${leader.id}:protocol-${row.id}@ecompras`),
         });
       placed = true;
     } catch (err) {
@@ -366,31 +430,11 @@ export async function approveProtocol(db: Db, id: string, chatId: string): Promi
     }
   }
   const createdMeetings = await placeAgreed(leader.id, row.id, storedMeetings(row.agreed));
-  const known = await db.select({ name: people.name, email: people.email }).from(people).where(eq(people.leaderId, leader.id));
-  const letters = protocolLetters({
-    theme: plainBody(row.body).split('\n')[0]?.trim() || 'Встреча',
-    body: row.body,
-    tasks: release.tasks,
-    participants: participantNames(plainBody(row.body)),
-    known,
-    leaderName: leader.name,
-    place: protocolPlace(meeting),
-  });
-  let sent = 0;
-  for (const letter of letters) {
-    try {
-      await sendMail(mailbox.user, letter.subject, letter.text, [
-        { filename: 'vstrecha.ics', content: release.ics, contentType: 'text/calendar; charset=utf-8; method=REQUEST' },
-      ]);
-      sent += 1;
-    } catch (err) {
-      console.error('Письмо протокола не ушло', err instanceof Error ? err.message : err);
-    }
-  }
+  const result = await sendProtocolLetters(db, row.id, mailbox.user, outgoing.letters, outgoing.release.ics, []);
   const parts = [
     'Протокол утверждён.',
     placed ? 'Он в описании встречи в календаре.' : '',
-    `Писем в тестовый ящик: ${sent}.`,
+    mailResultLine({ sent: result.mailed.length, total: outgoing.letters.length, failed: result.failed, again: false }),
     `Задач записано: ${taskRows.length}.`,
     priorNote.closed ? `Закрыто прежних задач: ${priorNote.closed}.` : '',
     priorNote.commented ? `Комментариев о просрочке: ${priorNote.commented}.` : '',

@@ -1,9 +1,9 @@
 {
   "model": "anthropic/claude-haiku-4.5",
-  "at": "27.11.2026, 14:46:56 МСК",
-  "costUsd": 0.73873395,
-  "calls": 167,
-  "minutes": 2.2,
+  "at": "27.11.2026, 19:38:57 МСК",
+  "costUsd": 1.3604391000000005,
+  "calls": 241,
+  "minutes": 3.1,
   "score": {
     "total": 80,
     "correct": 77,
@@ -23,10 +23,14 @@
         "senderRole": "коллега",
         "category": "доступы",
         "expected": "делегировать",
-        "route": "mail",
+        "route": "k2",
         "action": "спросить_руководителя",
         "toLeader": true,
-        "tools": [],
+        "tools": [
+          "person_card",
+          "authorities",
+          "people"
+        ],
         "error": ""
       },
       {
@@ -35,10 +39,14 @@
         "senderRole": "коллега",
         "category": "доступы",
         "expected": "делегировать",
-        "route": "mail",
+        "route": "k2",
         "action": "спросить_руководителя",
         "toLeader": true,
-        "tools": [],
+        "tools": [
+          "person_card",
+          "authorities",
+          "people"
+        ],
         "error": ""
       },
       {
@@ -47,10 +55,14 @@
         "senderRole": "коллега",
         "category": "доступы",
         "expected": "делегировать",
-        "route": "mail",
+        "route": "k2",
         "action": "спросить_руководителя",
         "toLeader": true,
-        "tools": [],
+        "tools": [
+          "person_card",
+          "authorities",
+          "people"
+        ],
         "error": ""
       }
     ],
@@ -87,17 +99,19 @@
       }
     ],
     "mailExact": {
-      "total": 37,
-      "correct": 34
+      "total": 80,
+      "correct": 75
     },
     "errors": 0,
     "toolCalls": {
-      "person_card": 43,
-      "authorities": 32,
-      "kpi": 11,
-      "thread": 19,
-      "open_tasks": 7,
-      "past_decisions": 3
+      "thread": 38,
+      "people": 23,
+      "leader_edits": 10,
+      "person_card": 60,
+      "kpi": 16,
+      "open_tasks": 5,
+      "authorities": 34,
+      "past_decisions": 22
     }
   },
   "rows": [
@@ -110,7 +124,11 @@
       "route": "mail",
       "action": "спросить_руководителя",
       "toLeader": true,
-      "tools": [],
+      "tools": [
+        "thread",
+        "people",
+        "leader_edits"
+      ],
       "error": ""
     },
     {
@@ -122,7 +140,10 @@
       "route": "mail",
       "action": "делегировать",
       "toLeader": false,
-      "tools": [],
+      "tools": [
+        "thread",
+        "people"
+      ],
       "error": ""
     },
     {
@@ -146,7 +167,9 @@
       "route": "mail",
       "action": "игнорировать",
       "toLeader": false,
-      "tools": [],
+      "tools": [
+        "thread"
+      ],
       "error": ""
     },
     {
@@ -158,7 +181,11 @@
       "route": "mail",
       "action": "спросить_руководителя",
       "toLeader": true,
-      "tools": [],
+      "tools": [
+        "thread",
+        "people",
+        "leader_edits"
+      ],
       "error": ""
     },
     {
@@ -170,7 +197,11 @@
       "route": "mail",
       "action": "делегировать",
       "toLeader": false,
-      "tools": [],
+      "tools": [
+        "thread",
+        "people",
+        "leader_edits"
+      ],
       "error": ""
     },
     {
@@ -180,12 +211,12 @@
       "category": "отчёт",
       "expected": "в_сводку",
       "route": "k2",
-      "action": "вернуть",
+      "action": "в_сводку",
       "toLeader": false,
       "tools": [
         "person_card",
-        "authorities",
         "kpi",
+        "open_tasks",
         "thread"
       ],
       "error": ""
@@ -197,7 +228,7 @@
       "category": "календарь",
       "expected": "авто",
       "route": "k2",
-      "action": "вернуть",
+      "action": "авто",
       "toLeader": false,
       "tools": [
         "person_card",
@@ -216,7 +247,7 @@
       "toLeader": true,
       "tools": [
         "person_card",
-        "authorities"
+        "people"
       ],
       "error": ""
     },
@@ -231,7 +262,7 @@
       "toLeader": true,
       "tools": [
         "person_card",
-        "authorities"
+        "people"
       ],
       "error": ""
     },
@@ -242,12 +273,12 @@
       "category": "отчёт",
       "expected": "в_сводку",
       "route": "k2",
-      "action": "вернуть",
+      "action": "в_сводку",
       "toLeader": false,
       "tools": [
         "person_card",
-        "authorities",
         "kpi",
+        "open_tasks",
         "thread"
       ],
       "error": ""
@@ -258,10 +289,13 @@
       "senderRole": "коллега",
       "category": "кадры",
       "expected": "спросить_руководителя",
-      "route": "mail",
+      "route": "k2",
       "action": "спросить_руководителя",
       "toLeader": true,
-      "tools": [],
+      "tools": [
+        "person_card",
+        "authorities"
+      ],
       "error": ""
     },
     {
@@ -270,10 +304,14 @@
       "senderRole": "коллега",
       "category": "деньги",
       "expected": "спросить_руководителя",
-      "route": "mail",
+      "route": "k2",
       "action": "спросить_руководителя",
       "toLeader": true,
-      "tools": [],
+      "tools": [
+        "person_card",
+        "authorities",
+        "past_decisions"
+      ],
       "error": ""
     },
     {
@@ -282,10 +320,13 @@
       "senderRole": "коллега",
       "category": "кадры",
       "expected": "спросить_руководителя",
-      "route": "mail",
+      "route": "k2",
       "action": "спросить_руководителя",
       "toLeader": true,
-      "tools": [],
+      "tools": [
+        "person_card",
+        "authorities"
+      ],
       "error": ""
     },
     {
@@ -294,10 +335,14 @@
       "senderRole": "коллега",
       "category": "деньги",
       "expected": "спросить_руководителя",
-      "route": "mail",
+      "route": "k2",
       "action": "спросить_руководителя",
       "toLeader": true,
-      "tools": [],
+      "tools": [
+        "person_card",
+        "authorities",
+        "past_decisions"
+      ],
       "error": ""
     },
     {
@@ -306,10 +351,14 @@
       "senderRole": "коллега",
       "category": "деньги",
       "expected": "спросить_руководителя",
-      "route": "mail",
+      "route": "k2",
       "action": "спросить_руководителя",
       "toLeader": true,
-      "tools": [],
+      "tools": [
+        "person_card",
+        "authorities",
+        "past_decisions"
+      ],
       "error": ""
     },
     {
@@ -324,7 +373,6 @@
       "tools": [
         "person_card",
         "thread",
-        "open_tasks",
         "past_decisions"
       ],
       "error": ""
@@ -335,10 +383,14 @@
       "senderRole": "коллега",
       "category": "деньги",
       "expected": "спросить_руководителя",
-      "route": "mail",
+      "route": "k2",
       "action": "спросить_руководителя",
       "toLeader": true,
-      "tools": [],
+      "tools": [
+        "person_card",
+        "authorities",
+        "past_decisions"
+      ],
       "error": ""
     },
     {
@@ -352,7 +404,8 @@
       "toLeader": true,
       "tools": [
         "person_card",
-        "thread"
+        "thread",
+        "past_decisions"
       ],
       "error": ""
     },
@@ -363,12 +416,11 @@
       "category": "отчёт",
       "expected": "в_сводку",
       "route": "k2",
-      "action": "вернуть",
+      "action": "в_сводку",
       "toLeader": false,
       "tools": [
         "person_card",
-        "kpi",
-        "open_tasks"
+        "kpi"
       ],
       "error": ""
     },
@@ -381,7 +433,11 @@
       "route": "mail",
       "action": "спросить_руководителя",
       "toLeader": true,
-      "tools": [],
+      "tools": [
+        "thread",
+        "people",
+        "leader_edits"
+      ],
       "error": ""
     },
     {
@@ -391,12 +447,13 @@
       "category": "статус",
       "expected": "в_сводку",
       "route": "k2",
-      "action": "вернуть",
+      "action": "в_сводку",
       "toLeader": false,
       "tools": [
         "person_card",
         "authorities",
-        "thread"
+        "thread",
+        "past_decisions"
       ],
       "error": ""
     },
@@ -409,7 +466,11 @@
       "route": "mail",
       "action": "спросить_руководителя",
       "toLeader": true,
-      "tools": [],
+      "tools": [
+        "thread",
+        "people",
+        "leader_edits"
+      ],
       "error": ""
     },
     {
@@ -419,12 +480,11 @@
       "category": "отчёт",
       "expected": "в_сводку",
       "route": "k2",
-      "action": "вернуть",
+      "action": "в_сводку",
       "toLeader": false,
       "tools": [
         "person_card",
-        "kpi",
-        "open_tasks"
+        "kpi"
       ],
       "error": ""
     },
@@ -434,10 +494,14 @@
       "senderRole": "коллега",
       "category": "доступы",
       "expected": "делегировать",
-      "route": "mail",
+      "route": "k2",
       "action": "спросить_руководителя",
       "toLeader": true,
-      "tools": [],
+      "tools": [
+        "person_card",
+        "authorities",
+        "people"
+      ],
       "error": ""
     },
     {
@@ -451,7 +515,8 @@
       "toLeader": true,
       "tools": [
         "person_card",
-        "authorities"
+        "authorities",
+        "kpi"
       ],
       "error": ""
     },
@@ -466,7 +531,7 @@
       "toLeader": true,
       "tools": [
         "person_card",
-        "authorities"
+        "people"
       ],
       "error": ""
     },
@@ -477,12 +542,11 @@
       "category": "отчёт",
       "expected": "в_сводку",
       "route": "k2",
-      "action": "вернуть",
+      "action": "в_сводку",
       "toLeader": false,
       "tools": [
         "person_card",
-        "kpi",
-        "open_tasks"
+        "kpi"
       ],
       "error": ""
     },
@@ -492,10 +556,13 @@
       "senderRole": "коллега",
       "category": "кадры",
       "expected": "спросить_руководителя",
-      "route": "mail",
+      "route": "k2",
       "action": "спросить_руководителя",
       "toLeader": true,
-      "tools": [],
+      "tools": [
+        "person_card",
+        "authorities"
+      ],
       "error": ""
     },
     {
@@ -509,7 +576,7 @@
       "toLeader": true,
       "tools": [
         "person_card",
-        "authorities"
+        "people"
       ],
       "error": ""
     },
@@ -519,10 +586,13 @@
       "senderRole": "коллега",
       "category": "кадры",
       "expected": "спросить_руководителя",
-      "route": "mail",
+      "route": "k2",
       "action": "спросить_руководителя",
       "toLeader": true,
-      "tools": [],
+      "tools": [
+        "person_card",
+        "authorities"
+      ],
       "error": ""
     },
     {
@@ -532,12 +602,13 @@
       "category": "статус",
       "expected": "в_сводку",
       "route": "k2",
-      "action": "вернуть",
+      "action": "в_сводку",
       "toLeader": false,
       "tools": [
         "person_card",
         "authorities",
-        "thread"
+        "thread",
+        "past_decisions"
       ],
       "error": ""
     },
@@ -550,7 +621,11 @@
       "route": "mail",
       "action": "спросить_руководителя",
       "toLeader": true,
-      "tools": [],
+      "tools": [
+        "thread",
+        "people",
+        "leader_edits"
+      ],
       "error": ""
     },
     {
@@ -559,10 +634,14 @@
       "senderRole": "коллега",
       "category": "доступы",
       "expected": "делегировать",
-      "route": "mail",
+      "route": "k2",
       "action": "спросить_руководителя",
       "toLeader": true,
-      "tools": [],
+      "tools": [
+        "person_card",
+        "authorities",
+        "people"
+      ],
       "error": ""
     },
     {
@@ -572,12 +651,13 @@
       "category": "статус",
       "expected": "в_сводку",
       "route": "k2",
-      "action": "вернуть",
+      "action": "в_сводку",
       "toLeader": false,
       "tools": [
         "person_card",
         "authorities",
-        "thread"
+        "thread",
+        "past_decisions"
       ],
       "error": ""
     },
@@ -587,10 +667,13 @@
       "senderRole": "коллега",
       "category": "кадры",
       "expected": "спросить_руководителя",
-      "route": "mail",
+      "route": "k2",
       "action": "спросить_руководителя",
       "toLeader": true,
-      "tools": [],
+      "tools": [
+        "person_card",
+        "authorities"
+      ],
       "error": ""
     },
     {
@@ -599,10 +682,13 @@
       "senderRole": "коллега",
       "category": "кадры",
       "expected": "спросить_руководителя",
-      "route": "mail",
+      "route": "k2",
       "action": "спросить_руководителя",
       "toLeader": true,
-      "tools": [],
+      "tools": [
+        "person_card",
+        "authorities"
+      ],
       "error": ""
     },
     {
@@ -612,12 +698,13 @@
       "category": "статус",
       "expected": "в_сводку",
       "route": "k2",
-      "action": "вернуть",
+      "action": "в_сводку",
       "toLeader": false,
       "tools": [
         "person_card",
         "authorities",
-        "thread"
+        "thread",
+        "past_decisions"
       ],
       "error": ""
     },
@@ -628,12 +715,13 @@
       "category": "статус",
       "expected": "в_сводку",
       "route": "k2",
-      "action": "вернуть",
+      "action": "в_сводку",
       "toLeader": false,
       "tools": [
         "person_card",
         "authorities",
-        "thread"
+        "thread",
+        "past_decisions"
       ],
       "error": ""
     },
@@ -643,10 +731,14 @@
       "senderRole": "коллега",
       "category": "деньги",
       "expected": "спросить_руководителя",
-      "route": "mail",
+      "route": "k2",
       "action": "спросить_руководителя",
       "toLeader": true,
-      "tools": [],
+      "tools": [
+        "person_card",
+        "authorities",
+        "past_decisions"
+      ],
       "error": ""
     },
     {
@@ -656,7 +748,7 @@
       "category": "календарь",
       "expected": "авто",
       "route": "k2",
-      "action": "вернуть",
+      "action": "авто",
       "toLeader": false,
       "tools": [
         "person_card",
@@ -675,7 +767,8 @@
       "toLeader": true,
       "tools": [
         "person_card",
-        "thread"
+        "thread",
+        "past_decisions"
       ],
       "error": ""
     },
@@ -685,10 +778,14 @@
       "senderRole": "коллега",
       "category": "доступы",
       "expected": "делегировать",
-      "route": "mail",
+      "route": "k2",
       "action": "спросить_руководителя",
       "toLeader": true,
-      "tools": [],
+      "tools": [
+        "person_card",
+        "authorities",
+        "people"
+      ],
       "error": ""
     },
     {
@@ -698,12 +795,12 @@
       "category": "клиенты",
       "expected": "делегировать",
       "route": "k2",
-      "action": "вернуть",
+      "action": "авто",
       "toLeader": false,
       "tools": [
         "person_card",
-        "authorities",
-        "thread"
+        "people",
+        "past_decisions"
       ],
       "error": ""
     },
@@ -718,7 +815,8 @@
       "toLeader": true,
       "tools": [
         "person_card",
-        "authorities"
+        "authorities",
+        "kpi"
       ],
       "error": ""
     },
@@ -729,11 +827,11 @@
       "category": "календарь",
       "expected": "авто",
       "route": "k2",
-      "action": "вернуть",
+      "action": "авто",
       "toLeader": false,
       "tools": [
         "person_card",
-        "authorities"
+        "thread"
       ],
       "error": ""
     },
@@ -744,12 +842,11 @@
       "category": "отчёт",
       "expected": "в_сводку",
       "route": "k2",
-      "action": "вернуть",
+      "action": "в_сводку",
       "toLeader": false,
       "tools": [
         "person_card",
-        "kpi",
-        "open_tasks"
+        "kpi"
       ],
       "error": ""
     },
@@ -759,10 +856,13 @@
       "senderRole": "коллега",
       "category": "кадры",
       "expected": "спросить_руководителя",
-      "route": "mail",
+      "route": "k2",
       "action": "спросить_руководителя",
       "toLeader": true,
-      "tools": [],
+      "tools": [
+        "person_card",
+        "authorities"
+      ],
       "error": ""
     },
     {
@@ -776,7 +876,8 @@
       "toLeader": true,
       "tools": [
         "person_card",
-        "authorities"
+        "authorities",
+        "kpi"
       ],
       "error": ""
     },
@@ -787,12 +888,11 @@
       "category": "отчёт",
       "expected": "в_сводку",
       "route": "k2",
-      "action": "вернуть",
+      "action": "в_сводку",
       "toLeader": false,
       "tools": [
         "person_card",
-        "kpi",
-        "open_tasks"
+        "kpi"
       ],
       "error": ""
     },
@@ -802,10 +902,13 @@
       "senderRole": "коллега",
       "category": "кадры",
       "expected": "спросить_руководителя",
-      "route": "mail",
+      "route": "k2",
       "action": "спросить_руководителя",
       "toLeader": true,
-      "tools": [],
+      "tools": [
+        "person_card",
+        "authorities"
+      ],
       "error": ""
     },
     {
@@ -815,11 +918,11 @@
       "category": "календарь",
       "expected": "авто",
       "route": "k2",
-      "action": "вернуть",
+      "action": "авто",
       "toLeader": false,
       "tools": [
         "person_card",
-        "authorities"
+        "thread"
       ],
       "error": ""
     },
@@ -829,10 +932,14 @@
       "senderRole": "коллега",
       "category": "деньги",
       "expected": "спросить_руководителя",
-      "route": "mail",
+      "route": "k2",
       "action": "спросить_руководителя",
       "toLeader": true,
-      "tools": [],
+      "tools": [
+        "person_card",
+        "authorities",
+        "past_decisions"
+      ],
       "error": ""
     },
     {
@@ -844,7 +951,9 @@
       "route": "mail",
       "action": "игнорировать",
       "toLeader": false,
-      "tools": [],
+      "tools": [
+        "thread"
+      ],
       "error": ""
     },
     {
@@ -854,12 +963,12 @@
       "category": "отчёт",
       "expected": "в_сводку",
       "route": "k2",
-      "action": "вернуть",
+      "action": "в_сводку",
       "toLeader": false,
       "tools": [
         "person_card",
-        "authorities",
         "kpi",
+        "open_tasks",
         "thread"
       ],
       "error": ""
@@ -871,12 +980,12 @@
       "category": "отчёт",
       "expected": "в_сводку",
       "route": "k2",
-      "action": "вернуть",
+      "action": "в_сводку",
       "toLeader": false,
       "tools": [
         "person_card",
-        "authorities",
         "kpi",
+        "open_tasks",
         "thread"
       ],
       "error": ""
@@ -890,7 +999,9 @@
       "route": "mail",
       "action": "игнорировать",
       "toLeader": false,
-      "tools": [],
+      "tools": [
+        "thread"
+      ],
       "error": ""
     },
     {
@@ -902,7 +1013,11 @@
       "route": "mail",
       "action": "спросить_руководителя",
       "toLeader": true,
-      "tools": [],
+      "tools": [
+        "thread",
+        "people",
+        "leader_edits"
+      ],
       "error": ""
     },
     {
@@ -914,7 +1029,11 @@
       "route": "mail",
       "action": "делегировать",
       "toLeader": false,
-      "tools": [],
+      "tools": [
+        "thread",
+        "people",
+        "leader_edits"
+      ],
       "error": ""
     },
     {
@@ -924,12 +1043,13 @@
       "category": "статус",
       "expected": "в_сводку",
       "route": "k2",
-      "action": "вернуть",
+      "action": "в_сводку",
       "toLeader": false,
       "tools": [
         "person_card",
         "authorities",
-        "thread"
+        "thread",
+        "past_decisions"
       ],
       "error": ""
     },
@@ -944,7 +1064,8 @@
       "toLeader": true,
       "tools": [
         "person_card",
-        "authorities"
+        "authorities",
+        "kpi"
       ],
       "error": ""
     },
@@ -975,7 +1096,7 @@
       "toLeader": true,
       "tools": [
         "person_card",
-        "authorities"
+        "people"
       ],
       "error": ""
     },
@@ -988,7 +1109,9 @@
       "route": "mail",
       "action": "игнорировать",
       "toLeader": false,
-      "tools": [],
+      "tools": [
+        "thread"
+      ],
       "error": ""
     },
     {
@@ -998,12 +1121,11 @@
       "category": "отчёт",
       "expected": "в_сводку",
       "route": "k2",
-      "action": "вернуть",
+      "action": "в_сводку",
       "toLeader": false,
       "tools": [
         "person_card",
-        "kpi",
-        "open_tasks"
+        "kpi"
       ],
       "error": ""
     },
@@ -1014,12 +1136,12 @@
       "category": "клиенты",
       "expected": "делегировать",
       "route": "k2",
-      "action": "вернуть",
+      "action": "авто",
       "toLeader": false,
       "tools": [
         "person_card",
-        "authorities",
-        "thread"
+        "people",
+        "past_decisions"
       ],
       "error": ""
     },
@@ -1032,7 +1154,9 @@
       "route": "mail",
       "action": "игнорировать",
       "toLeader": false,
-      "tools": [],
+      "tools": [
+        "thread"
+      ],
       "error": ""
     },
     {
@@ -1044,7 +1168,11 @@
       "route": "mail",
       "action": "спросить_руководителя",
       "toLeader": true,
-      "tools": [],
+      "tools": [
+        "thread",
+        "people",
+        "leader_edits"
+      ],
       "error": ""
     },
     {
@@ -1054,7 +1182,7 @@
       "category": "календарь",
       "expected": "авто",
       "route": "k2",
-      "action": "вернуть",
+      "action": "авто",
       "toLeader": false,
       "tools": [
         "person_card",
@@ -1073,7 +1201,8 @@
       "toLeader": true,
       "tools": [
         "person_card",
-        "thread"
+        "thread",
+        "past_decisions"
       ],
       "error": ""
     },
@@ -1086,7 +1215,10 @@
       "route": "mail",
       "action": "делегировать",
       "toLeader": false,
-      "tools": [],
+      "tools": [
+        "thread",
+        "people"
+      ],
       "error": ""
     },
     {
@@ -1100,7 +1232,8 @@
       "toLeader": true,
       "tools": [
         "person_card",
-        "thread"
+        "thread",
+        "past_decisions"
       ],
       "error": ""
     },
@@ -1111,12 +1244,12 @@
       "category": "отчёт",
       "expected": "в_сводку",
       "route": "k2",
-      "action": "вернуть",
+      "action": "в_сводку",
       "toLeader": false,
       "tools": [
         "person_card",
-        "authorities",
         "kpi",
+        "open_tasks",
         "thread"
       ],
       "error": ""
@@ -1130,7 +1263,9 @@
       "route": "mail",
       "action": "игнорировать",
       "toLeader": false,
-      "tools": [],
+      "tools": [
+        "thread"
+      ],
       "error": ""
     },
     {
@@ -1142,7 +1277,9 @@
       "route": "mail",
       "action": "игнорировать",
       "toLeader": false,
-      "tools": [],
+      "tools": [
+        "thread"
+      ],
       "error": ""
     },
     {
@@ -1156,7 +1293,8 @@
       "toLeader": true,
       "tools": [
         "person_card",
-        "authorities"
+        "authorities",
+        "kpi"
       ],
       "error": ""
     },
@@ -1169,7 +1307,11 @@
       "route": "mail",
       "action": "спросить_руководителя",
       "toLeader": true,
-      "tools": [],
+      "tools": [
+        "thread",
+        "people",
+        "leader_edits"
+      ],
       "error": ""
     },
     {
@@ -1183,7 +1325,7 @@
       "toLeader": true,
       "tools": [
         "person_card",
-        "authorities"
+        "people"
       ],
       "error": ""
     },
@@ -1210,12 +1352,13 @@
       "category": "статус",
       "expected": "в_сводку",
       "route": "k2",
-      "action": "вернуть",
+      "action": "в_сводку",
       "toLeader": false,
       "tools": [
         "person_card",
         "authorities",
-        "thread"
+        "thread",
+        "past_decisions"
       ],
       "error": ""
     }

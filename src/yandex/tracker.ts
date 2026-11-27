@@ -21,7 +21,52 @@ export function trackerConfig(): TrackerConfig | null {
   return { token, org, queue };
 }
 
-export async function createIssue(draft: { unique: string; summary: string; description: string; deadline: string | null }): Promise<'created' | 'exists'> {
+export interface TrackerUser {
+  login: string;
+  display: string;
+  email: string;
+}
+
+function sameText(left: string, right: string): boolean {
+  const norm = (value: string) => value.trim().toLowerCase().replace(/ё/g, 'е').replace(/\s+/g, ' ');
+  const a = norm(left);
+  return a !== '' && a === norm(right);
+}
+
+// Логин Трекера, если пользователь организации совпал с человеком по имени или адресу. Иначе пусто: задача остаётся без поля исполнителя.
+export function assigneeLogin(ownerName: string, users: TrackerUser[], email = ''): string {
+  if (!ownerName.trim() || ownerName.trim() === 'не назван') return '';
+  const byName = users.find((user) => sameText(user.display, ownerName));
+  if (byName) return byName.login;
+  const byEmail = email.trim() ? users.find((user) => sameText(user.email, email)) : undefined;
+  return byEmail?.login ?? '';
+}
+
+export async function listTrackerUsers(): Promise<TrackerUser[]> {
+  const cfg = trackerConfig();
+  if (!cfg) return [];
+  const found: TrackerUser[] = [];
+  for (let page = 1; page <= 5; page += 1) {
+    const response = await call(`/v2/users?perPage=100&page=${page}`, { method: 'GET' });
+    if (!response.ok) throw new Error(`Трекер не отдал пользователей (${response.status})`);
+    const rows = (await response.json()) as { login?: string; display?: string; email?: string; dismissed?: boolean }[];
+    if (!Array.isArray(rows) || rows.length === 0) break;
+    for (const row of rows) {
+      if (row.dismissed || !row.login) continue;
+      found.push({ login: row.login, display: row.display ?? '', email: row.email ?? '' });
+    }
+    if (rows.length < 100) break;
+  }
+  return found;
+}
+
+export async function createIssue(draft: {
+  unique: string;
+  summary: string;
+  description: string;
+  deadline: string | null;
+  assignee?: string;
+}): Promise<'created' | 'exists'> {
   const cfg = trackerConfig();
   if (!cfg) throw new Error('Трекер не настроен');
   const body: Record<string, string> = {
@@ -31,7 +76,14 @@ export async function createIssue(draft: { unique: string; summary: string; desc
     unique: draft.unique,
   };
   if (draft.deadline) body.deadline = draft.deadline;
-  const response = await call('/v2/issues', { method: 'POST', body: JSON.stringify(body) });
+  if (draft.assignee) body.assignee = draft.assignee;
+  let response = await call('/v2/issues', { method: 'POST', body: JSON.stringify(body) });
+  if (response.status === 422 && draft.assignee) {
+    const text = await response.text();
+    if (/unique/i.test(text)) return 'exists';
+    delete body.assignee;
+    response = await call('/v2/issues', { method: 'POST', body: JSON.stringify(body) });
+  }
   if (response.status === 409) return 'exists';
   if (response.status === 422) {
     const text = await response.text();
