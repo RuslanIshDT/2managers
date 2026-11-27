@@ -2,7 +2,7 @@
 import { randomUUID } from 'node:crypto';
 import { and, asc, count, desc, eq, ne } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
-import { authorities, decisions, emails, kpis, leaders, mailIn, people, revisions, tasks, verdicts } from '../db/schema.ts';
+import { authorities, decisions, emails, kpis, leaderActs, leaders, mailIn, people, revisions, tasks, verdicts } from '../db/schema.ts';
 import { mailConfig, sendMail, type MailboxLetter } from '../mail.ts';
 import { sendDecisionCard } from '../telegram.ts';
 import { staffFromVerdict } from './dependence.ts';
@@ -12,6 +12,7 @@ import { withLlmScope } from '../llm.ts';
 import { externalContext, judgeWithTools, k2Context, stepsWords } from './k2-tools.ts';
 import { readHistory } from './dependence.ts';
 import { letterHits } from './replay.ts';
+import { exampleBlock, finishDraft, rewriteLetter, ruleFromChoice, ruleHint } from './memory.ts';
 import { applyRevision, revisionPrompt } from './revisions.ts';
 import { listFlowRules } from './week.ts';
 import { clockFor, letterMoment, moscowStamp } from './scene.ts';
@@ -93,7 +94,8 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
   const verdictRows = await db.select({ chainKey: verdicts.chainKey, kind: verdicts.kind, createdAt: verdicts.createdAt }).from(verdicts).where(eq(verdicts.leaderId, leaderId));
   const authority = await listFlowRules(db, leaderId);
   const revisionRows = await db.select().from(revisions).where(eq(revisions.leaderId, leaderId)).orderBy(asc(revisions.createdAt));
-  const edits = revisionRows.map((row) => ({ category: row.category, instead: row.instead }));
+  const edits = revisionRows.map((row) => ({ category: row.category, area: row.area, instead: row.instead }));
+  const actRows = await db.select().from(leaderActs).where(eq(leaderActs.leaderId, leaderId)).orderBy(asc(leaderActs.at));
   const history = await readHistory(`data/${leaderId}`).catch(() => []);
   const catalog = await db
     .select({ id: emails.externalId, fromEmail: emails.fromEmail, subject: emails.subject, body: emails.body })
@@ -174,7 +176,14 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
           const agent = inside ? 'k2' : 'mail_ext';
           const judged = await withLlmScope(
             { agent, leaderId, operationId: `${agent}:${letter.id}`, title: letter.subject.slice(0, 180) || 'Разбор письма' },
-            () => judgeWithTools({ purpose: `${agent}:${letter.id}`, profile: leaderRow.profile, subject: letter.subject, body: modelBody, ctx })
+            () => judgeWithTools({
+              purpose: `${agent}:${letter.id}`,
+              profile: leaderRow.profile,
+              subject: letter.subject,
+              body: modelBody,
+              ctx,
+              hints: [ruleHint(edits), exampleBlock(`${letter.subject}\n${letter.body}`, actRows)].filter(Boolean).join('\n\n'),
+            })
               .then((run) => {
                 steps = stepsWords(run.steps);
                 return run.verdict;
@@ -206,7 +215,7 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
           if (changes.length && ruled.ask) await supersede(db, leaderId, key, letter.id, decisionRows);
         }
       }
-      ruled = { ...ruled, draft: applyRevision(ruled.draft, ruled.category, edits) };
+      ruled = { ...ruled, draft: finishDraft(applyRevision(ruled.draft, ruled.category, edits), letterText, edits, inside) };
 
       if (ruled.ask) {
         await db.insert(decisions).values({
@@ -220,6 +229,8 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
           replyName: letter.fromName,
           subject: letter.subject,
           awaitingEdit: false,
+          originalDraft: '',
+          pendingRule: '',
           createdAt: moment,
         });
         if (options.notify !== false) try {
@@ -257,6 +268,8 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
           replyName: letter.fromName,
           subject: letter.subject,
           awaitingEdit: false,
+          originalDraft: '',
+          pendingRule: '',
           createdAt: moment,
         });
       } else if (ruled.send) {
@@ -275,10 +288,22 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
           replyName: target.name,
           subject: letter.subject,
           awaitingEdit: false,
+          originalDraft: '',
+          pendingRule: '',
           createdAt: moment,
         };
         await db.insert(decisions).values(row);
         decisionRows.push(row);
+        await recordAct(db, {
+          leaderId,
+          subject: letter.subject,
+          action: ruled.kind === 'делегировать' ? 'передал сотрудник' : 'ответил сам',
+          result: ruled.summary,
+          original: '',
+          approved: ruled.draft,
+          auto: true,
+          refId: letter.id,
+        });
       }
 
       await db.insert(mailIn).values({
@@ -382,44 +407,124 @@ export async function applyLeaderAction(db: Db, leaderId: string, action: string
   if (decision.status !== 'ждёт') return `Уже ${decision.status}`;
   if (action === 'edit') {
     await db.update(decisions).set({ awaitingEdit: true }).where(eq(decisions.id, decision.id));
-    return 'Напишите, что поставить вместо черновика. Та же формулировка попадёт в следующее письмо этой категории.';
+    return 'Напишите правку. По умолчанию она только для этого письма. «Запомнить» оставит правило для следующих.';
+  }
+  if (action === 'once' || action === 'keep') {
+    const remembered = ruleFromChoice(decision.pendingRule, action);
+    if (action === 'keep' && !remembered) return 'Сначала напишите правку.';
+    if (remembered) {
+      await db.insert(revisions).values({
+        id: randomUUID(),
+        leaderId,
+        category: 'письма',
+        area: 'письма',
+        instead: remembered,
+        createdAt: new Date(),
+      });
+    }
+    await db.update(decisions).set({ pendingRule: '' }).where(eq(decisions.id, decision.id));
+    return remembered ? 'Правило записано в профиль. Черновик ниже можно утвердить.' : 'Только это письмо. Правило не создано.';
   }
   if (action === 'approve') {
-    await deliverReply(decision.replyName, decision.replyTo, decision.subject, decision.draft);
-    await db.update(decisions).set({ status: 'исполнено' }).where(eq(decisions.id, decision.id));
+    const draft = decision.draft.replace(/\n*По вашей правке:[\s\S]*$/u, '').trim();
+    await deliverReply(decision.replyName, decision.replyTo, decision.subject, draft);
+    await db.update(decisions).set({ status: 'исполнено', draft, pendingRule: '' }).where(eq(decisions.id, decision.id));
+    await recordAct(db, {
+      leaderId,
+      subject: decision.subject,
+      action: 'утвердил',
+      result: 'Ответ отправлен',
+      original: decision.originalDraft || draft,
+      approved: draft,
+      auto: false,
+      refId: decision.id,
+    });
     return 'Ответ отправлен';
   }
   const status = action === 'reject' ? 'отклонено' : action === 'defer' ? 'отложено' : '';
   if (!status) return 'Неизвестная кнопка';
   await db.update(decisions).set({ status }).where(eq(decisions.id, decision.id));
+  await recordAct(db, {
+    leaderId,
+    subject: decision.subject,
+    action: status === 'отклонено' ? 'отклонил' : 'отложил',
+    result: status === 'отклонено' ? 'Отклонено' : 'Отложено',
+    original: decision.originalDraft || decision.draft,
+    approved: '',
+    auto: false,
+    refId: decision.id,
+  });
   return status === 'отклонено' ? 'Отклонено' : 'Отложено';
 }
 
-export async function saveEditText(db: Db, chatId: string, text: string): Promise<string | null> {
+async function sourceLetter(db: Db, leaderId: string, id: string, subject: string, summary: string): Promise<string> {
+  const [live] = await db.select().from(mailIn).where(and(eq(mailIn.leaderId, leaderId), eq(mailIn.messageId, id))).limit(1);
+  if (live?.body) return `${live.subject}\n${live.body}`;
+  const [synth] = await db.select().from(mailIn).where(and(eq(mailIn.leaderId, leaderId), eq(mailIn.syntheticId, id))).limit(1);
+  if (synth?.body) return `${synth.subject}\n${synth.body}`;
+  const [catalog] = await db.select().from(emails).where(and(eq(emails.leaderId, leaderId), eq(emails.externalId, id))).limit(1);
+  if (catalog?.body) return `${catalog.subject}\n${catalog.body}`;
+  return `${subject}\n${summary}`;
+}
+
+async function recordAct(
+  db: Db,
+  input: { leaderId: string; subject: string; action: string; result: string; original: string; approved: string; auto: boolean; refId: string },
+) {
+  await db.insert(leaderActs).values({
+    id: randomUUID(),
+    leaderId: input.leaderId,
+    subject: input.subject.slice(0, 300),
+    at: new Date(),
+    action: input.action,
+    result: input.result.slice(0, 500),
+    originalDraft: input.original.slice(0, 2000),
+    approvedText: input.approved.slice(0, 2000),
+    auto: input.auto,
+    refId: input.refId,
+  });
+}
+
+export async function saveEditText(db: Db, chatId: string, text: string): Promise<{ id: string; text: string } | null> {
   const instead = text.trim();
   if (instead.length < 3) return null;
   const [leader] = await db.select().from(leaders).where(eq(leaders.telegramChatId, chatId)).limit(1);
   if (!leader) return null;
-  const [decision] = await db
-    .select()
-    .from(decisions)
-    .where(and(eq(decisions.leaderId, leader.id), eq(decisions.awaitingEdit, true)))
-    .limit(1);
-  if (!decision) return null;
-  const [verdict] = await db.select().from(verdicts).where(eq(verdicts.id, `v-${decision.id}`)).limit(1);
-  const category = verdict?.category || 'иное';
-  await db.insert(revisions).values({
-    id: randomUUID(),
-    leaderId: leader.id,
-    category,
-    instead,
-    createdAt: new Date(),
-  });
+  return saveLeaderEdit(db, leader.id, instead);
+}
+
+export async function saveLeaderEdit(db: Db, leaderId: string, text: string, decisionId = ''): Promise<{ id: string; text: string } | null> {
+  const instead = text.trim();
+  if (instead.length < 3) return null;
+  const [decision] = decisionId
+    ? await db.select().from(decisions).where(and(eq(decisions.id, decisionId), eq(decisions.leaderId, leaderId))).limit(1)
+    : await db.select().from(decisions).where(and(eq(decisions.leaderId, leaderId), eq(decisions.awaitingEdit, true))).limit(1);
+  if (!decision || decision.status !== 'ждёт') return null;
+  const letterText = await sourceLetter(db, leaderId, decision.id, decision.subject, decision.summary);
+  const draft = rewriteLetter(decision.draft, instead, letterText);
   await db
     .update(decisions)
-    .set({ draft: applyRevision(decision.draft, category, [{ category, instead }]), awaitingEdit: false })
+    .set({
+      draft,
+      originalDraft: decision.originalDraft || decision.draft,
+      pendingRule: instead,
+      awaitingEdit: false,
+    })
     .where(eq(decisions.id, decision.id));
-  return `Правка записана для категории «${category}». Черновик этого решения обновлён, следующее письмо той же категории её учтёт.`;
+  await recordAct(db, {
+    leaderId,
+    subject: decision.subject,
+    action: 'поправил',
+    result: instead,
+    original: decision.originalDraft || decision.draft,
+    approved: '',
+    auto: false,
+    refId: decision.id,
+  });
+  return {
+    id: decision.id,
+    text: `Черновик обновлён. «Только сейчас» — правило не создаётся. «Запомнить» — для следующих писем.\n\n${draft}`,
+  };
 }
 
 export function hideMailbox(text: string, mailbox: string): string {

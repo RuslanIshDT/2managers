@@ -16,6 +16,7 @@ import { sendMessage } from '../telegram.ts';
 import { calendarConfig, ensureStandCalendar, putEvent } from '../yandex/calendar.ts';
 import { publishApproved } from '../yandex/publish.ts';
 import { refreshSeries } from './stand-sync.ts';
+import { dueFromInstruction, replaceStepLine, ruleFromChoice, stepIndex } from './memory.ts';
 import { leaderProtocols, participantLetters, plainBody, previousOf, protocolTasks, whenWords } from './protocol-context.ts';
 import { commentIssue, listQueueIssues, moveIssue, trackerConfig } from '../yandex/tracker.ts';
 import { eventFile, meetingStart, standEvent, taskUnique } from './materials.ts';
@@ -159,17 +160,17 @@ export function messageParts(text: string, limit = 3900): string[] {
   return parts;
 }
 
-async function sendProtocol(body: string, chatId: string, id: string) {
+async function sendProtocol(body: string, chatId: string, id: string, scope = false) {
   const parts = messageParts(body);
   for (const [index, part] of parts.entries()) {
-    await sendMessage(part, chatId, index === parts.length - 1 ? { reply_markup: protocolKeyboard(id) } : undefined);
+    await sendMessage(part, chatId, index === parts.length - 1 ? { reply_markup: protocolKeyboard(id, scope) } : undefined);
   }
 }
 
-export type ProtocolAction = 'approve' | 'edit' | 'reject';
+export type ProtocolAction = 'approve' | 'edit' | 'reject' | 'once' | 'keep';
 
 export function parseProtocolCallback(data: string): { action: ProtocolAction; id: string } | null {
-  const match = /^p:(approve|edit|reject):([a-f0-9]{8})$/.exec(data);
+  const match = /^p:(approve|edit|reject|once|keep):([a-f0-9]{8})$/.exec(data);
   return match ? { action: match[1] as ProtocolAction, id: match[2] } : null;
 }
 
@@ -177,9 +178,15 @@ export function protocolCallback(id: string, action: ProtocolAction = 'approve')
   return `p:${action}:${id}`;
 }
 
-export function protocolKeyboard(id: string) {
+export function protocolKeyboard(id: string, scope = false) {
   return {
     inline_keyboard: [
+      ...(scope
+        ? [[
+            { text: 'Только сейчас', callback_data: protocolCallback(id, 'once') },
+            { text: 'Запомнить', callback_data: protocolCallback(id, 'keep') },
+          ]]
+        : []),
       [{ text: 'Утвердить', callback_data: protocolCallback(id, 'approve') }],
       [
         { text: 'Поправить', callback_data: protocolCallback(id, 'edit') },
@@ -529,7 +536,7 @@ export async function askProtocolEdit(db: Db, id: string, chatId: string): Promi
   if (row.status !== 'ждёт') return `Уже ${row.status}`;
   await db.update(protocols).set({ awaitingEdit: false }).where(eq(protocols.leaderId, leader.id));
   await db.update(protocols).set({ awaitingEdit: true }).where(eq(protocols.id, id));
-  return 'Напишите, что поправить в протоколе. Правку помощник запомнит для следующих протоколов.';
+  return 'Напишите правку. По умолчанию она только в этом протоколе. «Запомнить» оставит правило для следующих.';
 }
 
 // Текст правки: модель переписывает протокол по указанию руководителя, правка сохраняется для следующих протоколов (R6).
@@ -544,6 +551,11 @@ export async function saveProtocolEdit(db: Db, chatId: string, text: string): Pr
     .where(and(eq(protocols.leaderId, leader.id), eq(protocols.awaitingEdit, true)))
     .limit(1);
   if (!row) return null;
+  const direct = await applyDueEdit(db, leader.id, row, instead);
+  if (direct) {
+    await sendProtocol(direct.body, chatId, row.id, true);
+    return direct.note;
+  }
   const staff = await db.select({ name: people.name, position: people.position }).from(people).where(eq(people.leaderId, leader.id));
   const meeting = meetingOfSource(row.source);
   const earlier = previousOf(
@@ -584,11 +596,72 @@ export async function saveProtocolEdit(db: Db, chatId: string, text: string): Pr
   const body = renderProtocol(draft);
   await db
     .update(protocols)
-    .set({ body, openItems: draft.open, steps: draft.steps, prior: draft.prior, agreed: draft.agreed, awaitingEdit: false })
+    .set({ body, openItems: draft.open, steps: draft.steps, prior: draft.prior, agreed: draft.agreed, awaitingEdit: false, pendingRule: instead })
     .where(eq(protocols.id, row.id));
-  await db.insert(revisions).values({ id: randomUUID(), leaderId: leader.id, category: 'протокол', instead, createdAt: new Date() });
-  await sendProtocol(body, chatId, row.id);
-  return 'Протокол поправлен, новая версия выше. Правка записана: следующие протоколы её учтут.';
+  await sendProtocol(body, chatId, row.id, true);
+  return 'Протокол поправлен, новая версия выше. «Только сейчас» — правило не создаётся. «Запомнить» — для следующих протоколов.';
+}
+
+function yearOf(source: string, steps: { due: string }[]): number {
+  const meeting = meetingOfSource(source);
+  if (meeting && /^\d{4}/.test(meeting.startsAt)) return Number(meeting.startsAt.slice(0, 4));
+  const due = steps.find((step) => /^\d{4}/.test(step.due));
+  return due ? Number(due.due.slice(0, 4)) : new Date().getFullYear();
+}
+
+async function applyDueEdit(
+  db: Db,
+  leaderId: string,
+  row: { id: string; leaderId: string; source: string; body: string; steps: unknown },
+  instruction: string,
+): Promise<{ body: string; note: string } | null> {
+  if (row.leaderId !== leaderId) return null;
+  const steps = storedSteps(row.steps);
+  const due = dueFromInstruction(instruction, yearOf(row.source, steps));
+  const index = stepIndex(steps, instruction);
+  if (!due || index < 0) return null;
+  const before = steps[index];
+  if (!before) return null;
+  const after = { ...before, due };
+  const next = steps.map((step, i) => (i === index ? after : step));
+  const body = replaceStepLine(row.body, before, after);
+  await db.update(protocols).set({ body, steps: next, awaitingEdit: false, pendingRule: instruction }).where(eq(protocols.id, row.id));
+  return { body, note: `Срок поручения изменён: ${stepLine(after)}. «Только сейчас» — правило не создаётся. «Запомнить» — для следующих протоколов.` };
+}
+
+export async function reviseProtocol(db: Db, leaderId: string, id: string, text: string): Promise<{ body: string; note: string } | { error: string }> {
+  const instead = text.trim();
+  if (instead.length < 3) return { error: 'Напишите, что поправить' };
+  const [row] = await db.select().from(protocols).where(and(eq(protocols.id, id), eq(protocols.leaderId, leaderId))).limit(1);
+  if (!row || row.status === 'отклонён') return { error: 'Протокол не найден' };
+  const direct = await applyDueEdit(db, leaderId, row, instead);
+  if (direct) return direct;
+  return { error: 'Такой перенос срока не разобран. Назовите поручение и дату, например «на пятницу 18 декабря».' };
+}
+
+export async function scopeProtocolByChat(db: Db, id: string, chatId: string, choice: 'once' | 'keep'): Promise<string> {
+  const [leader] = await db.select().from(leaders).where(eq(leaders.telegramChatId, chatId)).limit(1);
+  if (!leader) return 'Чат не привязан';
+  return chooseProtocolScope(db, leader.id, id, choice);
+}
+
+export async function chooseProtocolScope(db: Db, leaderId: string, id: string, choice: 'once' | 'keep'): Promise<string> {
+  const [row] = await db.select().from(protocols).where(and(eq(protocols.id, id), eq(protocols.leaderId, leaderId))).limit(1);
+  if (!row) return 'Протокол не найден';
+  const remembered = ruleFromChoice(row.pendingRule, choice);
+  if (choice === 'keep' && !remembered) return 'Сначала напишите правку.';
+  if (remembered) {
+    await db.insert(revisions).values({
+      id: randomUUID(),
+      leaderId,
+      category: 'протоколы',
+      area: 'протоколы',
+      instead: remembered,
+      createdAt: new Date(),
+    });
+  }
+  await db.update(protocols).set({ pendingRule: '' }).where(eq(protocols.id, id));
+  return remembered ? 'Правило записано для следующих протоколов.' : 'Только этот протокол. Правило не создано.';
 }
 
 function cleanDraft(
@@ -774,7 +847,9 @@ export async function writeProtocol(db: Db, leaderId: string, dir = `data/${lead
   const priorTasks = prior ? await protocolTasks(db, leaderId, prior.id) : [];
   const priorAt = prior ? meetingOfSource(prior.source) : null;
   const letters = await participantLetters(db, leaderId, meeting);
-  const edits = (await db.select().from(revisions).where(and(eq(revisions.leaderId, leaderId), eq(revisions.category, 'протокол')))).map((row) => row.instead);
+  const edits = (await db.select().from(revisions).where(eq(revisions.leaderId, leaderId)))
+    .filter((row) => row.area === 'протоколы' || row.category === 'протокол')
+    .map((row) => row.instead);
   const context = [
     prior && priorAt ? `Прошлый протокол этой темы (${whenWords(priorAt.startsAt)}, ${prior.status}):\n${plainBody(prior.body).slice(0, 2500)}` : 'Прошлого протокола этой темы нет.',
     priorTasks.length ? `Задачи прошлого протокола (номер нужен для статуса):\n${numberedTasks(priorTasks)}` : '',

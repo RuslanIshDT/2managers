@@ -150,7 +150,9 @@ interface Cabinet {
   week: WeekScene;
   focus: FocusScene;
   mirror: MirrorScene;
-  revisions: { id: string; category: string; instead: string }[];
+  revisions: { id: string; category: string; area?: string; instead: string }[];
+  acts?: { id: string; subject: string; when: string; action: string; result: string; original: string; approved: string; auto: boolean }[];
+  protocols?: { id: string; status: string; title: string; pending: boolean }[];
   accuracy: { total: number; hit: number; calls: number; forced: number; misses: { pair: string; count: number }[] } | null;
   protocol: { status: string; open: number; preparation: string } | null;
   stubs: {
@@ -572,6 +574,10 @@ export function App() {
             window.setTimeout(() => document.getElementById(`helper-${helper}`)?.scrollIntoView({ block: 'start' }), 0);
           }}
           onTalk={() => setSection('department')}
+          onRefresh={async () => {
+            const fresh = await api<Cabinet>('/api/cabinet');
+            setCabinet(fresh);
+          }}
         />
       ) : null}
       {section === 'department' ? (
@@ -676,6 +682,11 @@ export function App() {
       ) : null}
       {section === 'settings' ? (
         <>
+      <Card className="mb-4">
+        <h2 className="mb-2 text-lg font-semibold">Профиль</h2>
+        <p className="mb-2 text-sm text-[#5d6878]">Полный профиль руководителя. Ниже — действующие правила: их можно добавить, изменить и удалить. Правило применяется со следующего письма, протокола или утреннего плана.</p>
+        <div className="whitespace-pre-wrap font-sans text-sm leading-relaxed">{plainProfile(cabinet?.profile ?? '')}</div>
+      </Card>
       <ModelsPanel
         data={models}
         onSaved={() => {
@@ -685,6 +696,8 @@ export function App() {
       <CostPanel data={cost} />
       <Revisions
         rows={cabinet?.revisions ?? []}
+        acts={cabinet?.acts ?? []}
+        protocols={cabinet?.protocols ?? []}
         onSaved={async () => {
           const fresh = await api<Cabinet>('/api/cabinet');
           setCabinet(fresh);
@@ -753,6 +766,7 @@ export function App() {
       </Card>
       <Card className="mb-4">
         <h2 className="mb-2 text-lg font-semibold">Профиль</h2>
+        <p className="mb-2 text-sm text-[#5d6878]">Цели, правила и стиль. Действующие правила — в настройках, раздел «Профиль».</p>
         <div className="whitespace-pre-wrap font-sans text-sm leading-relaxed">{plainProfile(cabinet?.profile ?? '')}</div>
       </Card>
       <p className="text-sm text-[#5d6878]">
@@ -1007,47 +1021,157 @@ function bold(text: string) {
   return text.split(/\*\*(.+?)\*\*/g).map((part, index) => (index % 2 ? <b key={index}>{part}</b> : part));
 }
 
-function Revisions({ rows, onSaved }: { rows: { id: string; category: string; instead: string }[]; onSaved: () => Promise<void> }) {
-  const [category, setCategory] = useState('кадры');
+function Revisions({
+  rows,
+  acts,
+  protocols,
+  onSaved,
+}: {
+  rows: { id: string; category: string; area?: string; instead: string }[];
+  acts: { id: string; subject: string; when: string; action: string; result: string; original: string; approved: string; auto: boolean }[];
+  protocols: { id: string; status: string; title: string; pending: boolean }[];
+  onSaved: () => Promise<void>;
+}) {
+  const [area, setArea] = useState('письма');
   const [instead, setInstead] = useState('');
   const [error, setError] = useState('');
+  const [protocolId, setProtocolId] = useState(protocols[0]?.id ?? '');
+  const [protocolText, setProtocolText] = useState('');
+  const [protocolNote, setProtocolNote] = useState('');
+  const own = acts.filter((row) => !row.auto);
+  const auto = acts.filter((row) => row.auto);
   async function save(event: FormEvent) {
     event.preventDefault();
     setError('');
     try {
-      await api('/api/revisions', { method: 'POST', body: JSON.stringify({ category, instead }) });
+      await api('/api/revisions', { method: 'POST', body: JSON.stringify({ area, instead }) });
       setInstead('');
       await onSaved();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Не сохранилось');
     }
   }
+  async function change(id: string, text: string) {
+    setError('');
+    await api('/api/revisions/update', { method: 'POST', body: JSON.stringify({ id, instead: text }) });
+    await onSaved();
+  }
+  async function remove(id: string) {
+    setError('');
+    await api('/api/revisions/delete', { method: 'POST', body: JSON.stringify({ id }) });
+    await onSaved();
+  }
+  async function editProtocol(scope: 'once' | 'keep') {
+    setError('');
+    setProtocolNote('');
+    const edited = await api<{ note: string }>('/api/protocols/edit', { method: 'POST', body: JSON.stringify({ id: protocolId, text: protocolText }) });
+    const scoped = await api<{ notice: string }>('/api/protocols/scope', { method: 'POST', body: JSON.stringify({ id: protocolId, scope }) });
+    setProtocolNote(`${edited.note} ${scoped.notice}`);
+    setProtocolText('');
+    await onSaved();
+  }
   return (
     <Card className="mb-4">
-      <h2 className="mb-2 text-lg font-semibold">Правки</h2>
-      <p className="mb-2 text-sm text-[#5d6878]">Текст попадает в следующий черновик той же категории. В Telegram кнопка «Поправить» ждёт следующее сообщение.</p>
-      <ul className="mb-3 grid gap-1 text-sm">
+      <h2 className="mb-2 text-lg font-semibold">Правила</h2>
+      <p className="mb-2 text-sm text-[#5d6878]">Правило действует со следующего письма, протокола или утреннего плана. Деньги, кадры, обещания клиентам и письма начальника по-прежнему ждут вашего подтверждения.</p>
+      <ul className="mb-3 grid gap-2 text-sm">
         {rows.map((row) => (
-          <li key={row.id}>
-            <b>{row.category.replace(/\.+$/, '')}.</b> {cleanDots(row.instead)}
-          </li>
+          <RuleRow key={row.id} row={row} onChange={change} onDelete={remove} />
         ))}
+        {rows.length === 0 ? <li className="text-[#5d6878]">Действующих правил нет.</li> : null}
       </ul>
       <form className="grid gap-2" onSubmit={save}>
         <label className="grid gap-1 text-sm">
-          Категория
-          <Input value={category} onChange={(event) => setCategory(event.target.value)} required />
+          Область
+          <select className="rounded-md border border-[#d8dee8] px-2 py-1" value={area} onChange={(event) => setArea(event.target.value)}>
+            <option value="письма">Письма</option>
+            <option value="протоколы">Протоколы</option>
+            <option value="утро">Утренний план</option>
+          </select>
         </label>
         <label className="grid gap-1 text-sm">
-          Что поставить вместо
+          Текст правила
           <Input value={instead} onChange={(event) => setInstead(event.target.value)} required minLength={3} />
         </label>
         {error ? <p className="text-sm text-[#a3302a]">{error}</p> : null}
-        <Button type="submit" variant="outline">
-          Записать правку
-        </Button>
+        <Button type="submit" variant="outline">Добавить правило</Button>
       </form>
+      {protocols.length ? (
+        <form
+          className="mt-4 grid gap-2 border-t border-[#e6ebf2] pt-3"
+          onSubmit={(event) => {
+            event.preventDefault();
+            editProtocol('once').catch((err: unknown) => setError(err instanceof Error ? err.message : 'Не сохранилось'));
+          }}
+        >
+          <p className="text-sm font-semibold">Правка протокола</p>
+          <p className="text-sm text-[#5d6878]">«Только сейчас» меняет этот протокол и не создаёт правило. Уже утверждённый протокол правится в тексте, задачи в Трекере заново не создаются.</p>
+          <select className="rounded-md border border-[#d8dee8] px-2 py-1 text-sm" value={protocolId} onChange={(event) => setProtocolId(event.target.value)}>
+            {protocols.map((item) => (
+              <option key={item.id} value={item.id}>{item.title} — {item.status}</option>
+            ))}
+          </select>
+          <Input value={protocolText} onChange={(event) => setProtocolText(event.target.value)} placeholder="Какое поручение и на какую дату" required minLength={3} />
+          <span className="flex flex-wrap gap-2">
+            <Button type="submit" variant="outline">Только сейчас</Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                editProtocol('keep').catch((err: unknown) => setError(err instanceof Error ? err.message : 'Не сохранилось'));
+              }}
+            >
+              Запомнить
+            </Button>
+          </span>
+          {protocolNote ? <p className="text-sm">{protocolNote}</p> : null}
+        </form>
+      ) : null}
+      <div className="mt-4 border-t border-[#e6ebf2] pt-3 text-sm">
+        <p className="font-semibold">Ваши решения</p>
+        <ul className="mt-2 grid gap-2">
+          {own.map((row) => (
+            <li key={row.id}>
+              <b>{row.when}</b> — {row.action}: {row.subject}. {row.result}
+              {row.original && row.approved && row.original !== row.approved ? (
+                <span className="block text-[#5d6878]">Было: {row.original.slice(0, 180)} Стало: {row.approved.slice(0, 180)}</span>
+              ) : null}
+            </li>
+          ))}
+          {own.length === 0 ? <li className="text-[#5d6878]">Пока нет.</li> : null}
+        </ul>
+        <p className="mt-3 font-semibold">Помощник сделал сам</p>
+        <ul className="mt-2 grid gap-1 text-[#5d6878]">
+          {auto.map((row) => (
+            <li key={row.id}>{row.when} — {row.action}: {row.subject}</li>
+          ))}
+          {auto.length === 0 ? <li>Пока нет.</li> : null}
+        </ul>
+      </div>
     </Card>
+  );
+}
+
+function RuleRow({
+  row,
+  onChange,
+  onDelete,
+}: {
+  row: { id: string; category: string; area?: string; instead: string };
+  onChange: (id: string, text: string) => Promise<void>;
+  onDelete: (id: string) => Promise<void>;
+}) {
+  const [text, setText] = useState(row.instead);
+  const area = row.area || row.category;
+  return (
+    <li className="grid gap-1">
+      <span className="text-[#5d6878]">{area}</span>
+      <span className="flex flex-wrap gap-2">
+        <Input value={text} onChange={(event) => setText(event.target.value)} />
+        <Button type="button" variant="outline" onClick={() => onChange(row.id, text)}>Изменить</Button>
+        <Button type="button" variant="outline" onClick={() => onDelete(row.id)}>Удалить</Button>
+      </span>
+    </li>
   );
 }
 
@@ -1060,6 +1184,7 @@ function HomeDesk({
   onSend,
   onOpen,
   onTalk,
+  onRefresh,
 }: {
   desk: Desk | undefined;
   pending: boolean;
@@ -1069,6 +1194,7 @@ function HomeDesk({
   onSend: () => void;
   onOpen: (helper: string) => void;
   onTalk: () => void;
+  onRefresh: () => Promise<void>;
 }) {
   if (!desk) return null;
   const tasks = desk.work.filter((item) => item.kind === 'task');
@@ -1080,10 +1206,10 @@ function HomeDesk({
         {rest.length + tasks.length === 0 ? <p className="text-sm text-[#5d6878]">Сейчас от вас ничего не ждут.</p> : null}
         <div className="grid gap-3">
           {rest.map((item) => (
-            <WorkCard key={item.id} item={item} pending={pending} onDecision={onDecision} onAccept={onAccept} onSeries={onSeries} onOpen={onOpen} onTalk={onTalk} />
+            <WorkCard key={item.id} item={item} pending={pending} onDecision={onDecision} onAccept={onAccept} onSeries={onSeries} onOpen={onOpen} onTalk={onTalk} onRefresh={onRefresh} />
           ))}
           {tasks.map((item) => (
-            <WorkCard key={item.id} item={item} pending={pending} onDecision={onDecision} onAccept={onAccept} onSeries={onSeries} onOpen={onOpen} onTalk={onTalk} />
+            <WorkCard key={item.id} item={item} pending={pending} onDecision={onDecision} onAccept={onAccept} onSeries={onSeries} onOpen={onOpen} onTalk={onTalk} onRefresh={onRefresh} />
           ))}
         </div>
         <Button className="mt-3" type="button" variant="outline" disabled={pending} onClick={onSend}>
@@ -1113,6 +1239,7 @@ function WorkCard({
   onSeries,
   onOpen,
   onTalk,
+  onRefresh,
 }: {
   item: WorkItem;
   pending: boolean;
@@ -1121,7 +1248,11 @@ function WorkCard({
   onSeries: (key: string, action: 'продлить' | 'отпустить') => void;
   onOpen: (helper: string) => void;
   onTalk: () => void;
+  onRefresh: () => Promise<void>;
 }) {
+  const [edit, setEdit] = useState('');
+  const [draft, setDraft] = useState('');
+  const [note, setNote] = useState('');
   return (
     <Card>
       <p className="font-semibold">{item.title}</p>
@@ -1140,7 +1271,60 @@ function WorkCard({
             <Button type="button" variant="outline" disabled={pending} onClick={() => onDecision(item.id, 'defer')}>
               Отложить
             </Button>
+            <Button type="button" variant="outline" disabled={pending} onClick={() => setDraft(draft ? '' : ' ')}>
+              Поправить
+            </Button>
           </>
+        ) : null}
+        {item.kind === 'decision' && draft ? (
+          <form
+            className="mt-2 grid gap-2"
+            onSubmit={(event) => {
+              event.preventDefault();
+              api<{ draft: string }>('/api/decisions', { method: 'POST', body: JSON.stringify({ id: item.id, action: 'edit', text: edit }) })
+                .then(async (result) => {
+                  setDraft(result.draft);
+                  setNote('Черновик обновлён. Выберите, запомнить ли правку, затем утвердите.');
+                  await onRefresh();
+                })
+                .catch((err: unknown) => setNote(err instanceof Error ? err.message : 'Не сохранилось'));
+            }}
+          >
+            <Input value={edit} onChange={(event) => setEdit(event.target.value)} placeholder="Что изменить" required minLength={3} />
+            <Button type="submit" variant="outline" disabled={pending}>Показать черновик</Button>
+            {draft.trim() ? <p className="whitespace-pre-wrap text-sm">{draft}</p> : null}
+            {note ? <p className="text-sm text-[#5d6878]">{note}</p> : null}
+            <span className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  api<{ notice: string }>('/api/decisions', { method: 'POST', body: JSON.stringify({ id: item.id, action: 'once' }) })
+                    .then(async (result) => {
+                      setNote(result.notice);
+                      await onRefresh();
+                    })
+                    .catch((err: unknown) => setNote(err instanceof Error ? err.message : 'Не сохранилось'));
+                }}
+              >
+                Только сейчас
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  api<{ notice: string }>('/api/decisions', { method: 'POST', body: JSON.stringify({ id: item.id, action: 'keep' }) })
+                    .then(async (result) => {
+                      setNote(result.notice);
+                      await onRefresh();
+                    })
+                    .catch((err: unknown) => setNote(err instanceof Error ? err.message : 'Не сохранилось'));
+                }}
+              >
+                Запомнить
+              </Button>
+            </span>
+          </form>
         ) : null}
         {item.kind === 'talk' ? (
           <Button type="button" variant="outline" onClick={onTalk}>

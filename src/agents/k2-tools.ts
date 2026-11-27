@@ -85,7 +85,9 @@ export function runTool(name: string, args: Record<string, unknown>, ctx: K2Cont
     case 'thread':
       return ctx.thread.length ? ctx.thread.slice(-10).map((row) => `${row.received}: ${row.subject} — ${row.verdict || 'без разбора'}`).join('\n') : 'Прежних писем нет';
     case 'leader_edits':
-      return ctx.revisions.length ? ctx.revisions.slice(-8).map((row) => `${row.category}: ${row.instead}`).join('\n') : 'Правок нет';
+      return ctx.revisions.length
+        ? ctx.revisions.slice(-8).map((row) => `Правило (${row.category}): ${row.instead}. Учти в черновике, формулировку не цитируй.`).join('\n')
+        : 'Правок нет';
     case 'people':
       return ctx.people?.length ? ctx.people.map((row) => `${row.name} — ${row.position || 'должность не указана'}${row.zone ? `; зона: ${row.zone}` : ''}`).join('\n') : 'Список людей пуст';
     default:
@@ -108,7 +110,7 @@ export interface K2Run {
   rounds: number;
 }
 
-export async function judgeWithTools(input: { purpose: string; profile: string; subject: string; body: string; ctx: K2Context; recipients?: string }): Promise<K2Run> {
+export async function judgeWithTools(input: { purpose: string; profile: string; subject: string; body: string; ctx: K2Context; recipients?: string; hints?: string }): Promise<K2Run> {
   const side = input.ctx.side ?? 'внутр';
   const tools = toolsFor(side);
   const who = side === 'внеш' ? `${input.ctx.person.name} (не из организации)` : `${input.ctx.person.name}, ${input.ctx.person.position || 'из организации'}`;
@@ -124,6 +126,7 @@ export async function judgeWithTools(input: { purpose: string; profile: string; 
         input.recipients ? `Кому: ${input.recipients}` : '',
         `Тема: ${input.subject}`,
         input.body.trim(),
+        input.hints ?? '',
       ]
         .filter((line) => line !== '')
         .join('\n'),

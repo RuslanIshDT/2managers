@@ -1,4 +1,5 @@
 // Утро руководителя и матрица отдела. Модель здесь не вызывается, имена берутся из данных.
+import { morningBlockOrder, type MorningBlockId } from './memory.ts';
 import { dateWords } from './scene.ts';
 export type MatrixCell = 'один_на_один' | 'помочь' | 'расширить' | 'не_трогать';
 
@@ -115,46 +116,54 @@ export interface MorningInput {
   questions: { title: string; items: string[] }[];
   share: { onGoal: number; total: number; percent: number };
   notes?: string[];
+  rules?: string[];
 }
 
 // Утреннее сообщение (порядок — владелец 27.11.2026, T66). Сначала то, что взято из систем: решения из почты,
 // ваши задачи из Трекера, встречи из календаря. Затем то, что собрали агенты: три дела, просрочки сотрудников,
 // открытые вопросы протокола, время на цели, ответы помощника.
 export function renderMorning(input: MorningInput): string {
-  const blocks: string[][] = [[`План на ${dateWords(input.today)}`]];
-  blocks.push(
-    input.waiting.length
+  const parts = new Map<MorningBlockId, string>();
+  parts.set(
+    'waiting',
+    (input.waiting.length
       ? ['Ждут вашего решения:', ...input.waiting.map((row) => `— ${row.who}: ${row.what} (${waitWords(row.days)})`)]
-      : ['Решений, которые ждут вас, нет.'],
+      : ['Решений, которые ждут вас, нет.']
+    ).join('\n'),
   );
-  blocks.push(
-    input.ownWeek.length
+  parts.set(
+    'own',
+    (input.ownWeek.length
       ? ['Ваши задачи со сроком в ближайшую неделю:', ...input.ownWeek.map((task) => `— ${task.title}, ${dueWords(task.dueOn, input.today)}`)]
-      : ['Ваших задач со сроком в ближайшую неделю нет.'],
+      : ['Ваших задач со сроком в ближайшую неделю нет.']
+    ).join('\n'),
   );
-  blocks.push([input.todayMeetings.length ? `Встречи сегодня: ${input.todayMeetings.join('; ')}.` : 'Сегодня встреч в календаре нет.']);
-  if (input.plan === null) blocks.push(['Три дела на сегодня модель выберет при отправке.']);
-  else if (!input.plan.length) blocks.push(['Три дела на сегодня: модель не выбрала ни одного.']);
-  else
-    blocks.push([
-      'Три дела на сегодня:',
-      ...input.plan.map((item, index) => `${index + 1}. ${item.title}. ${item.minutes} мин, цель «${item.goal}». ${item.why}`),
-    ]);
-  blocks.push(overdueLines(input.overdue));
-  // Вопросы по прошлым протоколам: к ближайшей встрече той же темы сегодня или завтра (T69).
+  parts.set('meetings', input.todayMeetings.length ? `Встречи сегодня: ${input.todayMeetings.join('; ')}.` : 'Сегодня встреч в календаре нет.');
+  parts.set(
+    'plan',
+    input.plan === null
+      ? 'Три дела на сегодня модель выберет при отправке.'
+      : input.plan.length
+        ? ['Три дела на сегодня:', ...input.plan.map((item, index) => `${index + 1}. ${item.title}. ${item.minutes} мин, цель «${item.goal}». ${item.why}`)].join('\n')
+        : 'Три дела на сегодня: модель не выбрала ни одного.',
+  );
+  parts.set('overdue', overdueLines(input.overdue).join('\n'));
   if (input.questions.length)
-    blocks.push(['Вопросы по прошлым протоколам:', ...input.questions.flatMap((group) => [`${group.title}:`, ...group.items.map((item) => `— ${item}`)])]);
-  blocks.push([
-    `Время встреч на ваши цели: ${input.share.percent}% (${hours(input.share.onGoal)} из ${hours(input.share.total)} ч по календарю).`,
-  ]);
-  blocks.push(
+    parts.set('questions', ['Вопросы по прошлым протоколам:', ...input.questions.flatMap((group) => [`${group.title}:`, ...group.items.map((item) => `— ${item}`)])].join('\n'));
+  parts.set('share', `Время встреч на ваши цели: ${input.share.percent}% (${hours(input.share.onGoal)} из ${hours(input.share.total)} ч по календарю).`);
+  parts.set(
+    'returned',
     input.returned.length
-      ? ['Помощник ответил сам на этой неделе:', ...input.returned.map((row) => `— ${row.who}: ${row.what}`)]
-      : ['На этой неделе помощник сам ни на одно письмо не отвечал.'],
+      ? ['Помощник ответил сам на этой неделе:', ...input.returned.map((row) => `— ${row.who}: ${row.what}`)].join('\n')
+      : 'На этой неделе помощник сам ни на одно письмо не отвечал.',
   );
-  // Трекер или календарь не ответили — сказать, откуда взяты задачи и встречи.
-  if (input.notes?.length) blocks.push(input.notes);
-  return blocks.map((block) => block.join('\n')).join('\n\n');
+  const blocks = [`План на ${dateWords(input.today)}`];
+  for (const id of morningBlockOrder(input.rules ?? [])) {
+    const text = parts.get(id);
+    if (text) blocks.push(text);
+  }
+  if (input.notes?.length) blocks.push(input.notes.join('\n'));
+  return blocks.join('\n\n');
 }
 
 // Свои задачи руководителя, которые показываются всегда: срок в ближайшие 7 дней или уже прошёл (владелец 27.11.2026).

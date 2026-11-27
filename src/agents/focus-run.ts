@@ -1,7 +1,7 @@
 // Сборка утра и матрицы. Задачи и встречи — из Трекера и календаря «Стенд» (T65), остальное — из базы. Три дела выбирает модель, остальное считает код.
-import { eq, isNotNull } from 'drizzle-orm';
+import { and, eq, isNotNull } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
-import { decisions, focusPlans, freedSlots, leaders, meetings, seriesKind, tasks, verdicts } from '../db/schema.ts';
+import { decisions, focusPlans, freedSlots, leaders, meetings, revisions, seriesKind, tasks, verdicts } from '../db/schema.ts';
 import { calendarAfter } from './free-time.ts';
 import { departmentForLeader } from './k1.ts';
 import { chooseFocus, classifySeries, GOAL_KINDS, type Candidate, type FocusPlan } from './conductor.ts';
@@ -15,7 +15,8 @@ import { liveSources, type LiveMeeting, type LiveTask } from './live-sources.ts'
 import { sendTaskReminders } from './reminders.ts';
 
 export async function focusForLeader(db: Db, leaderId: string, leaderName: string) {
-  const scene = await sceneFor(db, leaderId, leaderName);
+  const rules = await morningRules(db, leaderId);
+  const scene = await sceneFor(db, leaderId, leaderName, undefined, rules);
   const stored = await db.select().from(focusPlans).where(eq(focusPlans.leaderId, leaderId)).limit(1);
   const plan = stored[0]?.plan as { text?: string } | undefined;
   return { matrix: scene.matrix, share: scene.share, text: plan?.text || scene.draft, overdue: scene.overdue };
@@ -27,15 +28,16 @@ export async function sendFocus(db: Db, leaderId: string) {
   if (!leader.telegramChatId) throw new Error('Telegram-чат руководителя не привязан');
   // Задачи и встречи — из Трекера и календаря; что не ответило — из базы, с пометкой в сообщении.
   const live = await liveSources(db, leaderId, leader.name);
+  const rules = await morningRules(db, leaderId);
   // Вид новых серий — до подсчёта времени на цели: оно считается по видам встреч. Встреча, поставленная в календаре руками, — тоже серия.
   await classifyNewSeries(db, leaderId, leader.profile, false, (live.meetings ?? []).filter((row) => !row.goal).map((row) => row.summary));
-  const scene = await sceneFor(db, leaderId, leader.name, live);
+  const scene = await sceneFor(db, leaderId, leader.name, live, rules);
   const plan = await withLlmScope(
     { agent: 'k4', leaderId, operationId: `k4:${leaderId}:${Date.now()}`, title: 'Утреннее сообщение' },
     () => chooseFocus({ purpose: `k4:${leaderId}`, profile: leader.profile, candidates: scene.candidates, names: scene.names }),
   );
   const questions = await morningQuestions(db, leaderId, scene.meetings, scene.morning.today, shiftDay(scene.morning.today, 1));
-  const text = renderMorning({ ...scene.morning, plan: plan.today, questions, notes: live.notes });
+  const text = renderMorning({ ...scene.morning, plan: plan.today, questions, notes: live.notes, rules });
   try {
     await sendTaskReminders(db, leaderId, leader.name, live.tasks, clockFor(leaderId).today);
   } catch (err) {
@@ -58,7 +60,12 @@ export async function sendFocusAll(db: Db) {
 }
 
 // live — задачи и встречи из Трекера и календаря; без него (кабинет) — из базы, чтобы страница не ждала внешние сервисы.
-async function sceneFor(db: Db, leaderId: string, leaderName: string, live?: { tasks: LiveTask[] | null; meetings: LiveMeeting[] | null }) {
+async function morningRules(db: Db, leaderId: string): Promise<string[]> {
+  const rows = await db.select().from(revisions).where(and(eq(revisions.leaderId, leaderId), eq(revisions.area, 'утро')));
+  return rows.map((row) => row.instead);
+}
+
+async function sceneFor(db: Db, leaderId: string, leaderName: string, live?: { tasks: LiveTask[] | null; meetings: LiveMeeting[] | null }, rules: string[] = []) {
   const [department, taskRows, decisionRows, verdictRows, storedMeetings, freedRows, kindRows] = await Promise.all([
     departmentForLeader(db, leaderId),
     db.select().from(tasks).where(eq(tasks.leaderId, leaderId)),
@@ -138,6 +145,7 @@ async function sceneFor(db: Db, leaderId: string, leaderName: string, live?: { t
     overdue,
     todayMeetings: titlesOn(meetingRows, today),
     share,
+    rules,
   };
   return {
     matrix,
@@ -145,7 +153,7 @@ async function sceneFor(db: Db, leaderId: string, leaderName: string, live?: { t
     candidates,
     names: department.people.map((person) => person.name),
     morning,
-    draft: renderMorning({ ...morning, plan: null, questions: [], notes: [] }),
+    draft: renderMorning({ ...morning, plan: null, questions: [], notes: [], rules }),
     meetings: meetingRows,
     overdue: overdueLines(overdue),
   };

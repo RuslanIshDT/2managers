@@ -176,6 +176,8 @@ export const decisions = pgTable('decisions', {
   replyName: text('reply_name').notNull(),
   subject: text('subject').notNull(),
   awaitingEdit: boolean('awaiting_edit').notNull().default(false),
+  originalDraft: text('original_draft').notNull().default(''),
+  pendingRule: text('pending_rule').notNull().default(''),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
 });
 
@@ -183,8 +185,22 @@ export const revisions = pgTable('revisions', {
   id: text('id').primaryKey(),
   leaderId: text('leader_id').notNull(),
   category: text('category').notNull(),
+  area: text('area').notNull().default('письма'),
   instead: text('instead').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+});
+
+export const leaderActs = pgTable('leader_acts', {
+  id: text('id').primaryKey(),
+  leaderId: text('leader_id').notNull(),
+  subject: text('subject').notNull(),
+  at: timestamp('at', { withTimezone: true }).notNull(),
+  action: text('action').notNull(),
+  result: text('result').notNull(),
+  originalDraft: text('original_draft').notNull().default(''),
+  approvedText: text('approved_text').notNull().default(''),
+  auto: boolean('auto').notNull().default(false),
+  refId: text('ref_id').notNull().default(''),
 });
 
 export const rules = pgTable('rules', {
@@ -259,6 +275,7 @@ export const protocols = pgTable('protocols', {
   sentAt: timestamp('sent_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
   awaitingEdit: boolean('awaiting_edit').notNull().default(false),
+  pendingRule: text('pending_rule').notNull().default(''),
   steps: jsonb('steps').notNull().default([]),
   prior: jsonb('prior').notNull().default([]),
   agreed: jsonb('agreed').notNull().default([]),

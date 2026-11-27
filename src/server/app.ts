@@ -11,23 +11,23 @@ import type pg from 'pg';
 import { z } from 'zod';
 import { hashToken, newSessionToken, verifyPassword } from '../auth.ts';
 import type { Db } from '../db/client.ts';
-import { agentModels, agentRuns, emails, flowReports, leaders, meetings, operations, people, revisions, sessions, tasks, telegramClicks } from '../db/schema.ts';
+import { agentModels, agentRuns, emails, flowReports, leaderActs, leaders, meetings, operations, people, protocols, revisions, sessions, tasks, telegramClicks } from '../db/schema.ts';
 import { departmentForLeader } from '../agents/k1.ts';
 import { accuracyView } from '../agents/accuracy.ts';
 import { controlOf, withLeader } from '../agents/control.ts';
-import { approveProtocol, askProtocolEdit, parseProtocolCallback, protocolCard, rejectProtocol, saveProtocolEdit } from '../agents/protocol.ts';
+import { approveProtocol, askProtocolEdit, chooseProtocolScope, parseProtocolCallback, protocolCard, rejectProtocol, reviseProtocol, saveProtocolEdit, scopeProtocolByChat } from '../agents/protocol.ts';
 import { costView, type OperationRow } from '../agents/cost.ts';
 import { deskForLeader } from '../agents/desk.ts';
 import { standView } from '../agents/stand-sync.ts';
 import { catalog, isAgentId, MODEL_AGENTS, priceWords } from '../agents/models.ts';
-import { applyClick, applyLeaderAction, hideMailbox, pullInbox, requestFeed, saveEditText } from '../agents/intake.ts';
+import { applyClick, applyLeaderAction, hideMailbox, pullInbox, requestFeed, saveEditText, saveLeaderEdit } from '../agents/intake.ts';
 import { acceptWeek, acceptWeekByChat, weekScene } from '../agents/week.ts';
 import { focusForLeader, sendFocus } from '../agents/focus-run.ts';
 import { mirrorForLeader, sendWeeklyNote, setSeriesFate } from '../agents/mirror-run.ts';
 import { checkMail, mailConfig, readSyntheticInbox } from '../mail.ts';
 import { applyOrigin, formOrigin } from '../http/origin.ts';
 import { assertAuditConfirm, exampleQuote, FLOW_AUDIT_QUEUE, type FlowAuditJob } from '../jobs/flow-audit-job.ts';
-import { answerCallback, parseCallback, parseRuleCallback, parseStart, sendMessage, sendRulesCard, telegramConfigured } from '../telegram.ts';
+import { answerCallback, editChoiceKeyboard, parseCallback, parseRuleCallback, parseStart, sendMessage, sendRulesCard, telegramConfigured } from '../telegram.ts';
 
 const COOKIE = 'sid';
 const SESSION_MS = 14 * 24 * 60 * 60 * 1000;
@@ -193,7 +193,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     return {
       name: leader.name,
       scene: sceneWords(leader.id),
-      profile: hideMailbox((profileRow[0]?.profile ?? '').slice(0, 700), mailConfig()?.user ?? ''),
+      profile: hideMailbox(profileRow[0]?.profile ?? '', mailConfig()?.user ?? ''),
       linkCode: profileRow[0]?.linkCode ?? '',
       counts: {
         people: Number(peopleN[0]?.n ?? 0),
@@ -231,6 +231,22 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
         })),
       }))), taskRows),
       revisions: await deps.db.select().from(revisions).where(eq(revisions.leaderId, leader.id)).orderBy(asc(revisions.createdAt)),
+      acts: (await deps.db.select().from(leaderActs).where(eq(leaderActs.leaderId, leader.id)).orderBy(desc(leaderActs.at)).limit(30)).map((row) => ({
+        id: row.id,
+        subject: row.subject,
+        when: new Intl.DateTimeFormat('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' }).format(row.at),
+        action: row.action,
+        result: row.result,
+        original: row.originalDraft,
+        approved: row.approvedText,
+        auto: row.auto,
+      })),
+      protocols: (await deps.db.select().from(protocols).where(eq(protocols.leaderId, leader.id)).orderBy(asc(protocols.createdAt))).map((row) => ({
+        id: row.id,
+        status: row.status,
+        title: row.source.replace(/-transcript\.txt$/, ''),
+        pending: row.pendingRule.trim().length > 0,
+      })),
       lastAudit: last[0] ? { status: last[0].status, mode: last[0].reason, at: last[0].startedAt.toISOString() } : null,
       stand: await standView(leader.id, deps.db),
     };
@@ -312,15 +328,45 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   app.post('/api/revisions', async (request, reply) => {
     const leader = await currentLeader(request);
     if (!leader) return reply.code(401).send({ error: 'Нужен вход' });
-    const parsed = z.object({ category: z.string().trim().min(1).max(80), instead: z.string().trim().min(3).max(500) }).safeParse(request.body);
-    if (!parsed.success) return reply.code(400).send({ error: 'Нужны категория и текст правки' });
+    const parsed = z
+      .object({
+        category: z.string().trim().min(1).max(80).optional(),
+        area: z.enum(['письма', 'протоколы', 'утро']).optional(),
+        instead: z.string().trim().min(3).max(500),
+      })
+      .safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: 'Нужны область и текст правила' });
+    const area = parsed.data.area ?? 'письма';
     await deps.db.insert(revisions).values({
       id: randomUUID(),
       leaderId: leader.id,
-      category: parsed.data.category,
+      category: parsed.data.category ?? area,
+      area,
       instead: parsed.data.instead,
       createdAt: new Date(),
     });
+    return { ok: true };
+  });
+
+  app.post('/api/revisions/update', async (request, reply) => {
+    const leader = await currentLeader(request);
+    if (!leader) return reply.code(401).send({ error: 'Нужен вход' });
+    const parsed = z.object({ id: z.string().trim().min(1).max(80), instead: z.string().trim().min(3).max(500) }).safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: 'Нужны правило и текст' });
+    const [row] = await deps.db.select().from(revisions).where(eq(revisions.id, parsed.data.id)).limit(1);
+    if (!row || row.leaderId !== leader.id) return reply.code(404).send({ error: 'Правило не найдено' });
+    await deps.db.update(revisions).set({ instead: parsed.data.instead }).where(eq(revisions.id, row.id));
+    return { ok: true };
+  });
+
+  app.post('/api/revisions/delete', async (request, reply) => {
+    const leader = await currentLeader(request);
+    if (!leader) return reply.code(401).send({ error: 'Нужен вход' });
+    const parsed = z.object({ id: z.string().trim().min(1).max(80) }).safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: 'Нужно правило' });
+    const [row] = await deps.db.select().from(revisions).where(eq(revisions.id, parsed.data.id)).limit(1);
+    if (!row || row.leaderId !== leader.id) return reply.code(404).send({ error: 'Правило не найдено' });
+    await deps.db.delete(revisions).where(eq(revisions.id, row.id));
     return { ok: true };
   });
 
@@ -328,11 +374,39 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     const leader = await currentLeader(request);
     if (!leader) return reply.code(401).send({ error: 'Нужен вход' });
     const parsed = z
-      .object({ id: z.string().trim().min(1).max(64), action: z.enum(['approve', 'reject', 'defer']) })
+      .object({
+        id: z.string().trim().min(1).max(64),
+        action: z.enum(['approve', 'reject', 'defer', 'edit', 'once', 'keep']),
+        text: z.string().trim().max(500).optional(),
+      })
       .safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: 'Нужны решение и действие' });
+    if (parsed.data.action === 'edit') {
+      if (!parsed.data.text || parsed.data.text.trim().length < 3) return reply.code(400).send({ error: 'Напишите правку' });
+      const saved = await saveLeaderEdit(deps.db, leader.id, parsed.data.text, parsed.data.id);
+      if (!saved) return reply.code(404).send({ error: 'Решение не найдено' });
+      return { notice: saved.text, draft: saved.text };
+    }
     const notice = await applyLeaderAction(deps.db, leader.id, parsed.data.action, parsed.data.id);
     return { notice };
+  });
+
+  app.post('/api/protocols/edit', async (request, reply) => {
+    const leader = await currentLeader(request);
+    if (!leader) return reply.code(401).send({ error: 'Нужен вход' });
+    const parsed = z.object({ id: z.string().trim().length(8), text: z.string().trim().min(3).max(500) }).safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: 'Нужны протокол и правка' });
+    const result = await reviseProtocol(deps.db, leader.id, parsed.data.id, parsed.data.text);
+    if ('error' in result) return reply.code(400).send({ error: result.error });
+    return result;
+  });
+
+  app.post('/api/protocols/scope', async (request, reply) => {
+    const leader = await currentLeader(request);
+    if (!leader) return reply.code(401).send({ error: 'Нужен вход' });
+    const parsed = z.object({ id: z.string().trim().length(8), scope: z.enum(['once', 'keep']) }).safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: 'Нужны протокол и выбор' });
+    return { notice: await chooseProtocolScope(deps.db, leader.id, parsed.data.id, parsed.data.scope) };
   });
 
   app.post('/api/rules/accept', async (request, reply) => {
@@ -520,7 +594,9 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
               ? await approveProtocol(deps.db, protocolClick.id, chatId)
               : protocolClick.action === 'edit'
                 ? await askProtocolEdit(deps.db, protocolClick.id, chatId)
-                : await rejectProtocol(deps.db, protocolClick.id, chatId);
+                : protocolClick.action === 'once' || protocolClick.action === 'keep'
+                  ? await scopeProtocolByChat(deps.db, protocolClick.id, chatId, protocolClick.action)
+                  : await rejectProtocol(deps.db, protocolClick.id, chatId);
           if (protocolClick.action === 'edit' && telegramConfigured()) await sendMessage(notice, chatId);
         } catch (err) {
           notice = err instanceof Error ? err.message.slice(0, 180) : 'Не удалось выполнить';
@@ -561,8 +637,13 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
         return { ok: true };
       }
       // Сначала правка протокола, если он ждёт текст; иначе — правка черновика письма.
-      const saved = (await saveProtocolEdit(deps.db, chatId, text)) ?? (await saveEditText(deps.db, chatId, text));
-      if (saved && telegramConfigured()) await sendMessage(saved, chatId);
+      const protocolNote = await saveProtocolEdit(deps.db, chatId, text);
+      if (protocolNote) {
+        if (telegramConfigured()) await sendMessage(protocolNote, chatId);
+      } else {
+        const letter = await saveEditText(deps.db, chatId, text);
+        if (letter && telegramConfigured()) await sendMessage(letter.text, chatId, { reply_markup: editChoiceKeyboard(letter.id) });
+      }
     }
     return { ok: true };
   });

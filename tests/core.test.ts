@@ -639,13 +639,12 @@ describe('пересчёт недели', () => {
 });
 
 describe('правка и второй каталог', () => {
-  it('правка меняет только черновик своей категории', () => {
+  it('правка не дописывает служебную фразу в текст для получателя', () => {
     const edits = [{ category: 'кадры', instead: 'Нужна замена на даты отпуска' }];
-    const same = applyRevision('Черновик ответа.', 'кадры', edits);
-    const other = applyRevision('Черновик ответа.', 'деньги', edits);
-    expect(same).toContain('Нужна замена на даты отпуска');
-    expect(other).toBe('Черновик ответа.');
+    expect(applyRevision('Черновик ответа.\n\nПо вашей правке: старое', 'кадры', edits)).toBe('Черновик ответа.');
+    expect(applyRevision('Черновик ответа.', 'деньги', edits)).toBe('Черновик ответа.');
     expect(revisionPrompt(edits)).toContain('кадры');
+    expect(revisionPrompt(edits)).not.toContain('По вашей правке');
   });
 
   it('второй каталог — другие люди', async () => {

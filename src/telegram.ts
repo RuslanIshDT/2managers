@@ -54,7 +54,7 @@ export function telegramConfigured(): boolean {
   return Boolean(process.env.TELEGRAM_BOT_TOKEN);
 }
 
-const ACTIONS = ['approve', 'edit', 'reject', 'defer'] as const;
+const ACTIONS = ['approve', 'edit', 'reject', 'defer', 'once', 'keep'] as const;
 export type ButtonAction = (typeof ACTIONS)[number];
 
 export function decisionCallback(action: ButtonAction, decisionId: string): string {
@@ -62,9 +62,24 @@ export function decisionCallback(action: ButtonAction, decisionId: string): stri
 }
 
 export function parseCallback(data: string): { action: ButtonAction; decisionId: string } | null {
-  const match = /^d:(approve|edit|reject|defer):([A-Za-z0-9_-]{1,64})$/.exec(data);
+  const match = /^d:(approve|edit|reject|defer|once|keep):([A-Za-z0-9_-]{1,64})$/.exec(data);
   if (!match) return null;
   return { action: match[1] as ButtonAction, decisionId: match[2] };
+}
+
+export function editChoiceKeyboard(decisionId: string) {
+  return {
+    inline_keyboard: [
+      [
+        { text: 'Только сейчас', callback_data: decisionCallback('once', decisionId) },
+        { text: 'Запомнить', callback_data: decisionCallback('keep', decisionId) },
+      ],
+      [
+        { text: 'Утвердить', callback_data: decisionCallback('approve', decisionId) },
+        { text: 'Отклонить', callback_data: decisionCallback('reject', decisionId) },
+      ],
+    ],
+  };
 }
 
 export function parseRuleCallback(data: string): 'week' | null {
