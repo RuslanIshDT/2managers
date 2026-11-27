@@ -1,4 +1,5 @@
-// K2 с инструментами: модель сама решает, что узнать об отправителе, затем выносит вердикт по схеме.
+// Разбор почты с инструментами (T67): модель сама решает, что узнать о письме и отправителе, затем выбирает действие по схеме.
+// Внутр. — отправитель из организации (подчинённый, коллега, начальник), внеш. — все остальные.
 // Данные инструментов — только данные этого руководителя, переданные в контексте. N1 и лимиты проверяет код после модели.
 import { callTools, type ChatMessage, type ToolCall, type ToolSpec } from '../llm.ts';
 import { kpiStatus } from './k1.ts';
@@ -13,7 +14,9 @@ export interface K2Person {
 }
 
 export interface K2Context {
+  side?: 'внутр' | 'внеш';
   person: K2Person;
+  people?: { name: string; position: string; zone: string }[];
   authorities: { area: string; limitValue: string; unit: string; note: string }[];
   kpi: { name: string; unit: string; better: string; week: string; plan: string; fact: string }[];
   tasks: { title: string; dueOn: string; status: string }[];
@@ -36,13 +39,23 @@ export const K2_TOOLS: ToolSpec[] = [
   },
   { name: 'thread', description: 'Прежние письма этого человека руководителю: тема, дата, чем закончился разбор', parameters: OBJECT },
   { name: 'leader_edits', description: 'Как руководитель правил черновики ответов: учитывать в черновике', parameters: OBJECT },
+  { name: 'people', description: 'Люди руководителя: имя, должность, зона ответственности — чтобы понять, чьё это дело и кому передать', parameters: OBJECT },
 ];
+
+// Внешнему отправителю карточка, полномочия, KPI и задачи не положены: он не из организации.
+const EXTERNAL_TOOLS = new Set(['thread', 'leader_edits', 'people']);
+
+export function toolsFor(side: 'внутр' | 'внеш'): ToolSpec[] {
+  return side === 'внеш' ? K2_TOOLS.filter((tool) => EXTERNAL_TOOLS.has(tool.name)) : K2_TOOLS;
+}
 
 export const MAX_STEPS = 5;
 
-const SYSTEM_TOOLS = `Ты — агент полномочий руководителя. Пришло письмо подчинённого. Прежде чем решать, собери нужное инструментами: кто он, что ему разрешено, как идут его KPI и задачи, как руководитель решал похожее раньше. Вызывай только то, что нужно для этого письма; можно несколько инструментов за шаг. Когда данных хватает — ответь одной фразой «готово» без инструментов. Не выдумывай данных, которых не вернули инструменты.`;
+const SYSTEM_INTERNAL = `Ты разбираешь почту руководителя. Пришло письмо от человека из его организации: подчинённого, коллеги или начальника. Прежде чем решать, собери нужное инструментами: кто он, что ему разрешено, как идут его KPI и задачи, что было в переписке раньше, как руководитель решал похожее, чьё это дело. Вызывай только то, что нужно для этого письма; можно несколько инструментов за шаг. Когда данных хватает — ответь одной фразой «готово» без инструментов. Не выдумывай данных, которых не вернули инструменты.`;
 
-const FINAL = `Данных достаточно. Вынеси вердикт по схеме. Опирайся только на письмо, профиль и то, что вернули инструменты; в основании назови полномочие, KPI, цель или прошлое решение, которые привели к вердикту.`;
+const SYSTEM_EXTERNAL = `Ты разбираешь почту руководителя. Пришло письмо не из его организации: от клиента, партнёра, поставщика, рассылки. Прежде чем решать, собери нужное инструментами: что было в переписке раньше, кто из людей руководителя отвечает за эту тему. Вызывай только то, что нужно для этого письма. Когда данных хватает — ответь одной фразой «готово» без инструментов. Не выдумывай данных, которых не вернули инструменты.`;
+
+const FINAL = `Данных достаточно. Выбери действие по схеме. Опирайся только на письмо, профиль и то, что вернули инструменты; в основании назови правило, полномочие, данные или прошлое решение, которые привели к действию.`;
 
 export function runTool(name: string, args: Record<string, unknown>, ctx: K2Context): string {
   switch (name) {
@@ -73,6 +86,8 @@ export function runTool(name: string, args: Record<string, unknown>, ctx: K2Cont
       return ctx.thread.length ? ctx.thread.slice(-10).map((row) => `${row.received}: ${row.subject} — ${row.verdict || 'без разбора'}`).join('\n') : 'Прежних писем нет';
     case 'leader_edits':
       return ctx.revisions.length ? ctx.revisions.slice(-8).map((row) => `${row.category}: ${row.instead}`).join('\n') : 'Правок нет';
+    case 'people':
+      return ctx.people?.length ? ctx.people.map((row) => `${row.name} — ${row.position || 'должность не указана'}${row.zone ? `; зона: ${row.zone}` : ''}`).join('\n') : 'Список людей пуст';
     default:
       return `Инструмента ${name} нет. Доступны: ${K2_TOOLS.map((tool) => tool.name).join(', ')}`;
   }
@@ -93,18 +108,31 @@ export interface K2Run {
   rounds: number;
 }
 
-export async function judgeWithTools(input: { purpose: string; profile: string; subject: string; body: string; ctx: K2Context }): Promise<K2Run> {
+export async function judgeWithTools(input: { purpose: string; profile: string; subject: string; body: string; ctx: K2Context; recipients?: string }): Promise<K2Run> {
+  const side = input.ctx.side ?? 'внутр';
+  const tools = toolsFor(side);
+  const who = side === 'внеш' ? `${input.ctx.person.name} (не из организации)` : `${input.ctx.person.name}, ${input.ctx.person.position || 'из организации'}`;
   const messages: ChatMessage[] = [
-    { role: 'system', content: SYSTEM_TOOLS },
+    { role: 'system', content: side === 'внеш' ? SYSTEM_EXTERNAL : SYSTEM_INTERNAL },
     {
       role: 'user',
-      content: ['Профиль руководителя:', input.profile.trim(), '', `Письмо от ${input.ctx.person.name}. Тема: ${input.subject}`, input.body.trim()].join('\n'),
+      content: [
+        'Профиль руководителя:',
+        input.profile.trim(),
+        '',
+        `Письмо от: ${who}`,
+        input.recipients ? `Кому: ${input.recipients}` : '',
+        `Тема: ${input.subject}`,
+        input.body.trim(),
+      ]
+        .filter((line) => line !== '')
+        .join('\n'),
     },
   ];
   const steps: K2Run['steps'] = [];
   let rounds = 0;
   while (rounds < MAX_STEPS) {
-    const reply = await callTools(`${input.purpose}:step${rounds + 1}`, messages, K2_TOOLS);
+    const reply = await callTools(`${input.purpose}:step${rounds + 1}`, messages, tools);
     rounds += 1;
     if (!reply.toolCalls.length) break;
     messages.push({ role: 'assistant', content: reply.content || null, tool_calls: reply.toolCalls });
@@ -115,7 +143,7 @@ export async function judgeWithTools(input: { purpose: string; profile: string; 
     }
   }
   messages.push({ role: 'user', content: FINAL });
-  const verdict = await judgeLetter({ purpose: input.purpose, prompt: '', messages, tools: K2_TOOLS });
+  const verdict = await judgeLetter({ purpose: input.purpose, prompt: '', messages, tools });
   return { verdict, steps, rounds };
 }
 
@@ -127,6 +155,7 @@ const TOOL_WORDS: Record<string, string> = {
   past_decisions: 'прошлые решения',
   thread: 'прежние письма',
   leader_edits: 'ваши правки',
+  people: 'людей отдела',
 };
 
 export function stepsWords(steps: K2Run['steps']): string {
@@ -155,10 +184,13 @@ export function k2Context(
     history: (K2Context['history'][number] & { personId: string })[];
     mail: { fromEmail: string; subject: string; received: string; kind: string | null }[];
     revisions: K2Context['revisions'];
+    people?: K2Context['people'];
   },
 ): K2Context {
   const addresses = [person.email, person.extraEmail ?? ''].map((value) => value.trim().toLowerCase()).filter(Boolean);
   return {
+    side: 'внутр',
+    people: data.people ?? [],
     person,
     authorities: data.authorities.filter((row) => row.personId === person.externalId),
     kpi: data.kpi.filter((row) => row.personId === person.externalId),
@@ -167,6 +199,25 @@ export function k2Context(
     thread: data.mail
       .filter((row) => addresses.includes(row.fromEmail.toLowerCase()))
       .map((row) => ({ subject: row.subject, received: row.received, verdict: row.kind ?? '' })),
+    revisions: data.revisions,
+  };
+}
+
+// Контекст для письма не из организации: только прежние письма этого адреса, правки руководителя и его люди.
+export function externalContext(
+  sender: { name: string; email: string },
+  data: { mail: { fromEmail: string; subject: string; received: string; kind: string | null }[]; revisions: K2Context['revisions']; people: K2Context['people'] },
+): K2Context {
+  const address = sender.email.trim().toLowerCase();
+  return {
+    side: 'внеш',
+    person: { name: sender.name || sender.email, position: '', zone: '', goal: '', leaderGoal: '' },
+    people: data.people ?? [],
+    authorities: [],
+    kpi: [],
+    tasks: [],
+    history: [],
+    thread: data.mail.filter((row) => row.fromEmail.toLowerCase() === address).map((row) => ({ subject: row.subject, received: row.received, verdict: row.kind ?? '' })),
     revisions: data.revisions,
   };
 }

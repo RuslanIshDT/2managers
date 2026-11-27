@@ -91,15 +91,16 @@ async function sceneFor(db: Db, leaderId: string, leaderName: string, live?: { t
     .map((row) => ({ who: row.replyName, what: row.subject || row.summary, days: waitedDays(row.createdAt, clock.now) }));
   // Вернул сам: помощник ответил человеку без руководителя на этой неделе сцены.
   const returnedIds = new Set(verdictRows.filter((row) => row.kind === 'вернуть').map((row) => row.id));
+  const forwardedIds = new Set(verdictRows.filter((row) => row.kind === 'делегировать').map((row) => row.id));
   const monday = weekStart(today);
   const returned = decisionRows
-    .filter((row) => row.status === 'исполнено' && returnedIds.has(`v-${row.id}`))
+    .filter((row) => row.status === 'исполнено' && (returnedIds.has(`v-${row.id}`) || forwardedIds.has(`v-${row.id}`)))
     .filter((row) => {
       const day = moscowDay(row.createdAt);
       return day >= monday && day <= today;
     })
     .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
-    .map((row) => ({ who: row.replyName, what: row.subject || row.summary }));
+    .map((row) => ({ who: row.replyName, what: forwardedIds.has(`v-${row.id}`) ? `${row.subject || row.summary} (передал)` : row.subject || row.summary }));
   const goalOf = (name: string) => department.people.find((person) => person.name === name)?.goal ?? '';
   const candidates: Candidate[] = [
     ...ownTasks.filter((row) => !weekIds.has(row.id)).map((row) => ({

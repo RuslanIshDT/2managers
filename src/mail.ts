@@ -81,6 +81,15 @@ export interface SyntheticLetter {
 export interface MailboxLetter extends SyntheticLetter {
   messageId: string;
   marked?: boolean;
+  // Адреса из заголовков «Кому» и «Копия», в нижнем регистре.
+  to?: string[];
+  cc?: string[];
+}
+
+// «Иван <a@b.ru>, "Ольга, отдел" <c@d.ru>, e@f.ru» → адреса.
+export function headerAddresses(value: string): string[] {
+  const found = value.match(/[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}/g) ?? [];
+  return [...new Set(found.map((address) => address.toLowerCase()))];
 }
 
 export function syntheticSource(letter: SyntheticLetter, to: string): string {
@@ -114,6 +123,8 @@ export function parseMailboxSource(source: string): MailboxLetter | null {
   const fromLine = /^От:\s*(.+?)\s*<([^>]+)>\s*$/.exec(lines[1] ?? '');
   const subject = decodeHeader(headerValue(headers, 'subject'));
   const received = headerValue(headers, 'x-ecompras-received') || headerValue(headers, 'date');
+  const to = headerAddresses(decodeHeader(headerValue(headers, 'to')));
+  const cc = headerAddresses(decodeHeader(headerValue(headers, 'cc')));
   if (marker && fromLine) {
     const messageId = headerValue(headers, 'message-id') || `<${marker[1]}.synthetic@ecompras.local>`;
     return {
@@ -125,6 +136,8 @@ export function parseMailboxSource(source: string): MailboxLetter | null {
       body: lines.slice(3).join('\n').trim(),
       received,
       marked: true,
+      to,
+      cc,
     };
   }
   const fromHeader = decodeHeader(headerValue(headers, 'from'));
@@ -141,6 +154,8 @@ export function parseMailboxSource(source: string): MailboxLetter | null {
     body: body.trim(),
     received,
     marked: false,
+    to,
+    cc,
   };
 }
 
@@ -153,31 +168,43 @@ export async function appendSynthetic(letters: SyntheticLetter[]): Promise<numbe
   const cfg = mailConfig();
   if (!cfg) throw new Error('Яндекс Почта не настроена');
   const { ImapFlow } = await import('imapflow');
-  const client = new ImapFlow({
-    host: 'imap.yandex.com',
-    port: 993,
-    secure: true,
-    auth: { user: cfg.user, pass: cfg.password },
-    logger: false,
-  });
-  client.on('error', (err: unknown) => console.error('IMAP', err instanceof Error ? err.message : err));
-  await client.connect();
+  const open = async () => {
+    const client = new ImapFlow({
+      host: 'imap.yandex.com',
+      port: 993,
+      secure: true,
+      auth: { user: cfg.user, pass: cfg.password },
+      logger: false,
+    });
+    client.on('error', (err: unknown) => console.error('IMAP', err instanceof Error ? err.message : err));
+    await client.connect();
+    return client;
+  };
+  let client = await open();
   try {
     const existing = new Set((await readSynthetic(client)).map((letter) => letter.id));
     let added = 0;
-    const lock = await client.getMailboxLock('INBOX');
-    try {
-      for (const letter of letters) {
-        if (existing.has(letter.id)) continue;
-        await client.append('INBOX', syntheticSource(letter, cfg.user), ['\\Seen']);
-        added += 1;
+    for (const letter of letters) {
+      if (existing.has(letter.id)) continue;
+      // Яндекс отвечает «try again later» или рвёт соединение, если класть письма подряд: пауза, новое соединение, до шести попыток.
+      for (let attempt = 1; ; attempt += 1) {
+        try {
+          await client.append('INBOX', syntheticSource(letter, cfg.user), ['\\Seen']);
+          break;
+        } catch (err) {
+          const text = String((err as { responseText?: string; code?: string }).responseText ?? (err as { code?: string }).code ?? err);
+          if (attempt >= 6 || !/try again later|UNAVAILABLE|NoConnection|closed/i.test(text)) throw err;
+          await new Promise((resolve) => setTimeout(resolve, 10_000 * attempt));
+          await client.logout().catch(() => undefined);
+          client = await open();
+        }
       }
-    } finally {
-      lock.release();
+      added += 1;
+      await new Promise((resolve) => setTimeout(resolve, 1_500));
     }
     return added;
   } finally {
-    await client.logout();
+    await client.logout().catch(() => undefined);
   }
 }
 

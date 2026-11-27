@@ -34,7 +34,8 @@ describe('T54: счёт замера', () => {
     expect(score.falseAlarms).toBe(1);
     expect(score.missed.map((r) => r.id)).toEqual(['b']);
     expect(score.alarms.map((r) => r.id)).toEqual(['d']);
-    expect(score.mailExact).toEqual({ total: 3, correct: 2 });
+    // Точное действие считается по всем письмам: и внутренним, и внешним (T67).
+    expect(score.mailExact).toEqual({ total: 6, correct: 3 });
     expect(score.toolCalls).toEqual({ authorities: 2, kpi: 1 });
     const text = evalReport(score, { model: 'm', at: 'сейчас', costUsd: 0.5, calls: 10, minutes: 2 });
     expect(text).toContain('| Письма N1 (деньги, кадры, обязательства клиентам, руководство): дошли | 1 из 2 |');

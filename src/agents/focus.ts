@@ -123,7 +123,7 @@ export function renderMorning(input: MorningInput): string {
   ]);
   blocks.push(
     input.returned.length
-      ? ['Помощник ответил сам на этой неделе — сотрудники решают это без вас:', ...input.returned.map((row) => `— ${row.who}: ${row.what}`)]
+      ? ['Помощник ответил сам на этой неделе:', ...input.returned.map((row) => `— ${row.who}: ${row.what}`)]
       : ['На этой неделе помощник сам ни на одно письмо не отвечал.'],
   );
   // Трекер или календарь не ответили — сказать, откуда взяты задачи и встречи.

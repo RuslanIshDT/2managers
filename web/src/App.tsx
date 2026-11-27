@@ -1544,13 +1544,13 @@ function seriesKindWords(kind: string): string {
 
 function kindLabel(kind: string): string {
   if (kind === 'нужен_руководитель') return 'Оставил вам';
-  if (kind === 'вернуть') return 'Вернул';
+  if (kind === 'вернуть') return 'Ответил сам';
   if (kind === 'повтор') return 'Повтор, не спрашиваю';
   if (kind === 'не_из_отдела') return 'Не из отдела';
   if (kind === 'спросить_руководителя') return 'Спросить руководителя';
-  if (kind === 'делегировать') return 'Делегировать';
+  if (kind === 'делегировать') return 'Передал сотруднику';
   if (kind === 'в_сводку') return 'В сводку';
-  if (kind === 'игнорировать') return 'Игнорировать';
+  if (kind === 'игнорировать') return 'Без ответа';
   if (kind === 'авто') return 'По правилу';
   return kind;
 }

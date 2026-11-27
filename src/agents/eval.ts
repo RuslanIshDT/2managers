@@ -1,17 +1,23 @@
-// Замер разбора почты на эталоне (T54). Каждое письмо — отдельно, тем же путём, что на стенде:
-// подчинённый и руководитель руководителя — агент полномочий с инструментами и проверки кода,
-// остальные — разбор писем не из отдела. Эталон (expected_action, category) в запрос модели не входит.
+// Замер разбора почты на эталоне (T54, T67). Каждое письмо — отдельно, тем же путём, что на стенде:
+// отправитель из организации (подчинённый, коллега, начальник) — разбор почты (внутр.), остальные — разбор почты (внеш.);
+// оба с инструментами и проверками кода. Эталон (expected_action, category) в запрос модели не входит.
 import { asc, eq } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
 import { authorities, emailEtalon, emails, kpis, leaders, people, revisions, tasks } from '../db/schema.ts';
 import { withLlmScope } from '../llm.ts';
-import { forceMailAction, judgeMail } from './accuracy.ts';
 import { readHistory } from './dependence.ts';
 import { personAddresses } from './k1.ts';
 import { discountLimit, enforce, failedRuling, leaderMustConfirm, type Ruled } from './k2.ts';
-import { judgeWithTools, k2Context } from './k2-tools.ts';
+import { externalContext, judgeWithTools, k2Context } from './k2-tools.ts';
 
 export const LEADER_ACTION = 'спросить_руководителя';
+
+// Действие разбора в словаре эталона заказчика.
+export function etalonAction(kind: string): string {
+  if (kind === 'нужен_руководитель') return LEADER_ACTION;
+  if (kind === 'вернуть') return 'авто';
+  return kind;
+}
 
 export interface EvalRow {
   id: string;
@@ -53,7 +59,6 @@ export function evalScore(rows: EvalRow[]): EvalScore {
   const n1 = rows.filter((row) => leaderMustConfirm(row.category));
   const correct = rows.filter((row) => row.toLeader === (row.expected === LEADER_ACTION));
   const roles = [...new Set(rows.map((row) => row.senderRole))].sort((a, b) => a.localeCompare(b, 'ru'));
-  const mail = rows.filter((row) => row.route === 'mail');
   const toolCalls: Record<string, number> = {};
   for (const row of rows) for (const tool of row.tools) toolCalls[tool] = (toolCalls[tool] ?? 0) + 1;
   return {
@@ -73,7 +78,7 @@ export function evalScore(rows: EvalRow[]): EvalScore {
       const group = rows.filter((row) => row.senderRole === role);
       return { role, total: group.length, correct: group.filter((row) => row.toLeader === (row.expected === LEADER_ACTION)).length };
     }),
-    mailExact: { total: mail.length, correct: mail.filter((row) => row.action === row.expected).length },
+    mailExact: { total: rows.length, correct: rows.filter((row) => row.action === row.expected).length },
     errors: rows.filter((row) => row.error).length,
     toolCalls,
   };
@@ -118,45 +123,35 @@ export async function runEval(
     const person = persons.find((row) => personAddresses(row).includes(letter.fromEmail.toLowerCase()));
     const boss = person?.role === 'руководитель руководителя';
     const base = { id: letter.externalId, subject: letter.subject, senderRole: letter.senderRole, category: mark.category, expected: mark.expectedAction };
-    let row: EvalRow;
-    if (person && (person.role === 'подчинённый' || boss)) {
-      // Прежние письма отправителя — только те, что пришли раньше этого.
-      const earlier = letterRows
-        .filter((other) => other.received < letter.received)
-        .map((other) => ({ fromEmail: other.fromEmail, subject: other.subject, received: other.received, kind: null }));
-      const ctx = k2Context(person, { authorities: authRows, kpi: kpiRows, tasks: taskRows, history, mail: earlier, revisions: edits });
-      const limit = discountLimit(ctx.authorities.map((item) => ({ area: item.area, limit: item.limitValue })));
-      const text = `${letter.subject}\n${letter.body}`;
-      let ruled: Ruled;
-      let tools: string[] = [];
-      let error = '';
-      try {
-        const run = await withLlmScope(
-          { agent: 'k2', leaderId, operationId: `eval:k2:${letter.externalId}:${Date.now()}`, title: `Замер: ${letter.subject}`.slice(0, 180) },
-          () => judgeWithTools({ purpose: `eval:k2:${letter.externalId}`, profile: leader.profile, subject: letter.subject, body: letter.body, ctx }),
-        );
-        tools = run.steps.map((step) => step.tool);
-        ruled = enforce(run.verdict, text, limit, null, boss);
-      } catch (err) {
-        error = err instanceof Error ? err.message : String(err);
-        ruled = failedRuling(text, error, boss);
-      }
-      row = { ...base, route: 'k2', action: ruled.ask ? LEADER_ACTION : 'вернуть', toLeader: ruled.ask, tools, error };
-    } else {
-      const text = `От: ${letter.fromName}\nТема: ${letter.subject}\n${letter.body}`;
-      let action: string = LEADER_ACTION;
-      let error = '';
-      try {
-        const chosen = await withLlmScope(
-          { agent: 'accuracy', leaderId, operationId: `eval:mail:${letter.externalId}:${Date.now()}`, title: `Замер: ${letter.subject}`.slice(0, 180) },
-          () => judgeMail({ purpose: `eval:mail:${letter.externalId}`, profile: leader.profile, letter: text }),
-        );
-        action = forceMailAction(text, false, chosen).action;
-      } catch (err) {
-        error = err instanceof Error ? err.message : String(err);
-      }
-      row = { ...base, route: 'mail', action, toLeader: action === LEADER_ACTION, tools: [], error };
+    const inside = Boolean(person && person.role !== 'руководитель');
+    // Прежние письма отправителя — только те, что пришли раньше этого.
+    const earlier = letterRows
+      .filter((other) => other.received < letter.received)
+      .map((other) => ({ fromEmail: other.fromEmail, subject: other.subject, received: other.received, kind: null }));
+    const peopleList = persons.filter((row) => row.role === 'подчинённый').map((row) => ({ name: row.name, position: row.position, zone: row.zone }));
+    const staff = persons.filter((row) => row.role === 'подчинённый').map((row) => ({ name: row.name, email: row.email }));
+    const ctx =
+      inside && person
+        ? k2Context(person, { authorities: authRows, kpi: kpiRows, tasks: taskRows, history, mail: earlier, revisions: edits, people: peopleList })
+        : externalContext({ name: letter.fromName, email: letter.fromEmail }, { mail: earlier, revisions: edits, people: peopleList });
+    const limit = discountLimit(ctx.authorities.map((item) => ({ area: item.area, limit: item.limitValue })));
+    const text = `${letter.subject}\n${letter.body}`;
+    const agent = inside ? 'k2' : 'mail_ext';
+    let ruled: Ruled;
+    let tools: string[] = [];
+    let error = '';
+    try {
+      const run = await withLlmScope(
+        { agent, leaderId, operationId: `eval:${agent}:${letter.externalId}:${Date.now()}`, title: `Замер: ${letter.subject}`.slice(0, 180) },
+        () => judgeWithTools({ purpose: `eval:${agent}:${letter.externalId}`, profile: leader.profile, subject: letter.subject, body: letter.body, ctx }),
+      );
+      tools = run.steps.map((step) => step.tool);
+      ruled = enforce(run.verdict, text, limit, null, boss, [], staff, letter.fromEmail);
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
+      ruled = failedRuling(text, error, boss);
     }
+    const row: EvalRow = { ...base, route: inside ? 'k2' : 'mail', action: etalonAction(ruled.kind), toLeader: ruled.ask, tools, error };
     options.onRow?.(row);
     return row;
   });
@@ -169,7 +164,7 @@ export function evalReport(score: EvalScore, meta: { model: string; at: string; 
     `# Замер разбора почты на эталоне`,
     '',
     `Когда: ${meta.at}. Модель: ${meta.model}. Писем: ${score.total}, каждое отдельным разбором. Вызовов модели: ${meta.calls}, цена $${meta.costUsd.toFixed(4)}, время ${meta.minutes} мин.`,
-    'Путь как на стенде: письма подчинённых и руководителя руководителя — агент полномочий с инструментами и проверки кода (N1, лимиты); остальные — разбор писем не из отдела. Эталон в запрос не входит. Без принятых правил потока и без прошлых решений по цепочке: каждое письмо как первое.',
+    'Путь как на стенде: письма из организации (подчинённые, коллеги, начальник) — разбор почты (внутр.), остальные — разбор почты (внеш.); оба с инструментами и проверками кода (N1, лимиты). Эталон в запрос не входит. Без принятых правил потока и без прошлых решений по переписке: каждое письмо как первое.',
     '',
     '## Главное: дошло ли письмо до руководителя, когда должно',
     '',
@@ -179,7 +174,7 @@ export function evalReport(score: EvalScore, meta: { model: string; at: string; 
     `| Письма, которым нужен руководитель: дошли | ${score.caught} из ${score.needLeader}, ${pct(score.recall)} |`,
     `| Письма N1 (деньги, кадры, обязательства клиентам, руководство): дошли | ${score.n1Caught} из ${score.n1} |`,
     `| Лишние письма руководителю | ${score.falseAlarms}, точность ${pct(score.precision)} |`,
-    `| Письма не из отдела: точное действие из пяти | ${score.mailExact.correct} из ${score.mailExact.total} |`,
+    `| Точное действие из пяти (ответить, передать, в сводку, без ответа, руководителю) | ${score.mailExact.correct} из ${score.mailExact.total} |`,
     `| Сбои разбора | ${score.errors} |`,
     '',
     '## По отправителям',
@@ -196,7 +191,7 @@ export function evalReport(score: EvalScore, meta: { model: string; at: string; 
     '',
     ...(score.alarms.length ? score.alarms.map((row) => `- ${row.id} «${row.subject}» (${row.senderRole}, эталон ${row.expected})${row.error ? `, сбой: ${row.error.slice(0, 120)}` : ''}`) : ['Нет']),
     '',
-    '## Какие инструменты выбирал агент полномочий',
+    '## Какие инструменты выбирали агенты разбора почты',
     '',
     ...(Object.keys(score.toolCalls).length
       ? Object.entries(score.toolCalls)

@@ -20,7 +20,8 @@ const ctx: K2Context = {
 };
 
 const verdict = {
-  вердикт: 'вернуть',
+  действие: 'ответить',
+  кому_передать: '',
   в_полномочиях: 'да',
   есть_предложение: 'да',
   только_руководитель: 'нет',
@@ -74,7 +75,7 @@ describe('T53: агент полномочий с инструментами', (
       return answers.shift() ?? reply({ content: '' });
     }));
     const run = await judgeWithTools({ purpose: 'test', profile: 'Профиль', subject: 'Скидка 4%', body: 'Можно скидку 4%?', ctx });
-    expect(run.verdict.вердикт).toBe('вернуть');
+    expect(run.verdict.действие).toBe('ответить');
     expect(run.rounds).toBe(2);
     expect(run.steps.map((step) => step.tool)).toEqual(['authorities', 'past_decisions']);
     expect(bodies).toHaveLength(3);

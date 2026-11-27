@@ -5,7 +5,8 @@ import { chainKey, enforce, type ModelVerdict } from '../src/agents/k2.ts';
 import { changeWords, letterTerms, termChanges } from '../src/agents/terms.ts';
 
 const model: ModelVerdict = {
-  вердикт: 'вернуть',
+  действие: 'ответить',
+  кому_передать: '',
   в_полномочиях: 'да',
   есть_предложение: 'да',
   только_руководитель: 'нет',

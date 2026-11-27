@@ -1,16 +1,15 @@
-// Письмо из ящика → вердикт K2 → карточка или ответ.
+// Письмо из ящика → разбор почты (внутр. или внеш.) → карточка руководителю, ответ, пересылка, сводка или без ответа.
 import { randomUUID } from 'node:crypto';
 import { and, asc, count, desc, eq, ne } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
-import { authorities, decisions, emails, kpis, leaders, mailActions, mailIn, people, revisions, tasks, verdicts } from '../db/schema.ts';
+import { authorities, decisions, emails, kpis, leaders, mailIn, people, revisions, tasks, verdicts } from '../db/schema.ts';
 import { mailConfig, sendMail, type MailboxLetter } from '../mail.ts';
 import { sendDecisionCard } from '../telegram.ts';
 import { staffFromVerdict } from './dependence.ts';
 import { kpiStatus, personAddresses } from './k1.ts';
-import { forceMailAction, judgeMail } from './accuracy.ts';
-import { cardText, chainKey, discountLimit, enforce, failedRuling, judgeLetter, letterPrompt, textSignals, type ModelVerdict, type Ruled } from './k2.ts';
+import { cardText, chainKey, discountLimit, enforce, failedRuling, judgeLetter, letterPrompt, type ModelVerdict, type Ruled } from './k2.ts';
 import { withLlmScope } from '../llm.ts';
-import { judgeWithTools, k2Context, stepsWords } from './k2-tools.ts';
+import { externalContext, judgeWithTools, k2Context, stepsWords } from './k2-tools.ts';
 import { readHistory } from './dependence.ts';
 import { letterHits } from './replay.ts';
 import { applyRevision, revisionPrompt } from './revisions.ts';
@@ -19,7 +18,8 @@ import { clockFor, letterMoment, moscowStamp } from './scene.ts';
 import { changeWords, termChanges, type TermChange } from './terms.ts';
 
 const DUMMY: ModelVerdict = {
-  вердикт: 'вернуть',
+  действие: 'в_сводку',
+  кому_передать: '',
   в_полномочиях: 'неясно',
   есть_предложение: 'нет',
   только_руководитель: 'нет',
@@ -90,6 +90,7 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
   const authRows = await db.select().from(authorities).where(eq(authorities.leaderId, leaderId));
   const taskRows = await db.select().from(tasks).where(eq(tasks.leaderId, leaderId));
   const decisionRows = await db.select().from(decisions).where(eq(decisions.leaderId, leaderId));
+  const verdictRows = await db.select({ chainKey: verdicts.chainKey, kind: verdicts.kind, createdAt: verdicts.createdAt }).from(verdicts).where(eq(verdicts.leaderId, leaderId));
   const authority = await listFlowRules(db, leaderId);
   const revisionRows = await db.select().from(revisions).where(eq(revisions.leaderId, leaderId)).orderBy(asc(revisions.createdAt));
   const edits = revisionRows.map((row) => ({ category: row.category, instead: row.instead }));
@@ -110,6 +111,12 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
 
   const clock = clockFor(leaderId);
   const mailbox = mailConfig()?.user ?? '';
+  // Адреса руководителя: ящик помощника и адрес из оргструктуры. В «Кому» — письмо ему; только в копии — для сведения.
+  const leaderPerson = persons.find((row) => row.role === 'руководитель');
+  const leaderAddresses = new Set([mailbox, ...(leaderPerson ? personAddresses(leaderPerson) : [])].map((value) => value.trim().toLowerCase()).filter(Boolean));
+  // Кому можно передать письмо — подчинённые руководителя. Инструмент «люди» показывает их зоны.
+  const staff = persons.filter((row) => row.role === 'подчинённый').map((row) => ({ name: row.name, email: row.email }));
+  const peopleList = persons.filter((row) => row.role === 'подчинённый').map((row) => ({ name: row.name, position: row.position, zone: row.zone }));
   const pending = [...letters].sort((a, b) => a.received.localeCompare(b.received) || a.id.localeCompare(b.id));
   for (const letter of pending) {
     try {
@@ -118,83 +125,25 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
       const moment = letterMoment(letter.received, letter.marked !== false, clock);
       const stamp = moscowStamp(moment);
       const person = persons.find((row) => personAddresses(row).includes(letter.fromEmail.toLowerCase()));
+      // Внутреннее письмо — от человека организации (подчинённый, коллега, начальник); остальные — внешние.
+      const inside = Boolean(person && person.role !== 'руководитель');
       const boss = person?.role === 'руководитель руководителя';
-      if (!person || (person.role !== 'подчинённый' && !boss)) {
-        if (letter.marked !== false) continue;
-        if (calls >= modelBudget) {
-          deferred += 1;
-          continue;
-        }
-        const letterText = `От: ${letter.fromName}\nТема: ${letter.subject}\n${letter.body}`;
-        const chosen = await withLlmScope(
-          { agent: 'accuracy', leaderId, operationId: `mail:${letter.messageId}`.slice(0, 180), title: letter.subject.slice(0, 180) || 'Разбор письма' },
-          () => judgeMail({ purpose: `accuracy:${letter.id}`, profile: leaderRow.profile, letter: letterText }),
-        );
-        calls += 1;
-        const ruled = forceMailAction(letterText, false, chosen);
-        const signal = textSignals(letterText).category ?? 'иное';
-        const key = chainKey(letter.fromEmail, letter.subject);
-        const outsideChanges = termChanges(await chainBefore(db, leaderId, key, letter, catalog), `${letter.subject}\n${letter.body}`);
-        await db.insert(mailIn).values({
-          leaderId,
-          messageId: letter.messageId,
-          syntheticId: '',
-          received: stamp,
-          fromName: letter.fromName,
-          fromEmail: letter.fromEmail,
-          subject: letter.subject,
-          body: letter.body,
-          chainKey: key,
-        });
-        await db.insert(verdicts).values({
-          id: `v-${letter.messageId}`.slice(0, 120),
-          leaderId,
-          messageId: letter.messageId,
-          chainKey: key,
-          kind: ruled.action,
-          category: signal,
-          summary: `${letter.fromName}: ${letter.subject}. Действие: ${actionWords(ruled.action)}`,
-          draft: '',
-          basis: ruled.forced ? 'Категория N1: письмо не уходит без подтверждения руководителя' : 'Тот же разбор действия, что для точности писем. Адрес не из отдела',
-          context: '',
-          recommendation: '',
-          authorityOffer: '',
-          risks: '',
-          ifNot: '',
-          createdAt: new Date(),
-        });
-        await db
-          .insert(mailActions)
-          .values({ leaderId, chainKey: key, action: ruled.action, forced: ruled.forced, createdAt: new Date() })
-          .onConflictDoUpdate({ target: [mailActions.leaderId, mailActions.chainKey], set: { action: ruled.action, forced: ruled.forced } });
-        if (ruled.action === 'спросить_руководителя') {
-          const made = await askOutside(db, leaderRow, { id: letter.id, fromName: letter.fromName, fromEmail: letter.fromEmail, subject: letter.subject }, key, moment, outsideChanges);
-          if (made) {
-            for (const row of decisionRows) if (row.chainKey === key && row.status === 'ждёт' && row.id !== made.id) row.status = 'заменено';
-            decisionRows.push(made);
-          }
-        }
-        seen.add(letter.messageId);
-        lines.push(`${letter.id}: ${actionWords(ruled.action)}`);
-        continue;
-      }
       const key = chainKey(letter.fromEmail, letter.subject);
-      const prior = latestDecision(decisionRows, key, letter.id);
-      // Прежнее решение по цепочке принималось на прежних условиях: новые процент, сумма, срок или обязательство — не повтор.
-      const changes: TermChange[] = prior ? termChanges(await chainBefore(db, leaderId, key, letter, catalog, prior.subject), `${letter.subject}\n${letter.body}`) : [];
-      const ownAuth = authRows.filter((row) => row.personId === person.externalId);
+      const letterText = `${letter.subject}\n${letter.body}`;
+      const ownAuth = person ? authRows.filter((row) => row.personId === person.externalId) : [];
       const limit = discountLimit(ownAuth.map((row) => ({ area: row.area, limit: row.limitValue })));
-      const covered = letterHits(letter, authority);
+      const prior = latestDecision(decisionRows, key, letter.id);
       let ruled: Ruled;
-      if (covered && covered.effect !== 'карточка') {
+      const covered = letterHits(letter, authority);
+      const copyOnly = (letter.to?.length ?? 0) > 0 && !letter.to!.some((address) => leaderAddresses.has(address));
+      if (copyOnly) {
+        ruled = copyRuling(letter.cc?.some((address) => leaderAddresses.has(address)) ?? false);
+      } else if (covered && covered.effect !== 'карточка') {
         ruled = {
-          kind: 'вернуть',
+          kind: covered.effect === 'сам' ? 'вернуть' : 'в_сводку',
           category: 'иное',
           summary: covered.effect === 'сам' ? `В пределах принятого права: ${covered.area}` : `Правило потока: ${covered.title}`,
-          draft:
-            covered.effect === 'сам'
-              ? 'Это уже ваше право по принятому правилу. Решите сами и напишите адресату.'
-              : 'Это письмо закрыто принятым правилом потока и руководителю не передаётся.',
+          draft: covered.effect === 'сам' ? 'Это уже ваше право по принятому правилу. Решите сами и напишите адресату.' : '',
           basis: `Правило: ${covered.title}`,
           context: '',
           recommendation: '',
@@ -204,54 +153,62 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
           ask: false,
           send: covered.effect === 'сам',
         };
-      } else if (prior && !changes.length) {
-        ruled = enforce(DUMMY, `${letter.subject}\n${letter.body}`, limit, prior, boss);
-      } else if (calls >= modelBudget) {
-        deferred += 1;
-        continue;
       } else {
-        const ownKpi = kpiRows.filter((row) => row.personId === person.externalId);
-        const ownTasks = taskRows.filter((row) => row.ownerName === person.name);
-        const ctx = k2Context(person, { authorities: authRows, kpi: kpiRows, tasks: taskRows, history, mail: pastMail, revisions: edits });
-        const modelBody = changes.length && prior ? `${letter.body}\n\n${changeNote(prior, changes)}` : letter.body;
-        let steps = '';
-        const judged = await withLlmScope(
-          { agent: 'k2', leaderId, operationId: `k2:${letter.id}`, title: letter.subject.slice(0, 180) || 'Разбор письма' },
-          () => judgeWithTools({ purpose: `k2:${letter.id}`, profile: leaderRow.profile, subject: letter.subject, body: modelBody, ctx })
-            .then((run) => {
-              steps = stepsWords(run.steps);
-              return run.verdict;
-            })
-            .catch((err: unknown) => {
-              // Инструменты не сработали — прежний разбор одним запросом с готовой карточкой.
-              console.error('K2 с инструментами не сработал', letter.id, err instanceof Error ? err.message : err);
-              return judgeLetter({
-                purpose: `k2:${letter.id}`,
-                prompt: letterPrompt({
-                  profile: leaderRow.profile,
-                  person: personBlock(person, ownAuth, ownKpi),
-                  tasks: ownTasks.map((row) => `${row.title}, срок ${row.dueOn}, ${row.status}`).join('\n'),
-                  subject: letter.subject,
-                  body: modelBody,
-                  limit,
-                  revisions: revisionPrompt(edits),
-                }),
-              });
-            }),
-        ).then(
-          (model) => ({ model, error: '' }),
-          (err: unknown) => ({ model: null, error: err instanceof Error ? err.message : String(err) }),
-        );
-        calls += 1;
-        const letterText = `${letter.subject}\n${letter.body}`;
-        ruled = judged.model ? enforce(judged.model, letterText, limit, prior, boss, changes) : failedRuling(letterText, judged.error, boss);
-        if (!judged.model && changes.length) ruled = { ...ruled, summary: `Условия изменились: ${changeWords(changes)}. ${ruled.summary}` };
-        if (steps) ruled = { ...ruled, context: [ruled.context, steps].filter(Boolean).join('\n') };
+        // Прежнее решение по переписке принималось на прежних условиях: новые процент, сумма, срок или обязательство — не повтор.
+        const before = await chainBefore(db, leaderId, key, letter, catalog, prior?.subject ?? '');
+        const changes: TermChange[] = prior || chainSeen(verdictRows, key) ? termChanges(before, letterText) : [];
+        const earlier = chainSeen(verdictRows, key);
+        if (prior && !changes.length) {
+          ruled = enforce(DUMMY, letterText, limit, prior, boss);
+        } else if (!prior && earlier && !changes.length) {
+          ruled = repeatRuling(earlier);
+        } else if (calls >= modelBudget) {
+          deferred += 1;
+          continue;
+        } else {
+          const ctx = inside && person
+            ? k2Context(person, { authorities: authRows, kpi: kpiRows, tasks: taskRows, history, mail: pastMail, revisions: edits, people: peopleList })
+            : externalContext({ name: letter.fromName, email: letter.fromEmail }, { mail: pastMail, revisions: edits, people: peopleList });
+          const modelBody = changes.length && prior ? `${letter.body}\n\n${changeNote(prior, changes)}` : letter.body;
+          let steps = '';
+          const agent = inside ? 'k2' : 'mail_ext';
+          const judged = await withLlmScope(
+            { agent, leaderId, operationId: `${agent}:${letter.id}`, title: letter.subject.slice(0, 180) || 'Разбор письма' },
+            () => judgeWithTools({ purpose: `${agent}:${letter.id}`, profile: leaderRow.profile, subject: letter.subject, body: modelBody, ctx })
+              .then((run) => {
+                steps = stepsWords(run.steps);
+                return run.verdict;
+              })
+              .catch((err: unknown) => {
+                // Инструменты не сработали — прежний разбор одним запросом с готовой карточкой.
+                console.error('Разбор с инструментами не сработал', letter.id, err instanceof Error ? err.message : err);
+                return judgeLetter({
+                  purpose: `${agent}:${letter.id}`,
+                  prompt: letterPrompt({
+                    profile: leaderRow.profile,
+                    person: person && inside ? personBlock(person, ownAuth, kpiRows.filter((row) => row.personId === person.externalId)) : `${letter.fromName} <${letter.fromEmail}>, не из организации`,
+                    tasks: person && inside ? taskRows.filter((row) => row.ownerName === person.name).map((row) => `${row.title}, срок ${row.dueOn}, ${row.status}`).join('\n') : '',
+                    subject: letter.subject,
+                    body: modelBody,
+                    limit,
+                    revisions: [revisionPrompt(edits), `Люди руководителя:\n${peopleList.map((row) => `${row.name} — ${row.position}; зона: ${row.zone}`).join('\n')}`].join('\n\n'),
+                  }),
+                });
+              }),
+          ).then(
+            (model) => ({ model, error: '' }),
+            (err: unknown) => ({ model: null, error: err instanceof Error ? err.message : String(err) }),
+          );
+          calls += 1;
+          ruled = judged.model ? enforce(judged.model, letterText, limit, prior, boss, changes, staff, letter.fromEmail) : failedRuling(letterText, judged.error, boss);
+          if (!judged.model && changes.length) ruled = { ...ruled, summary: `Условия изменились: ${changeWords(changes)}. ${ruled.summary}` };
+          if (steps) ruled = { ...ruled, context: [ruled.context, steps].filter(Boolean).join('\n') };
+          if (changes.length && ruled.ask) await supersede(db, leaderId, key, letter.id, decisionRows);
+        }
       }
       ruled = { ...ruled, draft: applyRevision(ruled.draft, ruled.category, edits) };
 
       if (ruled.ask) {
-        if (changes.length) await supersede(db, leaderId, key, letter.id, decisionRows);
         await db.insert(decisions).values({
           id: letter.id,
           leaderId,
@@ -267,7 +224,7 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
         });
         if (options.notify !== false) try {
           if (!leaderRow.telegramChatId) throw new Error('Telegram-чат руководителя не привязан');
-          const staff = staffFromVerdict({
+          const card = staffFromVerdict({
             summary: ruled.summary || letter.subject,
             recommendation: ruled.recommendation,
             basis: ruled.basis,
@@ -275,11 +232,11 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
             risks: ruled.risks,
             ifNot: ruled.ifNot,
           });
-          if (!staff) throw new Error('Карточка без вывода и рекомендации');
+          if (!card) throw new Error('Карточка без вывода и рекомендации');
           await sendDecisionCard(
             cardText({
               who: `${letter.fromName}: ${letter.subject}`,
-              ...staff,
+              ...card,
               draft: ruled.draft,
             }),
             letter.id,
@@ -303,33 +260,25 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
           createdAt: moment,
         });
       } else if (ruled.send) {
-        await deliverReply(letter.fromName, letter.fromEmail, letter.subject, ruled.draft);
-        await db.insert(decisions).values({
+        // Ответ отправителю или пересылка сотруднику, чьё это дело.
+        const target = ruled.kind === 'делегировать' && ruled.forwardTo ? ruled.forwardTo : { name: letter.fromName, email: letter.fromEmail };
+        if (ruled.kind === 'делегировать') await deliverForward(target, letter, ruled.draft);
+        else await deliverReply(letter.fromName, letter.fromEmail, letter.subject, ruled.draft);
+        const row = {
           id: letter.id,
           leaderId,
           chainKey: key,
           status: 'исполнено',
           summary: ruled.summary,
           draft: ruled.draft,
-          replyTo: letter.fromEmail,
-          replyName: letter.fromName,
+          replyTo: target.email,
+          replyName: target.name,
           subject: letter.subject,
           awaitingEdit: false,
           createdAt: moment,
-        });
-        decisionRows.push({
-          id: letter.id,
-          leaderId,
-          chainKey: key,
-          status: 'исполнено',
-          summary: ruled.summary,
-          draft: ruled.draft,
-          replyTo: letter.fromEmail,
-          replyName: letter.fromName,
-          subject: letter.subject,
-          awaitingEdit: false,
-          createdAt: moment,
-        });
+        };
+        await db.insert(decisions).values(row);
+        decisionRows.push(row);
       }
 
       await db.insert(mailIn).values({
@@ -344,7 +293,7 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
         chainKey: key,
       });
       await db.insert(verdicts).values({
-        id: `v-${letter.id}`,
+        id: `v-${letter.id}`.slice(0, 120),
         leaderId,
         messageId: letter.messageId,
         chainKey: key,
@@ -360,8 +309,10 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
         ifNot: ruled.ifNot,
         createdAt: new Date(),
       }).onConflictDoNothing();
+      verdictRows.push({ chainKey: key, kind: ruled.kind, createdAt: new Date() });
+      pastMail.push({ fromEmail: letter.fromEmail, subject: letter.subject, received: stamp, kind: ruled.kind });
       seen.add(letter.messageId);
-      lines.push(`${letter.id}: ${ruled.kind}`);
+      lines.push(`${letter.id}: ${ruled.kind}${ruled.forwardTo ? ` → ${ruled.forwardTo.name}` : ''}`);
     } catch (err) {
       // Сбой одного письма не останавливает ящик: письмо записано и ждёт руководителя, повторного вызова нет.
       console.error('Письмо не разобрано', letter.id, err instanceof Error ? err.message : err);
@@ -372,6 +323,47 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
   }
 
   return { lines, calls, deferred };
+}
+
+// Руководитель не в «Кому», а в копии (или его вовсе нет среди получателей): письмо для сведения, ответа от него не ждут.
+export function copyRuling(inCopy: boolean): Ruled {
+  return {
+    kind: 'в_сводку',
+    category: 'иное',
+    summary: inCopy ? 'Вы в копии: письмо для сведения' : 'Письмо адресовано не вам: для сведения',
+    draft: '',
+    basis: inCopy ? 'Руководитель в копии, а не в адресатах — от него ответ не требуется' : 'Руководителя нет среди адресатов — от него ответ не требуется',
+    context: '',
+    recommendation: '',
+    risks: '',
+    ifNot: '',
+    authorityOffer: '',
+    ask: false,
+    send: false,
+  };
+}
+
+// Последний разбор переписки без решения руководителя (в сводку, без ответа): повтор с теми же условиями не разбирается заново.
+function chainSeen(rows: { chainKey: string; kind: string; createdAt: Date }[], key: string): string | null {
+  const chain = rows.filter((row) => row.chainKey === key && row.kind !== 'повтор').sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  return chain[0]?.kind ?? null;
+}
+
+function repeatRuling(kind: string): Ruled {
+  return {
+    kind: 'повтор',
+    category: 'иное',
+    summary: `Повтор. Прежнее письмо этой переписки: ${actionWords(kind)}`,
+    draft: '',
+    basis: 'По этой переписке уже был разбор, условия не изменились',
+    context: '',
+    recommendation: '',
+    risks: '',
+    ifNot: '',
+    authorityOffer: '',
+    ask: false,
+    send: false,
+  };
 }
 
 export async function applyClick(db: Db, action: string, decisionId: string, chatId: string): Promise<string> {
@@ -471,61 +463,36 @@ export async function deliverReply(name: string, email: string, subject: string,
   await sendMail(
     cfg.user,
     `Re: ${subject}`,
-    `Кому: ${name} <${email}>\nАдрес подчинённого синтетический, поэтому письмо ушло в тестовый ящик.\n\n${draft}`,
+    `Кому: ${name} <${email}>\nСтенд отправляет письма помощника в тестовый ящик, получатель назван выше.\n\n${draft}`,
   );
 }
 
-export async function rejudgeOutside(db: Db, leaderId: string, modelBudget: number) {
-  const [leaderRow] = await db.select().from(leaders).where(eq(leaders.id, leaderId)).limit(1);
-  if (!leaderRow) throw new Error('Руководитель не найден');
-  const rows = await db
-    .select({
-      id: verdicts.id,
-      messageId: mailIn.messageId,
-      fromName: mailIn.fromName,
-      fromEmail: mailIn.fromEmail,
-      subject: mailIn.subject,
-      body: mailIn.body,
-      received: mailIn.received,
-    })
-    .from(verdicts)
-    .innerJoin(mailIn, and(eq(mailIn.leaderId, verdicts.leaderId), eq(mailIn.messageId, verdicts.messageId)))
-    .where(and(eq(verdicts.leaderId, leaderId), eq(verdicts.kind, 'не_из_отдела')));
-  const lines: string[] = [];
-  let calls = 0;
-  for (const letter of rows) {
-    if (calls >= modelBudget) break;
-    const letterText = `От: ${letter.fromName}\nТема: ${letter.subject}\n${letter.body}`;
-    const chosen = await withLlmScope(
-      { agent: 'accuracy', leaderId, operationId: `mail:${letter.messageId}`.slice(0, 180), title: letter.subject.slice(0, 180) || 'Разбор письма' },
-      () => judgeMail({ purpose: `accuracy:${letter.messageId}`, profile: leaderRow.profile, letter: letterText }),
-    );
-    calls += 1;
-    const ruled = forceMailAction(letterText, false, chosen);
-    const key = chainKey(letter.fromEmail, letter.subject);
-    await db
-      .update(verdicts)
-      .set({
-        kind: ruled.action,
-        category: textSignals(letterText).category ?? 'иное',
-        summary: `${letter.fromName}: ${letter.subject}. Действие: ${actionWords(ruled.action)}`,
-        basis: ruled.forced ? 'Категория N1: письмо не уходит без подтверждения руководителя' : 'Тот же разбор действия, что для точности писем. Адрес не из отдела',
-      })
-      .where(eq(verdicts.id, letter.id));
-    await db
-      .insert(mailActions)
-      .values({ leaderId, chainKey: key, action: ruled.action, forced: ruled.forced, createdAt: new Date() })
-      .onConflictDoUpdate({ target: [mailActions.leaderId, mailActions.chainKey], set: { action: ruled.action, forced: ruled.forced } });
-    if (ruled.action === 'спросить_руководителя') {
-      const id = letter.messageId.replace(/[<>]/g, '').slice(0, 80);
-      await askOutside(db, leaderRow, { id, fromName: letter.fromName, fromEmail: letter.fromEmail, subject: letter.subject }, key, letterMoment(letter.received, true, clockFor(leaderId)));
-    }
-    lines.push(actionWords(ruled.action));
-  }
-  return { lines, calls };
+// Пересылка сотруднику, чьё это дело: записка помощника и исходное письмо.
+export async function deliverForward(
+  to: { name: string; email: string },
+  letter: { fromName: string; fromEmail: string; subject: string; body: string },
+  note: string,
+) {
+  const cfg = mailConfig();
+  if (!cfg) throw new Error('Яндекс Почта не настроена');
+  await sendMail(
+    cfg.user,
+    `Fwd: ${letter.subject}`,
+    [
+      `Кому: ${to.name} <${to.email}>`,
+      'Стенд отправляет письма помощника в тестовый ящик, получатель назван выше.',
+      '',
+      note,
+      '',
+      '---------- Пересланное письмо ----------',
+      `От: ${letter.fromName} <${letter.fromEmail}>`,
+      `Тема: ${letter.subject}`,
+      '',
+      letter.body,
+    ].join('\n'),
+  );
 }
 
-// Письмо не из отдела, которое нельзя без руководителя (N1 или разбор сказал «спросить»): решение «ждёт» и карточка с кнопками.
 async function markBroken(db: Db, leaderId: string, letter: MailboxLetter, err: unknown) {
   const reason = (err instanceof Error ? err.message : String(err)).slice(0, 160);
   const key = chainKey(letter.fromEmail, letter.subject);
@@ -543,60 +510,13 @@ async function markBroken(db: Db, leaderId: string, letter: MailboxLetter, err: 
     .onConflictDoNothing();
 }
 
-async function askOutside(
-  db: Db,
-  leaderRow: { id: string; telegramChatId: string | null },
-  letter: { id: string; fromName: string; fromEmail: string; subject: string },
-  key: string,
-  moment: Date,
-  changes: TermChange[] = [],
-) {
-  const existing = await db.select({ id: decisions.id }).from(decisions).where(and(eq(decisions.leaderId, leaderRow.id), eq(decisions.chainKey, key))).limit(1);
-  if (existing.length && !changes.length) return null;
-  if (existing.length) await supersede(db, leaderRow.id, key, letter.id, []);
-  const changed = existing.length ? `Условия изменились: ${changeWords(changes)}. ` : '';
-  const row = {
-    id: letter.id,
-    leaderId: leaderRow.id,
-    chainKey: key,
-    status: 'ждёт',
-    summary: `${changed}${letter.subject}`,
-    draft: '',
-    replyTo: letter.fromEmail,
-    replyName: letter.fromName,
-    subject: letter.subject,
-    awaitingEdit: false,
-    createdAt: moment,
-  };
-  await db.insert(decisions).values(row);
-  try {
-    if (!leaderRow.telegramChatId) throw new Error('Telegram-чат руководителя не привязан');
-    await sendDecisionCard(
-      cardText({
-        who: `${letter.fromName}: ${letter.subject}`,
-        вывод: changed ? `${changed}Прежнее решение по этой переписке на новые условия не распространяется` : 'Письмо не из отдела и требует вашего подтверждения',
-        рекомендация: 'Подтвердите, если разбираете его сами',
-        основание: changed ? 'Категория N1 и новые условия в той же переписке: без подтверждения письмо никуда не уходит' : 'Категория N1: без подтверждения письмо никуда не уходит',
-        риски: '',
-        если_не_решить: 'Письмо останется без ответа',
-        контекст: '',
-        draft: '',
-      }),
-      letter.id,
-      leaderRow.telegramChatId,
-    );
-  } catch (err) {
-    console.error('Карточка в Telegram не ушла', letter.id, err instanceof Error ? err.message : err);
-  }
-  return row;
-}
-
 function actionWords(action: string): string {
-  if (action === 'спросить_руководителя') return 'спросить руководителя';
+  if (action === 'нужен_руководитель' || action === 'спросить_руководителя') return 'передано руководителю';
+  if (action === 'вернуть' || action === 'авто') return 'помощник ответил сам';
+  if (action === 'делегировать') return 'передано сотруднику';
   if (action === 'в_сводку') return 'в сводку';
-  if (action === 'делегировать') return 'делегировать';
-  if (action === 'игнорировать') return 'игнорировать';
-  return 'сделать по правилу';
+  if (action === 'игнорировать') return 'без ответа';
+  return action;
 }
 
 function personBlock(

@@ -5,6 +5,7 @@ import { pickDiscountAboveLimit } from '../agents/reset-stand.ts';
 import { chainKey } from '../agents/k2.ts';
 import { pullInbox } from '../agents/intake.ts';
 import { createDb, createPool, migrate } from '../db/client.ts';
+import { installLlmRecording } from '../db/llm-record.ts';
 import { authorities, decisions, emails, leaders, mailIn, people, rules, verdicts } from '../db/schema.ts';
 
 const connectionString = process.env.DATABASE_URL;
@@ -20,6 +21,7 @@ if (!process.argv.includes('--yes')) {
 const pool = createPool(connectionString);
 await migrate(pool);
 const db = createDb(pool);
+installLlmRecording(db);
 const linked = await db.select({ id: leaders.id }).from(leaders).where(isNotNull(leaders.telegramChatId));
 if (linked.length !== 1) {
   console.error(`Нужен один руководитель с Telegram, найдено ${linked.length}`);

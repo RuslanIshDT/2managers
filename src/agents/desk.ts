@@ -89,7 +89,7 @@ export function buildDesk(input: DeskInput): Desk {
       })
     : [];
   const meetingMinutes = heldMeetings.reduce((sum, meeting) => sum + (meeting.minutes > 0 ? meeting.minutes : 0), 0);
-  const returned = input.verdicts.filter((row) => row.kind === 'вернуть');
+  const returned = input.verdicts.filter((row) => row.kind === 'вернуть' || row.kind === 'делегировать');
   const protectedRows = input.verdicts.filter((row) => row.kind === 'нужен_руководитель' && PROTECTED.has(row.category));
   const quiet = input.people.filter((person) => person.laggingWeeks.length > 0 && person.emails === 0);
   const names = new Map(input.people.map((person) => [person.id, person.name]));
@@ -122,7 +122,7 @@ export function buildDesk(input: DeskInput): Desk {
       minutes: '',
       kind: 'decision',
       lines: [],
-      origin: made('k2', 'Проверка полномочий', rows.filter(Boolean).join('. '), howModel(input.calls, 'k2', 'скидка в тексте письма выше полномочия этого человека'), rows),
+      origin: made('k2', 'Разбор почты', rows.filter(Boolean).join('. '), howModel(input.calls, 'k2', 'скидка в тексте письма выше полномочия этого человека'), rows),
     });
   }
   for (const person of quiet) {
@@ -210,8 +210,8 @@ export function buildDesk(input: DeskInput): Desk {
   }
   if (returned.length > 0) {
     done.push({
-      text: `Возвращено ${countWords(returned.length, 'просьба', 'просьбы', 'просьб')} с вопросом, что человек предлагает сам`,
-      origin: made('k2', 'Проверка полномочий', 'Разборы писем, которые ушли исполнителю', howModel(input.calls, 'k2', ''), returned.map((row) => shown(row.summary))),
+      text: `Помощник ответил сам или передал сотруднику: ${countWords(returned.length, 'письмо', 'письма', 'писем')}`,
+      origin: made('k2', 'Разбор почты', 'Письма, на которые помощник ответил сам или которые передал сотруднику', howModel(input.calls, 'k2', ''), returned.map((row) => shown(row.summary))),
     });
   }
   if (quiet.length > 0) {
@@ -223,12 +223,12 @@ export function buildDesk(input: DeskInput): Desk {
   if (protectedRows.length > 0) {
     done.push({
       text: `Под вашим решением остались ${countWords(protectedRows.length, 'просьба', 'просьбы', 'просьб')}: деньги, кадры, обещания клиентам и письма руководства`,
-      origin: made('k2', 'Проверка полномочий', 'Категории, которые код не отдаёт без кнопки', 'Посчитано по данным', protectedRows.map((row) => shown(row.summary))),
+      origin: made('k2', 'Разбор почты', 'Категории, которые код не отдаёт без кнопки', 'Посчитано по данным', protectedRows.map((row) => shown(row.summary))),
     });
   } else {
     done.push({
       text: 'Деньги, кадры, обещания клиентам и письма руководства без вашей кнопки не уходят',
-      origin: made('k2', 'Проверка полномочий', 'Правило категорий. Таких открытых просьб в ленте сейчас нет', 'Посчитано по данным', []),
+      origin: made('k2', 'Разбор почты', 'Правило категорий. Таких открытых просьб в ленте сейчас нет', 'Посчитано по данным', []),
     });
   }
   const indexRows = picture.remaining.map((row) => shown(row));
@@ -255,7 +255,7 @@ export function buildDesk(input: DeskInput): Desk {
     })),
     feed: input.verdicts.map((row) => ({
       id: row.id,
-      origin: made('k2', 'Проверка полномочий', shown(row.basis || row.summary), howModel(input.calls, 'k2', ''), [shown(row.summary)].filter(Boolean)),
+      origin: made('k2', 'Разбор почты', shown(row.basis || row.summary), howModel(input.calls, 'k2', ''), [shown(row.summary)].filter(Boolean)),
     })),
   };
 }
@@ -365,7 +365,7 @@ function helperCards(
   const remote = input.remote ?? { tracker: false, calendar: false };
   const cards: HelperCard[] = [
     card('k1', 'Карточка отдела', 'код', 'Собирает зону, цель, KPI и полномочия человека из файлов отдела.', `В каталоге ${input.people.length} человек.`, 'Карточки отдела заполнены из этих файлов.', 'Коннектор кадровой системы — заглушка, поэтому источник — файлы.'),
-    card('k2', 'Проверка полномочий', input.calls.some((call) => call.purpose.startsWith('k2')) ? 'модель' : 'код', 'По письму решает, вернуть его человеку или спросить руководителя.', modelDid('k2', 'Вызовов модели по письмам на этих данных нет.'), returned ? `Возвращено ${returned}.` : 'Возвратов на этих данных нет.', 'Без кнопки руководителя такое письмо не уходит.'),
+    card('k2', 'Разбор почты', input.calls.some((call) => call.purpose.startsWith('k2') || call.purpose.startsWith('mail_ext')) ? 'модель' : 'код', 'Читает письмо и контекст и решает: ответить самому, передать сотруднику, в сводку, без ответа или руководителю. Внутренние письма (сотрудники, коллеги, начальник) и внешние разбираются отдельно.', modelDid('k2', 'Вызовов модели по письмам на этих данных нет.'), returned ? `Ответил сам или передал: ${returned}.` : 'Ответов и пересылок на этих данных нет.', 'Деньги, кадры, обещания клиентам и письма начальника без кнопки руководителя не уходят.'),
     card('k3', 'Матрица отдела', 'код', 'Кладёт каждого по KPI и числу писем: поговорить, помочь, расширить право или не трогать.', `Посчитано по ${input.people.length} человек.`, 'Тихие проблемы — те, у кого KPI отстаёт и писем нет.', 'Модель для матрицы не вызывается.'),
     card('k4', 'Три дела на сегодня', input.calls.some((call) => call.purpose.startsWith('k4')) ? 'модель' : 'код', 'Утром выбирает до трёх дел с наибольшим смыслом на час руководителя.', modelDid('k4', 'Сохранённого выбора модели на этих данных нет.'), input.tasks.length ? `В плане ${countWords(input.tasks.length, 'дело', 'дела', 'дел')}.` : 'Плана на сегодня нет.', 'Протокол после утверждения уходит письмом в тестовый ящик.'),
     card('k5', 'Аудит потока', input.calls.some((call) => call.purpose.startsWith('аудитор')) ? 'модель' : 'код', 'Говорит, каких писем и встреч не должно быть и какое изменение организации их убирает.', modelDid('аудитор', 'Прогона аудита на этих данных нет.'), input.rules.length ? `Правил в базе: ${input.rules.length}.` : 'Принятых правил нет.', 'Эталонные метки писем в запрос модели не входят.'),

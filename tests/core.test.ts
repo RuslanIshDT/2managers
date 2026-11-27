@@ -25,7 +25,8 @@ import { adviceTitle, departmentMatrix, goalMinutes, overdueLines, overdueTasks,
 import { applyChoice, GOAL_KINDS } from '../src/agents/conductor.ts';
 import { burningSeries, noteToSend, pendingNotes, weeklyNotes } from '../src/agents/mirror.ts';
 import { letterHits, replayWeek, ruleEffect, rulesFromAudit, trustOffers, waitingHours } from '../src/agents/replay.ts';
-import { finishTemplate, hasProposal } from '../src/agents/k2.ts';
+import { copyRuling } from '../src/agents/intake.ts';
+import { findPerson } from '../src/agents/k2.ts';
 import { forceMailAction, mailScore } from '../src/agents/accuracy.ts';
 import { decisionCallback, parseCallback, parseRuleCallback, parseStart } from '../src/telegram.ts';
 
@@ -145,7 +146,8 @@ describe('цена аудита', () => {
 });
 
 const modelReturn: ModelVerdict = {
-  вердикт: 'вернуть',
+  действие: 'ответить',
+  кому_передать: '',
   в_полномочиях: 'да',
   есть_предложение: 'да',
   только_руководитель: 'нет',
@@ -164,11 +166,12 @@ const modelReturn: ModelVerdict = {
 describe('просьба подчинённого', () => {
   it('категорию «руководство» ставит только код по оргструктуре', () => {
     const text = 'Подтвердите участие в планёрке в пятницу.';
-    const fromTeam = enforce({ ...modelReturn, вердикт: 'нужен_руководитель', суть: 'Планёрка' }, text, null, null, false);
+    const fromTeam = enforce({ ...modelReturn, действие: 'руководителю', суть: 'Планёрка' }, text, null, null, false);
     const forecast = enforce({ ...modelReturn, суть: 'Прогноз 94%' }, 'Прогноз выполнения плана: 94%.', null, null, false);
-    const fromBoss = enforce({ ...modelReturn, вердикт: 'вернуть', суть: 'Вопрос сверху' }, text, null, null, true);
+    const fromBoss = enforce({ ...modelReturn, действие: 'ответить', суть: 'Вопрос сверху' }, text, null, null, true);
     expect(fromTeam.category).toBe('иное');
-    expect(fromTeam.kind).toBe('вернуть');
+    // Модель сказала «руководителю» — код не спорит.
+    expect(fromTeam.kind).toBe('нужен_руководитель');
     expect(forecast.category).toBe('иное');
     expect(fromBoss.category).toBe('руководство');
     expect(fromBoss.ask).toBe(true);
@@ -336,13 +339,42 @@ describe('просьба подчинённого', () => {
     expect(nestedParsed?.body).not.toContain('not-the-letter');
   });
 
-  it('просьба без предложения возвращается с шаблоном', () => {
-    const text = 'Клиент недоволен временем ответа, разберитесь.';
-    expect(hasProposal(text)).toBe(false);
-    const ruled = enforce({ ...modelReturn, суть: 'Жалоба без предложения' }, text, null, null, false);
-    expect(ruled.kind).toBe('вернуть');
-    expect(ruled.send).toBe(true);
-    expect(ruled.draft).toBe(finishTemplate());
+  it('шаблона нет: статус уходит в сводку без ответа, ответ — текст модели по письму', () => {
+    // Письма придуманы для теста, в синтетике их нет.
+    const status = enforce({ ...modelReturn, действие: 'в_сводку', черновик_ответа: 'лишний текст', суть: 'Статус по отгрузкам' }, 'Отгрузки идут по графику, отклонений нет.', null, null, false);
+    expect(status.kind).toBe('в_сводку');
+    expect(status.send).toBe(false);
+    expect(status.ask).toBe(false);
+    expect(status.draft).toBe('');
+    const answer = enforce(modelReturn, 'Клиент недоволен временем ответа, разберитесь.', null, null, false);
+    expect(answer.kind).toBe('вернуть');
+    expect(answer.draft).toBe(modelReturn.черновик_ответа);
+    expect(answer.draft).not.toMatch(/Доделайте просьбу/);
+    // Ответить без текста нельзя — решает руководитель.
+    const empty = enforce({ ...modelReturn, черновик_ответа: ' ' }, 'Вопрос по графику смен', null, null, false);
+    expect(empty.ask).toBe(true);
+  });
+
+  it('передать — только человеку из списка, иначе руководителю; копия — для сведения', () => {
+    const staff = [
+      { name: 'Пётр Сидоров', email: 'p@x.example' },
+      { name: 'Вера Петрова', email: 'v@x.example' },
+    ];
+    const forward = enforce({ ...modelReturn, действие: 'передать', кому_передать: 'Сидоров', черновик_ответа: 'Пётр, подготовь КП до пятницы.' }, 'Просим КП на 20 лицензий', null, null, false, [], staff);
+    expect(forward.kind).toBe('делегировать');
+    expect(forward.forwardTo).toEqual(staff[0]);
+    expect(forward.send).toBe(true);
+    const nobody = enforce({ ...modelReturn, действие: 'передать', кому_передать: 'Николай Иванов', черновик_ответа: 'Сделай' }, 'Просим КП', null, null, false, [], staff);
+    expect(nobody.ask).toBe(true);
+    // Передать самому отправителю — это ответ ему.
+    const back = enforce({ ...modelReturn, действие: 'передать', кому_передать: 'Вера Петрова', черновик_ответа: 'Вера, разберите сами.' }, 'Жалоба клиента', null, null, false, [], staff, 'v@x.example');
+    expect(back.kind).toBe('вернуть');
+    expect(back.forwardTo).toBeUndefined();
+    expect(findPerson('Пет', staff)).toBeNull();
+    expect(findPerson('вера петрова', staff)).toEqual(staff[1]);
+    const copy = copyRuling(true);
+    expect(copy.kind).toBe('в_сводку');
+    expect(copy.send || copy.ask).toBe(false);
   });
 });
 
@@ -493,7 +525,7 @@ describe('утро и матрица', () => {
       'Просрочено у сотрудников:',
       'Открытые вопросы прошлой встречи:',
       'Время встреч на ваши цели: 17% (6 из 34,5 ч по календарю).',
-      'Помощник ответил сам на этой неделе — сотрудники решают это без вас:',
+      'Помощник ответил сам на этой неделе:',
     ]);
     expect(morning).toContain('План на 27 ноября');
     expect(morning).toContain('— Анна: Перенос встречи');
