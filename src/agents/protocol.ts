@@ -1,18 +1,22 @@
 // Протокол по расшифровке. Текст встречи в репозиторий не входит: его читает стенд с диска.
-// После «Утвердить» протокол уходит в тестовый ящик, задачи пишутся в базу и в Трекер, встреча — в календарь «Стенд» и файлом .ics.
+// Модель видит прошлый протокол той же темы, задачи из него и письма участников (T69) и пишет, что с прошлыми решениями.
+// В Telegram — «Утвердить», «Поправить», «Отклонить». После «Утвердить»: задачи — в базу и Трекер, протокол — в описание встречи
+// в календаре «Стенд», у встреч темы — цепочка и вопросы по прошлому протоколу, письмо с протоколом и .ics — в тестовый ящик.
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { desc, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import type { Db } from '../db/client.ts';
-import { leaders, meetings, people, protocols, tasks } from '../db/schema.ts';
+import { leaders, meetings, people, protocols, revisions, tasks } from '../db/schema.ts';
 import { clockFor } from './scene.ts';
 import { callJson, withLlmScope, type JsonSchema } from '../llm.ts';
 import { mailConfig, sendMail } from '../mail.ts';
 import { sendMessage } from '../telegram.ts';
 import { calendarConfig } from '../yandex/calendar.ts';
 import { publishApproved } from '../yandex/publish.ts';
+import { refreshSeries } from './stand-sync.ts';
+import { leaderProtocols, participantLetters, plainBody, previousOf, protocolTasks, whenWords } from './protocol-context.ts';
 import { trackerConfig } from '../yandex/tracker.ts';
 
 const MAX_TRANSCRIPT = 12_000;
@@ -20,6 +24,7 @@ const MAX_TRANSCRIPT = 12_000;
 export interface ProtocolDraft {
   theme: string;
   participants: string[];
+  previous: string[];
   notes: string[];
   decisions: string[];
   next: string[];
@@ -30,6 +35,7 @@ export interface ProtocolDraft {
 const draftZod = z.object({
   theme: z.string().min(1),
   participants: z.array(z.string()),
+  previous: z.array(z.string()),
   notes: z.array(z.string()),
   decisions: z.array(z.string()),
   next: z.array(z.string()),
@@ -44,10 +50,11 @@ function clip(items: string[], count: number): string[] {
 const schema: JsonSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['theme', 'participants', 'notes', 'decisions', 'next', 'proposals', 'open'],
+  required: ['theme', 'participants', 'previous', 'notes', 'decisions', 'next', 'proposals', 'open'],
   properties: {
     theme: { type: 'string' },
     participants: { type: 'array', items: { type: 'string' } },
+    previous: { type: 'array', items: { type: 'string' } },
     notes: { type: 'array', items: { type: 'string' } },
     decisions: { type: 'array', items: { type: 'string' } },
     next: { type: 'array', items: { type: 'string' } },
@@ -66,6 +73,7 @@ export function renderProtocol(draft: ProtocolDraft): string {
     '',
     `Участники: ${draft.participants.map(esc).join(', ') || 'не названы'}.`,
     '',
+    ...(draft.previous.length ? ['Что с прошлыми решениями:', ...draft.previous.map((item) => `— ${esc(item)}`), ''] : []),
     'Заметки:',
     ...draft.notes.map((item) => `— ${esc(item)}`),
     '',
@@ -81,16 +89,52 @@ export function renderProtocol(draft: ProtocolDraft): string {
   if (draft.open.length) {
     lines.push('', 'Открытые вопросы:', ...draft.open.map((item) => `— ${esc(item)}`));
   }
-  return lines.join('\n').slice(0, 4000);
+  return lines.join('\n').slice(0, 8000);
 }
 
-export function parseProtocolCallback(data: string): string | null {
-  const match = /^p:approve:([a-f0-9]{8})$/.exec(data);
-  return match ? match[1] : null;
+// Telegram принимает до 4096 знаков: длинный протокол уходит частями по строкам, кнопки — у последней части.
+export function messageParts(text: string, limit = 3900): string[] {
+  const parts: string[] = [];
+  let current = '';
+  for (const line of text.split('\n')) {
+    if (current && current.length + line.length + 1 > limit) {
+      parts.push(current);
+      current = '';
+    }
+    current = current ? `${current}\n${line}` : line.slice(0, limit);
+  }
+  if (current) parts.push(current);
+  return parts;
 }
 
-export function protocolCallback(id: string): string {
-  return `p:approve:${id}`;
+async function sendProtocol(body: string, chatId: string, id: string) {
+  const parts = messageParts(body);
+  for (const [index, part] of parts.entries()) {
+    await sendMessage(part, chatId, index === parts.length - 1 ? { reply_markup: protocolKeyboard(id) } : undefined);
+  }
+}
+
+export type ProtocolAction = 'approve' | 'edit' | 'reject';
+
+export function parseProtocolCallback(data: string): { action: ProtocolAction; id: string } | null {
+  const match = /^p:(approve|edit|reject):([a-f0-9]{8})$/.exec(data);
+  return match ? { action: match[1] as ProtocolAction, id: match[2] } : null;
+}
+
+export function protocolCallback(id: string, action: ProtocolAction = 'approve'): string {
+  return `p:${action}:${id}`;
+}
+
+export function protocolKeyboard(id: string) {
+  return {
+    inline_keyboard: [
+      [{ text: 'Утвердить', callback_data: protocolCallback(id, 'approve') }],
+      [
+        { text: 'Поправить', callback_data: protocolCallback(id, 'edit') },
+        { text: 'Отклонить', callback_data: protocolCallback(id, 'reject') },
+      ],
+    ],
+  };
 }
 
 export async function protocolCard(db: Db, leaderId: string) {
@@ -240,29 +284,7 @@ export async function approveProtocol(db: Db, id: string, chatId: string): Promi
       })
       .onConflictDoNothing();
   }
-  let text = release.text;
-  let placed = false;
-  if (calendarConfig()) {
-    try {
-      await publishApproved(leader.id, [], {
-        uid: release.eventUid || `${leader.id}:protocol-${row.id}`,
-        ics: release.eventUid ? release.ics : release.ics.replace(/^UID:.*$/m, `UID:${leader.id}:protocol-${row.id}@ecompras`),
-      });
-      placed = true;
-    } catch {
-      placed = false;
-    }
-  }
-  if (placed) {
-    text = text.replace(
-      'Календарь не подключён: приглашение на встречу во вложении.',
-      'Приглашение на встречу во вложении. Та же встреча стоит в календаре «Стенд».',
-    );
-  }
-  await sendMail(mailbox.user, release.subject, text, [
-    { filename: 'vstrecha.ics', content: release.ics, contentType: 'text/calendar; charset=utf-8; method=REQUEST' },
-  ]);
-  await db.update(protocols).set({ status: 'утверждён' }).where(eq(protocols.id, row.id));
+  // Задачи — в Трекер до календаря: в описании встреч темы статус задач берётся из Трекера.
   let trackerNote = '';
   if (trackerConfig()) {
     try {
@@ -283,8 +305,108 @@ export async function approveProtocol(db: Db, id: string, chatId: string): Promi
       trackerNote = ' Трекер задачи не принял.';
     }
   }
+  let text = release.text;
+  // Статус — до календаря: описание встреч темы строится из утверждённых протоколов.
+  await db.update(protocols).set({ status: 'утверждён', awaitingEdit: false }).where(eq(protocols.id, row.id));
+  let placed = false;
+  if (calendarConfig()) {
+    try {
+      const title = meetingOfSource(row.source)?.title;
+      if (title) await refreshSeries(db, leader.id, title);
+      else
+        await publishApproved(leader.id, [], {
+          uid: `${leader.id}:protocol-${row.id}`,
+          ics: release.ics.replace(/^UID:.*$/m, `UID:${leader.id}:protocol-${row.id}@ecompras`),
+        });
+      placed = true;
+    } catch (err) {
+      console.error('Календарь не обновлён', err instanceof Error ? err.message : err);
+      placed = false;
+    }
+  }
+  if (placed) {
+    text = text.replace(
+      'Календарь не подключён: приглашение на встречу во вложении.',
+      'Протокол записан в описание встречи в календаре «Стенд». В описании следующей встречи темы — вопросы по этому протоколу. Приглашение во вложении.',
+    );
+  }
+  await sendMail(mailbox.user, release.subject, text, [
+    { filename: 'vstrecha.ics', content: release.ics, contentType: 'text/calendar; charset=utf-8; method=REQUEST' },
+  ]);
   const count = release.tasks.length;
-  return `Протокол утверждён. Письмо с приглашением ушло в тестовый ящик, задач записано: ${count}.${trackerNote}`;
+  return `Протокол утверждён. ${placed ? 'Он в описании встречи в календаре. ' : ''}Письмо ушло в тестовый ящик, задач записано: ${count}.${trackerNote}`;
+}
+
+export async function rejectProtocol(db: Db, id: string, chatId: string): Promise<string> {
+  const [leader] = await db.select().from(leaders).where(eq(leaders.telegramChatId, chatId)).limit(1);
+  if (!leader) return 'Чат не привязан';
+  const [row] = await db.select().from(protocols).where(eq(protocols.id, id)).limit(1);
+  if (!row || row.leaderId !== leader.id) return 'Протокол не найден';
+  if (row.status === 'утверждён') return 'Уже утверждён';
+  await db.update(protocols).set({ status: 'отклонён', awaitingEdit: false }).where(eq(protocols.id, id));
+  return 'Протокол отклонён: задачи не созданы, письмо не ушло, в календарь не записан.';
+}
+
+export async function askProtocolEdit(db: Db, id: string, chatId: string): Promise<string> {
+  const [leader] = await db.select().from(leaders).where(eq(leaders.telegramChatId, chatId)).limit(1);
+  if (!leader) return 'Чат не привязан';
+  const [row] = await db.select().from(protocols).where(eq(protocols.id, id)).limit(1);
+  if (!row || row.leaderId !== leader.id) return 'Протокол не найден';
+  if (row.status !== 'ждёт') return `Уже ${row.status}`;
+  await db.update(protocols).set({ awaitingEdit: false }).where(eq(protocols.leaderId, leader.id));
+  await db.update(protocols).set({ awaitingEdit: true }).where(eq(protocols.id, id));
+  return 'Напишите, что поправить в протоколе. Правку помощник запомнит для следующих протоколов.';
+}
+
+// Текст правки: модель переписывает протокол по указанию руководителя, правка сохраняется для следующих протоколов (R6).
+export async function saveProtocolEdit(db: Db, chatId: string, text: string): Promise<string | null> {
+  const instead = text.trim();
+  if (instead.length < 3) return null;
+  const [leader] = await db.select().from(leaders).where(eq(leaders.telegramChatId, chatId)).limit(1);
+  if (!leader) return null;
+  const [row] = await db
+    .select()
+    .from(protocols)
+    .where(and(eq(protocols.leaderId, leader.id), eq(protocols.awaitingEdit, true)))
+    .limit(1);
+  if (!row) return null;
+  const staff = await db.select({ name: people.name, position: people.position }).from(people).where(eq(people.leaderId, leader.id));
+  const result = await withLlmScope(
+    { agent: 'protocol', leaderId: leader.id, operationId: `protocol-edit:${row.id}:${Date.now()}`, title: 'Правка протокола' },
+    () =>
+      callJson<unknown>({
+        purpose: `protocol-edit:${leader.id}`,
+        system: [
+          'Ты правишь протокол встречи по указанию руководителя.',
+          'Внеси правку точно и ничего больше не меняй. Структура та же: тема, участники, что с прошлыми решениями, заметки, решения, дальнейшие шаги, предложения помощника, открытые вопросы.',
+          'Каждый дальнейший шаг начинай с полного имени ответственного, срок — датой: «до 14 декабря». Каждый пункт короче 250 знаков.',
+        ].join(' '),
+        user: [`Люди руководителя: ${staff.map((item) => `${item.name} (${item.position})`).join('; ')}.`, '', 'Протокол:', plainBody(row.body), '', `Правка руководителя: ${instead}`].join('\n'),
+        schemaName: 'protocol',
+        schema,
+      }),
+  );
+  const parsed = draftZod.safeParse(result.data);
+  if (!parsed.success) return 'Правку не удалось внести: ответ модели не прошёл проверку. Протокол прежний.';
+  const draft = cleanDraft(parsed.data);
+  const body = renderProtocol(draft);
+  await db.update(protocols).set({ body, openItems: draft.open, awaitingEdit: false }).where(eq(protocols.id, row.id));
+  await db.insert(revisions).values({ id: randomUUID(), leaderId: leader.id, category: 'протокол', instead, createdAt: new Date() });
+  await sendProtocol(body, chatId, row.id);
+  return 'Протокол поправлен, новая версия выше. Правка записана: следующие протоколы её учтут.';
+}
+
+function cleanDraft(data: z.infer<typeof draftZod>): ProtocolDraft {
+  return {
+    theme: data.theme.trim().slice(0, 180),
+    participants: clip(data.participants, 12),
+    previous: clip(data.previous, 8),
+    notes: clip(data.notes, 5),
+    decisions: clip(data.decisions, 6),
+    next: clip(data.next, 12),
+    proposals: clip(data.proposals, 3),
+    open: clip(data.open, 5),
+  };
 }
 
 function participantNames(body: string): string[] {
@@ -434,6 +556,20 @@ export async function writeProtocol(db: Db, leaderId: string, dir = `data/${lead
   const source = await latestTranscript(dir);
   const meeting = meetingOfSource(source.name);
   const staff = await db.select({ name: people.name, position: people.position }).from(people).where(eq(people.leaderId, leaderId));
+  // Контекст темы: прошлый протокол этой же серии встреч, задачи из него, письма участников за неделю, правки руководителя к протоколам.
+  const prior = previousOf(await leaderProtocols(db, leaderId), meeting);
+  const priorTasks = prior ? await protocolTasks(db, leaderId, prior.id) : [];
+  const priorAt = prior ? meetingOfSource(prior.source) : null;
+  const letters = await participantLetters(db, leaderId, meeting);
+  const edits = (await db.select().from(revisions).where(and(eq(revisions.leaderId, leaderId), eq(revisions.category, 'протокол')))).map((row) => row.instead);
+  const context = [
+    prior && priorAt ? `Прошлый протокол этой темы (${whenWords(priorAt.startsAt)}, ${prior.status}):\n${plainBody(prior.body).slice(0, 2500)}` : 'Прошлого протокола этой темы нет.',
+    priorTasks.length ? `Задачи из прошлого протокола:\n${priorTasks.map((task) => `— ${task.title} (${task.owner}, срок ${task.dueOn}) — ${task.done ? 'закрыта' : 'открыта'}`).join('\n')}` : '',
+    letters.length ? `Письма участников за неделю до встречи:\n${letters.map((row) => `— ${row.received.slice(0, 10)} ${row.from}: ${row.subject}. ${row.body}`).join('\n')}` : '',
+    edits.length ? `Правки руководителя к прошлым протоколам — учитывай:\n${edits.slice(-8).map((item) => `— ${item}`).join('\n')}` : '',
+  ]
+    .filter(Boolean)
+    .join('\n\n');
   const result = await withLlmScope(
     { agent: 'protocol', leaderId, operationId: `protocol:${leaderId}:${Date.now()}`, title: 'Протокол встречи' },
     () => callJson<unknown>({
@@ -443,11 +579,15 @@ export async function writeProtocol(db: Db, leaderId: string, dir = `data/${lead
       'Тема, участники, короткие заметки, решения, дальнейшие шаги, предложения помощника и открытые вопросы.',
       'Не выдумывай людей и решений, которых нет в тексте. Каждый пункт короче 250 знаков.',
       'Участников называй полным именем из списка людей руководителя. Каждый дальнейший шаг начинай с полного имени ответственного, срок пиши датой: «до 14 декабря»; «сегодня» — это день встречи. Шагов не больше 12: у каждого, кому на встрече дали поручение, есть свой шаг, мелкие поручения одному человеку объединяй.',
+      'previous — что с прошлыми решениями: если есть прошлый протокол этой темы, по каждому его решению и шагу одной короткой строкой — что с ним по расшифровке, задачам и письмам: «сделано», «не сделано», «просрочено» или «на встрече не обсуждали», и у кого. Не больше 8 строк, похожие объединяй. Прошлого протокола нет — previous пустой.',
     ].join(' '),
     user: [
       meeting ? `Встреча: ${meeting.title}, ${meeting.startsAt.replace('T', ' ')} по Москве.` : '',
       `Люди руководителя: ${staff.map((row) => `${row.name} (${row.position})`).join('; ')}.`,
       '',
+      context,
+      '',
+      'Расшифровка встречи:',
       source.text,
     ].join('\n'),
     schemaName: 'protocol',
@@ -459,15 +599,7 @@ export async function writeProtocol(db: Db, leaderId: string, dir = `data/${lead
     const detail = parsed.error.issues.map((issue) => `${issue.path.join('.')}:${issue.code}`).join('; ');
     throw new Error(`Ответ модели не совпал со схемой протокола: ${detail}`.slice(0, 200));
   }
-  const draft: ProtocolDraft = {
-    theme: parsed.data.theme.trim().slice(0, 180),
-    participants: clip(parsed.data.participants, 12),
-    notes: clip(parsed.data.notes, 5),
-    decisions: clip(parsed.data.decisions, 6),
-    next: clip(parsed.data.next, 12),
-    proposals: clip(parsed.data.proposals, 3),
-    open: clip(parsed.data.open, 5),
-  };
+  const draft = cleanDraft(parsed.data);
   const id = randomUUID().replace(/-/g, '').slice(0, 8);
   const body = renderProtocol(draft);
   await db.insert(protocols).values({
@@ -480,9 +612,7 @@ export async function writeProtocol(db: Db, leaderId: string, dir = `data/${lead
     transcriptAt: arrived,
     createdAt: new Date(),
   });
-  await sendMessage(body, leader.telegramChatId, {
-    reply_markup: { inline_keyboard: [[{ text: 'Утвердить', callback_data: protocolCallback(id) }]] },
-  });
+  await sendProtocol(body, leader.telegramChatId, id);
   const sentAt = new Date();
   await db.update(protocols).set({ sentAt }).where(eq(protocols.id, id));
   return { id };

@@ -73,7 +73,9 @@ export function standEvent(input: { uid: string; start: Date; minutes: number; s
     'END:VEVENT',
     'END:VCALENDAR',
     '',
-  ].join('\r\n');
+  ]
+    .map(foldIcsLine)
+    .join('\r\n');
 }
 
 export function readEvents(xml: string): { uid: string; summary: string; start: string }[] {
@@ -174,8 +176,28 @@ function utcStamp(value: Date): string {
   return value.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
 }
 
+// Описание встречи может быть длинным (протокол): строки события складываются по RFC 5545 в standEvent.
 function icsText(value: string): string {
-  return value.replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/[,;]/g, (char) => `\\${char}`).slice(0, 400);
+  return value.replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/[,;]/g, (char) => `\\${char}`).slice(0, 8000);
+}
+
+// Строка длиннее 75 байт переносится: CRLF и пробел. Русские буквы — по 2 байта, символ не режется.
+export function foldIcsLine(line: string): string {
+  const parts: string[] = [];
+  let current = '';
+  let bytes = 0;
+  for (const char of line) {
+    const size = Buffer.byteLength(char, 'utf8');
+    if (bytes + size > (parts.length ? 74 : 75)) {
+      parts.push(current);
+      current = '';
+      bytes = 0;
+    }
+    current += char;
+    bytes += size;
+  }
+  parts.push(current);
+  return parts.join('\r\n ');
 }
 
 function unescapeIcs(value: string): string {

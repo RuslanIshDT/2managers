@@ -88,7 +88,7 @@ describe('утро из Трекера и календаря', () => {
       returned: [],
       overdue: [],
       todayMeetings: [],
-      openItems: [],
+      questions: [],
       share: { onGoal: 0, total: 0, percent: 0 },
       notes: ['Трекер не ответил (Трекер ответил 503) — задачи взяты из базы системы.'],
     });

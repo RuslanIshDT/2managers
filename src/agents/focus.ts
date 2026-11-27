@@ -88,7 +88,7 @@ export interface MorningInput {
   returned: { who: string; what: string }[];
   overdue: { title: string; owner: string; days: number }[];
   todayMeetings: string[];
-  openItems: string[];
+  questions: { title: string; items: string[] }[];
   share: { onGoal: number; total: number; percent: number };
   notes?: string[];
 }
@@ -117,7 +117,9 @@ export function renderMorning(input: MorningInput): string {
       ...input.plan.map((item, index) => `${index + 1}. ${item.title}. ${item.minutes} мин, цель «${item.goal}». ${item.why}`),
     ]);
   blocks.push(overdueLines(input.overdue));
-  if (input.openItems.length) blocks.push(['Открытые вопросы прошлой встречи:', ...input.openItems.map((item) => `— ${item}`)]);
+  // Вопросы по прошлым протоколам: к ближайшей встрече той же темы сегодня или завтра (T69).
+  if (input.questions.length)
+    blocks.push(['Вопросы по прошлым протоколам:', ...input.questions.flatMap((group) => [`${group.title}:`, ...group.items.map((item) => `— ${item}`)])]);
   blocks.push([
     `Время встреч на ваши цели: ${input.share.percent}% (${hours(input.share.onGoal)} из ${hours(input.share.total)} ч по календарю).`,
   ]);

@@ -15,7 +15,7 @@ import { agentModels, agentRuns, emails, flowReports, leaders, meetings, operati
 import { departmentForLeader } from '../agents/k1.ts';
 import { accuracyView } from '../agents/accuracy.ts';
 import { controlOf, withLeader } from '../agents/control.ts';
-import { approveProtocol, parseProtocolCallback, protocolCard } from '../agents/protocol.ts';
+import { approveProtocol, askProtocolEdit, parseProtocolCallback, protocolCard, rejectProtocol, saveProtocolEdit } from '../agents/protocol.ts';
 import { costView, type OperationRow } from '../agents/cost.ts';
 import { deskForLeader } from '../agents/desk.ts';
 import { standView } from '../agents/stand-sync.ts';
@@ -497,25 +497,31 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     if (update.callback_query?.data) {
       const parsedClick = parseCallback(update.callback_query.data);
       const ruleClick = parseRuleCallback(update.callback_query.data);
-      const protocolId = parseProtocolCallback(update.callback_query.data);
+      const protocolClick = parseProtocolCallback(update.callback_query.data);
       const chatId = String(update.callback_query.message?.chat.id ?? '');
       await deps.db.insert(telegramClicks).values({
         updateId: update.update_id,
         chatId,
         data: update.callback_query.data,
-        action: parsedClick?.action ?? (ruleClick ? 'accept' : protocolId ? 'approve' : null),
+        action: parsedClick?.action ?? (ruleClick ? 'accept' : protocolClick ? protocolClick.action : null),
         receivedAt: new Date(),
       });
-      let notice = parsedClick || ruleClick || protocolId ? 'Кнопка получена' : 'Неизвестная кнопка';
+      let notice = parsedClick || ruleClick || protocolClick ? 'Кнопка получена' : 'Неизвестная кнопка';
       if (chatId && ruleClick) {
         try {
           notice = await acceptWeekByChat(deps.db, chatId);
         } catch (err) {
           notice = err instanceof Error ? err.message.slice(0, 180) : 'Не удалось выполнить';
         }
-      } else if (protocolId && chatId) {
+      } else if (protocolClick && chatId) {
         try {
-          notice = await approveProtocol(deps.db, protocolId, chatId);
+          notice =
+            protocolClick.action === 'approve'
+              ? await approveProtocol(deps.db, protocolClick.id, chatId)
+              : protocolClick.action === 'edit'
+                ? await askProtocolEdit(deps.db, protocolClick.id, chatId)
+                : await rejectProtocol(deps.db, protocolClick.id, chatId);
+          if (protocolClick.action === 'edit' && telegramConfigured()) await sendMessage(notice, chatId);
         } catch (err) {
           notice = err instanceof Error ? err.message.slice(0, 180) : 'Не удалось выполнить';
         }
@@ -554,7 +560,8 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
         if (telegramConfigured()) await sendMessage(`Чат привязан к ${leader.name}. Сообщения помощника подписаны как от ИИ-помощника.`, chatId);
         return { ok: true };
       }
-      const saved = await saveEditText(deps.db, chatId, text);
+      // Сначала правка протокола, если он ждёт текст; иначе — правка черновика письма.
+      const saved = (await saveProtocolEdit(deps.db, chatId, text)) ?? (await saveEditText(deps.db, chatId, text));
       if (saved && telegramConfigured()) await sendMessage(saved, chatId);
     }
     return { ok: true };

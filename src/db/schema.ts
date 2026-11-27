@@ -258,6 +258,7 @@ export const protocols = pgTable('protocols', {
   transcriptAt: timestamp('transcript_at', { withTimezone: true }),
   sentAt: timestamp('sent_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+  awaitingEdit: boolean('awaiting_edit').notNull().default(false),
 });
 
 export const noteSent = pgTable(

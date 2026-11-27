@@ -9,7 +9,7 @@ import { adviceTitle, departmentMatrix, goalMinutes, overdueLines, overdueTasks,
 import { withLlmScope } from '../llm.ts';
 import { textSignals } from './k2.ts';
 import { sendMessage } from '../telegram.ts';
-import { latestProtocol } from './protocol.ts';
+import { morningQuestions } from './protocol-context.ts';
 import { clockFor, dateWords, moscowDay, shiftDay, waitedDays } from './scene.ts';
 import { liveSources, type LiveMeeting, type LiveTask } from './live-sources.ts';
 
@@ -33,8 +33,8 @@ export async function sendFocus(db: Db, leaderId: string) {
     { agent: 'k4', leaderId, operationId: `k4:${leaderId}:${Date.now()}`, title: 'Утреннее сообщение' },
     () => chooseFocus({ purpose: `k4:${leaderId}`, profile: leader.profile, candidates: scene.candidates, names: scene.names }),
   );
-  const protocol = await latestProtocol(db, leaderId);
-  const text = renderMorning({ ...scene.morning, plan: plan.today, openItems: protocol?.open ?? [], notes: live.notes });
+  const questions = await morningQuestions(db, leaderId, scene.meetings, scene.morning.today, shiftDay(scene.morning.today, 1));
+  const text = renderMorning({ ...scene.morning, plan: plan.today, questions, notes: live.notes });
   await db
     .insert(focusPlans)
     .values({ leaderId, plan: { text, today: plan.today, later: plan.later }, createdAt: new Date() })
@@ -135,7 +135,8 @@ async function sceneFor(db: Db, leaderId: string, leaderName: string, live?: { t
     candidates,
     names: department.people.map((person) => person.name),
     morning,
-    draft: renderMorning({ ...morning, plan: null, openItems: [], notes: [] }),
+    draft: renderMorning({ ...morning, plan: null, questions: [], notes: [] }),
+    meetings: meetingRows,
     overdue: overdueLines(overdue),
   };
 }

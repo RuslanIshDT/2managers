@@ -424,7 +424,7 @@ describe('дирижёр', () => {
       returned: [],
       overdue: [],
       todayMeetings: [],
-      openItems: [],
+      questions: [],
       share: { onGoal: 0, total: 0, percent: 0 },
     });
     expect(text).toContain('1. Отстаёт план. 30 мин, цель «План»');
@@ -441,7 +441,7 @@ const emptyMorning = {
   returned: [],
   overdue: [],
   todayMeetings: [],
-  openItems: [],
+  questions: [],
   share: { onGoal: 0, total: 0, percent: 0 },
 };
 
@@ -498,7 +498,7 @@ describe('утро и матрица', () => {
       returned: [{ who: 'Анна', what: 'Перенос встречи' }],
       overdue: late,
       todayMeetings: ['Планёрка'],
-      openItems: ['Кто ведёт понедельник'],
+      questions: [{ title: 'Планёрка, сегодня в 10:00 (протокол 10 декабря)', items: ['Кто ведёт понедельник'] }],
       share: { onGoal: 360, total: 2070, percent: 17 },
     });
     // Решения, которые ждут руководителя, — первым блоком после заголовка.
@@ -523,7 +523,7 @@ describe('утро и матрица', () => {
       'Встречи сегодня: Планёрка.',
       'Три дела на сегодня модель выберет при отправке.',
       'Просрочено у сотрудников:',
-      'Открытые вопросы прошлой встречи:',
+      'Вопросы по прошлым протоколам:',
       'Время встреч на ваши цели: 17% (6 из 34,5 ч по календарю).',
       'Помощник ответил сам на этой неделе:',
     ]);
@@ -531,7 +531,7 @@ describe('утро и матрица', () => {
     expect(morning).toContain('— Анна: Перенос встречи');
     expect(morning).toContain('Сдать линию');
     expect(morning).toContain('Встречи сегодня: Планёрка.');
-    expect(morning).toContain('Открытые вопросы прошлой встречи:\n— Кто ведёт понедельник');
+    expect(morning).toContain('Вопросы по прошлым протоколам:\nПланёрка, сегодня в 10:00 (протокол 10 декабря):\n— Кто ведёт понедельник');
     expect(morning).toContain('17% (6 из 34,5 ч');
     expect(morning).not.toContain('Матрица');
     expect(preparationMinutes(new Date('2026-11-27T08:00:00Z'), new Date('2026-11-27T08:00:20Z'))).toBe(0);
@@ -684,6 +684,7 @@ describe('протокол', () => {
     const text = renderProtocol({
       theme: 'План <недели>',
       participants: ['Анна'],
+      previous: ['Анна: список подрядчиков — сделано'],
       notes: ['Срок сдвинули'],
       decisions: ['Оставить две планёрки'],
       next: ['Анна пишет список'],
@@ -691,8 +692,11 @@ describe('протокол', () => {
       open: ['Кто ведёт понедельник'],
     });
     expect(text).toContain('План &lt;недели&gt;');
+    expect(text).toContain('Что с прошлыми решениями:\n— Анна: список подрядчиков — сделано');
     expect(text).not.toContain('заглушка');
-    expect(parseProtocolCallback('p:approve:ab12cd34')).toBe('ab12cd34');
+    expect(parseProtocolCallback('p:approve:ab12cd34')).toEqual({ action: 'approve', id: 'ab12cd34' });
+    expect(parseProtocolCallback('p:edit:ab12cd34')).toEqual({ action: 'edit', id: 'ab12cd34' });
+    expect(parseProtocolCallback('p:reject:ab12cd34')?.action).toBe('reject');
     expect(parseProtocolCallback('d:approve:ab12cd34')).toBeNull();
     const now = new Date('2026-11-26T12:00:00Z');
     const earlier = new Date('2026-11-26T09:00:00Z');

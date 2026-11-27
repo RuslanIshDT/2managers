@@ -5,7 +5,8 @@ import { emails, freedSlots, meetings, protocols, tasks } from '../db/schema.ts'
 import { calendarConfig, ensureStandCalendar, listStandEvents, putEvent } from '../yandex/calendar.ts';
 import { createIssue, listOurIssues, trackerConfig } from '../yandex/tracker.ts';
 import { attendeeNames, eventFile, issueDraft, meetingStart, relatedSubjects, standEvent, taskUnique } from './materials.ts';
-import { releaseFor } from './protocol.ts';
+import { meetingOfSource, releaseFor } from './protocol.ts';
+import { seriesDescriptions } from './protocol-context.ts';
 
 export interface StandSnapshot {
   tracker: { ok: boolean; detail: string; issues: { key: string; summary: string; deadline: string }[] };
@@ -49,10 +50,12 @@ export async function syncLeader(db: Db, leaderId: string): Promise<string> {
   let calendarFailed = 0;
   if (calendarConfig()) {
     const href = await ensureStandCalendar();
+    // Цепочка темы, вопросы по прошлому протоколу и протокол встречи — в описании события (T69).
+    const notes = await seriesDescriptions(db, leaderId, meetingRows.filter((row) => !freed.has(row.uid)));
     for (const meeting of meetingRows) {
       // Встреча отпущенной серии в календарь не возвращается: на её месте блок приоритета или ничего.
       const slot = freed.get(meeting.uid);
-      const event = slot ? (slot.useSummary ? freeBlock(leaderId, meeting, slot) : null) : meetingEvent(leaderId, meeting, subjects);
+      const event = slot ? (slot.useSummary ? freeBlock(leaderId, meeting, slot) : null) : meetingEvent(leaderId, meeting, subjects, notes.get(meeting.uid) ?? []);
       if (!event) continue;
       try {
         await putEvent(href, event.file, event.ics);
@@ -62,7 +65,8 @@ export async function syncLeader(db: Db, leaderId: string): Promise<string> {
       }
     }
     for (const row of protocolRows) {
-      if (row.status !== 'утверждён') continue;
+      // Протокол встречи из календаря уже в описании событий темы; отдельное событие — только для протокола без встречи.
+      if (row.status !== 'утверждён' || meetingOfSource(row.source)) continue;
       const release = await releaseFor(db, leaderId, row);
       const uid = release.eventUid || `${leaderId}:protocol-${row.id}`;
       const ics = release.eventUid ? release.ics : release.ics.replace(/^UID:.*$/m, `UID:${uid}@ecompras`);
@@ -82,15 +86,16 @@ export async function syncLeader(db: Db, leaderId: string): Promise<string> {
 
 type MeetingRow = typeof meetings.$inferSelect;
 
-export function meetingEvent(leaderId: string, meeting: MeetingRow, subjects: string[]): { file: string; ics: string } {
+export function meetingEvent(leaderId: string, meeting: MeetingRow, subjects: string[], notes: string[] = []): { file: string; ics: string } {
   const names = attendeeNames(meeting.attendees);
   const near = relatedSubjects(meeting.summary, subjects);
   const description = [
     names.length ? `Участники: ${names.join(', ')}.` : '',
     meeting.organizer ? `Организатор: ${meeting.organizer}.` : '',
     near.length ? `Рядом в почте: ${near.join('; ')}.` : '',
+    ...(notes.length ? ['', ...notes] : []),
   ]
-    .filter(Boolean)
+    .filter((line, index, all) => line !== '' || (index > 0 && all[index - 1] !== ''))
     .join('\n');
   const uid = meetingUid(leaderId, meeting.uid);
   return {
@@ -146,4 +151,27 @@ async function loadStand(leaderId: string, known: Set<string> | null): Promise<S
         .catch((error: unknown) => ({ ok: false, detail: error instanceof Error ? error.message : 'Календарь не ответил', events: [] }))
     : { ok: false, detail: 'Календарь не настроен', events: [] };
   return { tracker, calendar };
+}
+
+// После утверждения протокола: события всех встреч темы заново — цепочка, вопросы по прошлому протоколу, протокол встречи.
+export async function refreshSeries(db: Db, leaderId: string, title: string): Promise<number> {
+  if (!calendarConfig()) return 0;
+  const [meetingRows, freedRows, subjectRows] = await Promise.all([
+    db.select().from(meetings).where(eq(meetings.leaderId, leaderId)),
+    db.select().from(freedSlots).where(eq(freedSlots.leaderId, leaderId)),
+    db.select({ subject: emails.subject }).from(emails).where(eq(emails.leaderId, leaderId)),
+  ]);
+  const freed = new Set(freedRows.map((row) => row.meetingUid));
+  const series = meetingRows.filter((row) => row.summary.toLowerCase() === title.toLowerCase() && !freed.has(row.uid));
+  const notes = await seriesDescriptions(db, leaderId, series);
+  const subjects = subjectRows.map((row) => row.subject);
+  const href = await ensureStandCalendar();
+  let written = 0;
+  for (const meeting of series) {
+    const event = meetingEvent(leaderId, meeting, subjects, notes.get(meeting.uid) ?? []);
+    await putEvent(href, event.file, event.ics);
+    written += 1;
+  }
+  cache.clear();
+  return written;
 }
