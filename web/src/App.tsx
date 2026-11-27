@@ -764,11 +764,6 @@ export function App() {
           </span>
         </div>
       </Card>
-      <Card className="mb-4">
-        <h2 className="mb-2 text-lg font-semibold">Профиль</h2>
-        <p className="mb-2 text-sm text-[#5d6878]">Цели, правила и стиль. Действующие правила — в настройках, раздел «Профиль».</p>
-        <div className="whitespace-pre-wrap font-sans text-sm leading-relaxed">{plainProfile(cabinet?.profile ?? '')}</div>
-      </Card>
       <p className="text-sm text-[#5d6878]">
         <a className="text-[#1f5fbf] underline" href="/form/">
           Форма сдачи
