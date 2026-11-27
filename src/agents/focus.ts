@@ -166,20 +166,17 @@ function hours(minutes: number): string {
   return (Math.round((minutes / 60) * 10) / 10).toLocaleString('ru-RU');
 }
 
+// Время на цели: встречи, вид которых входит в goalKinds, и блоки освобождённого времени под приоритет (T57).
+// Вид серии определяет помощник; серия без вида на цели не считается.
 export function goalMinutes(
-  meetings: { minutes: number; summary: string; goal?: boolean }[],
-  goals: string[],
+  meetings: { minutes: number; kind?: string; goal?: boolean }[],
+  goalKinds: Set<string>,
 ): { onGoal: number; total: number; percent: number } {
-  const needles = goals
-    .flatMap((goal) => goal.toLowerCase().split(/[^a-zа-яё0-9]+/i))
-    .filter((word) => word.length >= 5);
   let onGoal = 0;
   let total = 0;
   for (const meeting of meetings) {
     total += meeting.minutes;
-    const summary = meeting.summary.toLowerCase();
-    // goal: блок освобождённого времени, отданный приоритету руководителя (T57).
-    if (meeting.goal || needles.some((word) => summary.includes(word))) onGoal += meeting.minutes;
+    if (meeting.goal || (meeting.kind && goalKinds.has(meeting.kind))) onGoal += meeting.minutes;
   }
   return { onGoal, total, percent: total === 0 ? 0 : Math.round((100 * onGoal) / total) };
 }

@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { goalMinutes } from '../src/agents/focus.ts';
+import { GOAL_KINDS } from '../src/agents/conductor.ts';
 import { calendarAfter, freeUses, LEAVE_FREE, profileItems, slotsToFree } from '../src/agents/free-time.ts';
 import { freeBlock, meetingEvent } from '../src/agents/stand-sync.ts';
 import { hrefsByUid } from '../src/yandex/calendar.ts';
@@ -61,8 +62,8 @@ describe('T57: освобождённое время после «Отпусти
       { meetingUid: 'b', useSummary: '' },
     ]);
     expect(after.map((row) => row.summary)).toEqual(['Один на один: Вера Третья', 'Планёрка']);
-    const before = goalMinutes(meetings, ['маркетинг']);
-    const now = goalMinutes(after, ['маркетинг']);
+    const before = goalMinutes(meetings, GOAL_KINDS);
+    const now = goalMinutes(after, GOAL_KINDS);
     expect(before.onGoal).toBe(0);
     expect(now).toEqual({ onGoal: 60, total: 90, percent: 67 });
   });

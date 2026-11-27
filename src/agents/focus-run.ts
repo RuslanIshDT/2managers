@@ -4,7 +4,7 @@ import type { Db } from '../db/client.ts';
 import { decisions, focusPlans, freedSlots, leaders, meetings, seriesKind, tasks, verdicts } from '../db/schema.ts';
 import { calendarAfter } from './free-time.ts';
 import { departmentForLeader } from './k1.ts';
-import { chooseFocus, classifySeries, type Candidate, type FocusPlan } from './conductor.ts';
+import { chooseFocus, classifySeries, GOAL_KINDS, type Candidate, type FocusPlan } from './conductor.ts';
 import { adviceTitle, departmentMatrix, goalMinutes, overdueLines, overdueTasks, ownWeekTasks, renderMorning } from './focus.ts';
 import { withLlmScope } from '../llm.ts';
 import { textSignals } from './k2.ts';
@@ -23,12 +23,13 @@ export async function sendFocus(db: Db, leaderId: string) {
   const [leader] = await db.select().from(leaders).where(eq(leaders.id, leaderId)).limit(1);
   if (!leader) throw new Error('Руководитель не найден');
   if (!leader.telegramChatId) throw new Error('Telegram-чат руководителя не привязан');
+  // Вид новых серий — до подсчёта времени на цели: оно считается по видам встреч.
+  await classifyNewSeries(db, leaderId, leader.profile);
   const scene = await sceneFor(db, leaderId, leader.name);
   const plan = await withLlmScope(
     { agent: 'k4', leaderId, operationId: `k4:${leaderId}:${Date.now()}`, title: 'Утреннее сообщение' },
     () => chooseFocus({ purpose: `k4:${leaderId}`, profile: leader.profile, candidates: scene.candidates, names: scene.names }),
   );
-  await classifyNewSeries(db, leaderId, leader.profile);
   const protocol = await latestProtocol(db, leaderId);
   const text = renderMorning({ ...scene.morning, plan: plan.today, openItems: protocol?.open ?? [] });
   await db
@@ -48,14 +49,16 @@ export async function sendFocusAll(db: Db) {
 }
 
 async function sceneFor(db: Db, leaderId: string, leaderName: string) {
-  const [department, taskRows, decisionRows, verdictRows, storedMeetings, freedRows] = await Promise.all([
+  const [department, taskRows, decisionRows, verdictRows, storedMeetings, freedRows, kindRows] = await Promise.all([
     departmentForLeader(db, leaderId),
     db.select().from(tasks).where(eq(tasks.leaderId, leaderId)),
     db.select().from(decisions).where(eq(decisions.leaderId, leaderId)),
     db.select({ id: verdicts.id, kind: verdicts.kind }).from(verdicts).where(eq(verdicts.leaderId, leaderId)),
     db.select().from(meetings).where(eq(meetings.leaderId, leaderId)),
     db.select().from(freedSlots).where(eq(freedSlots.leaderId, leaderId)),
+    db.select().from(seriesKind).where(eq(seriesKind.leaderId, leaderId)),
   ]);
+  const kindOf = new Map(kindRows.map((row) => [row.seriesKey, row.kind]));
   // Календарь после отпущенных серий: на месте встречи — блок приоритета руководителя.
   const meetingRows = calendarAfter(storedMeetings, freedRows);
   const matrix = departmentMatrix(
@@ -109,8 +112,8 @@ async function sceneFor(db: Db, leaderId: string, leaderName: string) {
     }),
   ];
   const share = goalMinutes(
-    meetingRows.map((row) => ({ minutes: row.minutes, summary: row.summary, goal: row.goal })),
-    department.people.flatMap((person) => [person.goal, person.leaderGoal]),
+    meetingRows.map((row) => ({ minutes: row.minutes, kind: kindOf.get(row.summary), goal: row.goal })),
+    GOAL_KINDS,
   );
   const morning = {
     today,
@@ -142,12 +145,13 @@ function escapeHtml(value: string): string {
   return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-export async function classifyNewSeries(db: Db, leaderId: string, profile = '') {
+// all: определить вид заново у всех серий — нужно, когда меняется список видов.
+export async function classifyNewSeries(db: Db, leaderId: string, profile = '', all = false) {
   const [known, rows] = await Promise.all([
     db.select().from(seriesKind).where(eq(seriesKind.leaderId, leaderId)),
     db.select().from(meetings).where(eq(meetings.leaderId, leaderId)),
   ]);
-  const seen = new Set(known.filter((row) => row.category).map((row) => row.seriesKey));
+  const seen = new Set(all ? [] : known.filter((row) => row.category).map((row) => row.seriesKey));
   const byTitle = new Map<string, string[]>();
   for (const row of rows) {
     if (seen.has(row.summary) || byTitle.has(row.summary)) continue;

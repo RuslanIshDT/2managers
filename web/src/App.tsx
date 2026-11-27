@@ -818,7 +818,7 @@ function Mirror({
         {mirror.series.map((item) => (
           <li key={item.title}>
             <b>{item.title}</b>
-            {item.kind ? <span className="text-[#5d6878]"> · {item.kind}</span> : null}
+            {item.kind ? <span className="text-[#5d6878]"> · {seriesKindWords(item.kind)}</span> : null}
             <span className="text-[#5d6878]"> · {verdictWords(item.verdict)}</span>
             <span className="block text-[#5d6878]">
               {cleanDots(item.change)}
@@ -1531,6 +1531,13 @@ function Matrix({ rows, onOpen }: { rows: { name: string; cell?: string; quiet: 
       </div>
     </section>
   );
+}
+
+function seriesKindWords(kind: string): string {
+  if (kind === 'один_на_один') return 'один на один';
+  if (kind === 'внешняя') return 'клиенты и партнёры';
+  if (kind === 'стратегия') return 'стратегия и цели';
+  return kind;
 }
 
 function kindLabel(kind: string): string {

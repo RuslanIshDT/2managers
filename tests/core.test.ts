@@ -22,7 +22,7 @@ import { applyOrigin, formOrigin, requestOrigin } from '../src/http/origin.ts';
 import { mailConfig } from '../src/mail.ts';
 import { staffCard } from '../src/agents/dependence.ts';
 import { adviceTitle, departmentMatrix, goalMinutes, overdueLines, overdueTasks, ownWeekTasks, renderMorning } from '../src/agents/focus.ts';
-import { applyChoice } from '../src/agents/conductor.ts';
+import { applyChoice, GOAL_KINDS } from '../src/agents/conductor.ts';
 import { burningSeries, noteToSend, pendingNotes, weeklyNotes } from '../src/agents/mirror.ts';
 import { letterHits, replayWeek, ruleEffect, rulesFromAudit, trustOffers, waitingHours } from '../src/agents/replay.ts';
 import { finishTemplate, hasProposal } from '../src/agents/k2.ts';
@@ -493,11 +493,20 @@ describe('утро и матрица', () => {
     expect(preparationMinutes(new Date('2026-11-27T08:00:00Z'), new Date('2026-11-27T08:00:20Z'))).toBe(0);
     expect(preparationWords(0)).toBe('Подготовка: меньше минуты');
     expect(preparationWords(null)).toBe('Время подготовки не записано');
-    expect(goalMinutes([{ minutes: 30, summary: 'План продаж' }, { minutes: 60, summary: 'Статус' }], ['план продаж'])).toEqual({
-      onGoal: 30,
-      total: 90,
-      percent: 33,
-    });
+    // Время на цели — по виду встречи, а не по словам в названии; блок под приоритет тоже на цели; без вида — не на цели.
+    expect(
+      goalMinutes(
+        [
+          { minutes: 30, kind: 'стратегия' },
+          { minutes: 60, kind: 'статус' },
+          { minutes: 30, kind: 'один_на_один' },
+          { minutes: 60, kind: 'внешняя' },
+          { minutes: 30, goal: true },
+          { minutes: 90 },
+        ],
+        GOAL_KINDS,
+      ),
+    ).toEqual({ onGoal: 150, total: 300, percent: 50 });
   });
 });
 describe('пересчёт недели', () => {
