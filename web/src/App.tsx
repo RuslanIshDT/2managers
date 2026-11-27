@@ -2,6 +2,8 @@ import { createContext, useContext, useEffect, useState, type FormEvent } from '
 import { Button } from './components/ui/button.tsx';
 import { Card } from './components/ui/card.tsx';
 import { Input } from './components/ui/input.tsx';
+// Документация для руководителя — файл docs/guide.md, одна копия: в репозитории и в кабинете.
+import guide from '../../docs/guide.md?raw';
 
 interface User {
   name: string;
@@ -169,7 +171,7 @@ interface Cabinet {
   };
 }
 
-type Section = 'home' | 'department' | 'flow' | 'feed' | 'helper' | 'settings' | 'tasks' | 'calendar' | 'mailing';
+type Section = 'home' | 'department' | 'flow' | 'feed' | 'helper' | 'docs' | 'settings' | 'tasks' | 'calendar' | 'mailing';
 
 interface Origin {
   helper: string;
@@ -209,6 +211,7 @@ const SECTIONS: { id: Section; label: string }[] = [
   { id: 'flow', label: 'Поток' },
   { id: 'feed', label: 'Лента' },
   { id: 'helper', label: 'Помощник' },
+  { id: 'docs', label: 'Документация' },
   { id: 'settings', label: 'Настройки' },
 ];
 
@@ -618,6 +621,7 @@ export function App() {
       </Card>
       ) : null}
       {section === 'helper' ? <Helpers cards={cabinet?.desk.helpers ?? []} /> : null}
+      {section === 'docs' ? <Guide text={guide} /> : null}
       {section === 'tasks' ? (
         <Card className="mb-4">
           <h2 className="text-lg font-semibold">Задачи</h2>
@@ -842,41 +846,38 @@ function Mirror({
   );
 }
 
-function Focus({ focus, pending, onSend }: { focus: FocusScene | undefined; pending: boolean; onSend: () => void }) {
-  if (!focus) return null;
-  const [lead, rest] = cleanDots(focus.text).split('\n\nНе сегодня:');
+// Документация: заголовки «##» и «###», абзацы, списки «- » и «1. », **жирный**. Без внешних библиотек.
+function Guide({ text }: { text: string }) {
+  const blocks = text.replace(/\r/g, '').split(/\n{2,}/).map((block) => block.trim()).filter(Boolean);
   return (
-    <Card className="mb-4">
-      <h2 className="mb-2 text-lg font-semibold">Три дела на сегодня</h2>
-      {taskLines(lead).length === 0 ? <div className="whitespace-pre-wrap text-sm leading-relaxed">{lead}</div> : null}
-      <ul className="grid gap-2 text-sm">
-        {taskLines(lead).map((item) => (
-          <li key={item.short}>
-            <p>{item.short}</p>
-            {item.rest ? (
-              <details className="text-[#5d6878]">
-                <summary>подробнее</summary>
-                <p className="mt-1">{item.rest}</p>
-              </details>
-            ) : null}
-          </li>
-        ))}
-      </ul>
-      {rest ? (
-        <details className="mt-3 text-sm text-[#5d6878]">
-          <summary>Не сегодня</summary>
-          <div className="mt-2 whitespace-pre-wrap">Не сегодня:{rest}</div>
-        </details>
-      ) : null}
-      {focus.overdue?.length ? <div className="mt-3 whitespace-pre-wrap text-sm">{focus.overdue.join('\n')}</div> : null}
-      <p className="mt-2 text-sm text-[#5d6878]">
-        Расписание: 8:30 каждый день и пятница в 17:00, часовой пояс Москвы. Кнопка отправляет то же сообщение сейчас. Просрочка считается по сроку и сегодняшней дате.
-      </p>
-      <Button className="mt-3" type="button" variant="outline" onClick={onSend} disabled={pending}>
-        {pending ? 'Отправка…' : 'Прислать сейчас'}
-      </Button>
+    <Card className="max-w-3xl">
+      <article className="grid gap-3 text-sm leading-relaxed">
+        {blocks.map((block, index) => {
+          if (block.startsWith('# ')) return <h2 key={index} className="text-xl font-semibold">{block.slice(2)}</h2>;
+          if (block.startsWith('## ')) return <h3 key={index} className="mt-4 text-lg font-semibold">{block.slice(3)}</h3>;
+          if (block.startsWith('### ')) return <h4 key={index} className="mt-2 font-semibold">{block.slice(4)}</h4>;
+          const lines = block.split('\n');
+          if (lines.every((line) => /^\d+\. /.test(line)))
+            return (
+              <ol key={index} className="ml-5 grid list-decimal gap-1">
+                {lines.map((line) => <li key={line}>{bold(line.replace(/^\d+\. /, ''))}</li>)}
+              </ol>
+            );
+          if (lines.every((line) => line.startsWith('- ')))
+            return (
+              <ul key={index} className="ml-5 grid list-disc gap-1">
+                {lines.map((line) => <li key={line}>{bold(line.slice(2))}</li>)}
+              </ul>
+            );
+          return <p key={index}>{bold(lines.join(' '))}</p>;
+        })}
+      </article>
     </Card>
   );
+}
+
+function bold(text: string) {
+  return text.split(/\*\*(.+?)\*\*/g).map((part, index) => (index % 2 ? <b key={index}>{part}</b> : part));
 }
 
 function Revisions({ rows, onSaved }: { rows: { id: string; category: string; instead: string }[]; onSaved: () => Promise<void> }) {
@@ -958,11 +959,9 @@ function HomeDesk({
             <WorkCard key={item.id} item={item} pending={pending} onDecision={onDecision} onAccept={onAccept} onSeries={onSeries} onOpen={onOpen} onTalk={onTalk} />
           ))}
         </div>
-        {tasks.length ? (
-          <Button className="mt-3" type="button" variant="outline" disabled={pending} onClick={onSend}>
-            Прислать утром
-          </Button>
-        ) : null}
+        <Button className="mt-3" type="button" variant="outline" disabled={pending} onClick={onSend}>
+          Прислать утреннее сообщение сейчас
+        </Button>
       </section>
       <section className="mb-6">
         <h2 className="mb-3 text-lg font-semibold">Сделано без вас за неделю</h2>
@@ -1319,18 +1318,6 @@ function Department({
       </div>
     </section>
   );
-}
-
-function taskLines(text: string): { short: string; rest: string }[] {
-  return text
-    .split('\n')
-    .filter((line) => /^\d+\./.test(line))
-    .map((line) => {
-      const body = line.replace(/^\d+\.\s*/, '');
-      const dot = body.indexOf('. ');
-      if (dot < 0) return { short: body, rest: '' };
-      return { short: body.slice(0, dot), rest: body.slice(dot + 2) };
-    });
 }
 
 function StubList({ title, note, rows }: { title: string; note: string; rows: string[] }) {

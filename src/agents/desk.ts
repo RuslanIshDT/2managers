@@ -179,7 +179,9 @@ export function buildDesk(input: DeskInput): Desk {
     });
   }
   const waiting = input.decisions.filter((row) => row.status === 'ждёт').map((row) => row.summary);
-  for (const task of input.tasks.filter((task) => !waiting.some((summary) => sameMatter(task.title, summary)) && !staleQuiet(task.title, input.people))) {
+  // Дело «поговорить» с тихой проблемой уже стоит карточкой «Поговорите» выше — второй раз не показываем.
+  const talked = (title: string) => quiet.some((person) => person.name.trim() && title.includes(person.name));
+  for (const task of input.tasks.filter((task) => !waiting.some((summary) => sameMatter(task.title, summary)) && !staleQuiet(task.title, input.people) && !talked(task.title))) {
     work.push({
       id: `task:${task.title}`,
       title: shown(`Сделайте: ${task.title}`),

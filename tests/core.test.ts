@@ -3,7 +3,7 @@ import { costView, moscowStart, type OperationRow } from '../src/agents/cost.ts'
 import { modelsWithSchema, priceWords } from '../src/agents/models.ts';
 import { sendTrace } from '../src/langfuse.ts';
 import { eventFile, issueDraft, meetingStart, readEvents, relatedSubjects, standEvent, taskUnique } from '../src/agents/materials.ts';
-import { followUpStart, morningOpenItems, parseProtocolCallback, preparationMinutes, preparationWords, protocolRelease, renderProtocol } from '../src/agents/protocol.ts';
+import { followUpStart, parseProtocolCallback, preparationMinutes, preparationWords, protocolRelease, renderProtocol } from '../src/agents/protocol.ts';
 import { providerHeaders } from '../src/llm.ts';
 import { hashPassword, hashToken, verifyPassword } from '../src/auth.ts';
 import { checkDepartment, readDepartment } from '../src/agents/k1.ts';
@@ -21,8 +21,8 @@ import { parseMailboxSource, syntheticSource } from '../src/mail.ts';
 import { applyOrigin, formOrigin, requestOrigin } from '../src/http/origin.ts';
 import { mailConfig } from '../src/mail.ts';
 import { staffCard } from '../src/agents/dependence.ts';
-import { departmentMatrix, goalMinutes, morningLines, overdueLines, overdueTasks } from '../src/agents/focus.ts';
-import { applyChoice, renderPlan } from '../src/agents/conductor.ts';
+import { adviceTitle, departmentMatrix, goalMinutes, overdueLines, overdueTasks, renderMorning } from '../src/agents/focus.ts';
+import { applyChoice } from '../src/agents/conductor.ts';
 import { burningSeries, noteToSend, pendingNotes, weeklyNotes } from '../src/agents/mirror.ts';
 import { letterHits, replayWeek, ruleEffect, rulesFromAudit, trustOffers, waitingHours } from '../src/agents/replay.ts';
 import { finishTemplate, hasProposal } from '../src/agents/k2.ts';
@@ -366,7 +366,7 @@ describe('записки и серии', () => {
   });
 });
 describe('дирижёр', () => {
-  it('оставляет не больше трёх дел и помечает остальные как не сегодня', () => {
+  it('оставляет не больше трёх дел, остальные в сообщение не идут', () => {
     const candidates = [
       { id: 'a', kind: 'задача', title: 'Бюджет', detail: 'срок', goal: '' },
       { id: 'b', kind: 'решение', title: 'Ждёт ответ', detail: '2 дн.', goal: '' },
@@ -384,9 +384,19 @@ describe('дирижёр', () => {
     ]);
     expect(plan.today.map((item) => item.title)).toEqual(['Отстаёт план', 'Бюджет', 'Тихий']);
     expect(plan.later).toEqual(['Ждёт ответ', 'Лишнее']);
-    const text = renderPlan({ plan, yesterday: [], todayMeetings: [], matrix: ['— клетка'], share: 'Календарь на цели: 0%.' });
-    expect(text).toContain('Не сегодня: Ждёт ответ; Лишнее');
-    expect(text).toContain('Вчера встреч в календаре не было');
+    const text = renderMorning({
+      today: '2026-12-11',
+      waiting: [],
+      plan: plan.today,
+      returned: [],
+      overdue: [],
+      todayMeetings: [],
+      openItems: [],
+      share: { onGoal: 0, total: 0, percent: 0 },
+    });
+    expect(text).toContain('1. Отстаёт план. 30 мин, цель «План»');
+    expect(text).not.toContain('Не сегодня');
+    expect(text).not.toContain('Лишнее');
   });
 });
 
@@ -406,13 +416,9 @@ describe('утро и матрица', () => {
     ]);
     expect(second.some((row) => row.quiet)).toBe(false);
     expect(second.find((row) => row.name === 'Г')?.cell).toBe('помочь');
-    const text = morningLines({
-      tasks: [{ title: 'Бюджет', dueOn: '2026-12-13' }],
-      waiting: [],
-      quiet: ['А'],
-    });
-    expect(text.join('\n')).toContain('Бюджет');
-    expect(text.join('\n')).toContain('А');
+    expect(adviceTitle(first[0]!)).toBe('А — поговорить один на один');
+    expect(adviceTitle(second[0]!)).toBe('Г — помочь по существу');
+    expect(adviceTitle(second[1]!)).toBeNull();
     const late = overdueTasks(
       [
         { title: 'Сдать линию', owner: 'Пётр', dueOn: '2026-11-20', status: 'в работе' },
@@ -422,7 +428,7 @@ describe('утро и матрица', () => {
       '2026-11-27',
     );
     expect(late).toEqual([{ title: 'Сдать линию', owner: 'Пётр', dueOn: '2026-11-20', days: 7 }]);
-    expect(overdueLines(late).join('\n')).toContain('просрочена на 7 дн.');
+    expect(overdueLines(late).join('\n')).toContain('Пётр: Сдать линию, просрочено на 7 дней');
     const file = await readFile('data/synthetic/tasks.csv', 'utf8');
     const fromFile = file
       .trim()
@@ -433,8 +439,28 @@ describe('утро и матрица', () => {
         return { title: title ?? '', owner: owner ?? '', dueOn: dueOn ?? '', status: status ?? '' };
       });
     expect(overdueTasks(fromFile, '2026-11-27')).toEqual([]);
-    const morning = morningLines({ tasks: [], waiting: [], quiet: [], overdue: late });
-    expect(morning.join('\n')).toContain('Сдать линию');
+    const morning = renderMorning({
+      today: '2026-11-27',
+      waiting: [
+        { who: 'Ольга', what: 'Скидка 12%', days: 1 },
+        { who: 'Мария', what: 'Отпуск', days: 0 },
+      ],
+      plan: null,
+      returned: [{ who: 'Анна', what: 'Перенос встречи' }],
+      overdue: late,
+      todayMeetings: ['Планёрка'],
+      openItems: ['Кто ведёт понедельник'],
+      share: { onGoal: 360, total: 2070, percent: 17 },
+    });
+    // Решения, которые ждут руководителя, — первым блоком после заголовка.
+    expect(morning.split('\n\n')[1]).toBe('Ждут вашего решения:\n— Ольга: Скидка 12% (ждёт 1 день)\n— Мария: Отпуск (ждёт меньше дня)');
+    expect(morning).toContain('План на 27 ноября');
+    expect(morning).toContain('— Анна: Перенос встречи');
+    expect(morning).toContain('Сдать линию');
+    expect(morning).toContain('Встречи сегодня: Планёрка.');
+    expect(morning).toContain('Открытые вопросы прошлой встречи:\n— Кто ведёт понедельник');
+    expect(morning).toContain('17% (6 из 34,5 ч');
+    expect(morning).not.toContain('Матрица');
     expect(preparationMinutes(new Date('2026-11-27T08:00:00Z'), new Date('2026-11-27T08:00:20Z'))).toBe(0);
     expect(preparationWords(0)).toBe('Подготовка: меньше минуты');
     expect(preparationWords(null)).toBe('Время подготовки не записано');
@@ -584,7 +610,6 @@ describe('протокол', () => {
     });
     expect(text).toContain('План &lt;недели&gt;');
     expect(text).not.toContain('заглушка');
-    expect(morningOpenItems(['Кто ведёт понедельник'])).toContain('прошлого протокола');
     expect(parseProtocolCallback('p:approve:ab12cd34')).toBe('ab12cd34');
     expect(parseProtocolCallback('d:approve:ab12cd34')).toBeNull();
     const now = new Date('2026-11-26T12:00:00Z');
@@ -743,7 +768,8 @@ describe('главная T34', () => {
     expect(desk.work.some((item) => item.title.includes('Скидка 15%'))).toBe(true);
     expect(desk.work.filter((item) => item.title.includes('Скидка 15%'))).toHaveLength(1);
     expect(desk.work.some((item) => item.title.includes('Инга'))).toBe(false);
-    expect(desk.work.some((item) => item.title.includes('Кира: писем 0'))).toBe(true);
+    // Тихая проблема — одна карточка «Поговорите», дело из плана о том же человеке второй раз не показывается.
+    expect(desk.work.filter((item) => item.title.includes('Кира')).map((item) => item.kind)).toEqual(['talk']);
     expect(desk.done.some((line) => line.text.startsWith('Было 100% → стало'))).toBe(true);
     const pending = buildDesk({ ...input, accepted: false, rules: [], relief: { letters: 12, meetings: 4 } });
     expect(pending.work[0]?.kind).toBe('rules');

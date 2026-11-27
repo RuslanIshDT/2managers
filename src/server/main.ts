@@ -33,14 +33,14 @@ for (const row of leaderRows) {
 }
 
 const boss = await startBoss(connectionString, db);
-for (const name of ['focus-morning', 'focus-friday']) {
-  await boss.createQueue(name);
-  await boss.work(name, async () => {
-    await sendFocusAll(db);
-  });
-}
+// Утреннее сообщение — одно время для всех руководителей, 8:30 по Москве, раз в день (владелец 27.11.2026).
+await boss.createQueue('focus-morning');
+await boss.work('focus-morning', async () => {
+  await sendFocusAll(db);
+});
 await boss.schedule('focus-morning', '30 8 * * *', {}, { tz: 'Europe/Moscow' });
-await boss.schedule('focus-friday', '0 17 * * 5', {}, { tz: 'Europe/Moscow' });
+// Прежняя пятничная отправка в 17:00 слала копию утра; расписание лежит в базе pg-boss, поэтому снимается явно.
+await boss.unschedule('focus-friday');
 await boss.createQueue('inbox-poll');
 await boss.work('inbox-poll', async () => {
   let letters;

@@ -89,33 +89,13 @@ export function applyChoice(candidates: Candidate[], chosen: Choice[], names: st
   return { today, later: candidates.filter((row) => !used.has(row.id)).map((row) => row.title) };
 }
 
-export function renderPlan(input: {
-  plan: FocusPlan;
-  yesterday: string[];
-  todayMeetings: string[];
-  matrix: string[];
-  share: string;
-}): string {
-  const lines = ['Три дела на сегодня:'];
-  if (input.plan.today.length === 0) lines.push('— модель не выбрала ни одного дела из кандидатов');
-  input.plan.today.forEach((item, index) => {
-    lines.push(`${index + 1}. ${item.title} — цель «${item.goal}», ${item.minutes} мин. ${item.why}`);
-  });
-  lines.push('', `Не сегодня: ${input.plan.later.join('; ') || 'нет'}.`);
-  lines.push('', input.yesterday.length ? `Вчера: ${input.yesterday.join('; ')}.` : 'Вчера встреч в календаре не было.');
-  lines.push(input.todayMeetings.length ? `Сегодня в календаре: ${input.todayMeetings.join('; ')}.` : 'Сегодня в календаре встреч нет.');
-  lines.push('', 'Матрица отдела:', ...input.matrix);
-  lines.push('', input.share);
-  return lines.join('\n');
-}
-
 export async function chooseFocus(input: { purpose: string; profile: string; candidates: Candidate[]; names?: string[] }): Promise<FocusPlan> {
   const result = await callJson<unknown>({
     purpose: input.purpose,
     system: [
       'Ты дирижёр фокуса руководителя.',
       'Из кандидатов выбери не больше трёх дел с наибольшим эффектом на час его времени.',
-      'У каждого дела назови цель из профиля, оценку минут и почему эффект на час больше, чем у остальных.',
+      'У каждого дела назови цель из профиля, оценку минут и одним коротким предложением — почему эффект на час больше, чем у остальных.',
       'Бери только id из списка. Не выдумывай людей и дел.',
     ].join(' '),
     user: ['Профиль:', input.profile.trim(), '', 'Кандидаты:', JSON.stringify(input.candidates)].join('\n'),

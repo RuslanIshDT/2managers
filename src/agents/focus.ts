@@ -1,4 +1,4 @@
-// Утро руководителя и матрица отдела. Модель не вызывается, имена берутся из данных.
+// Утро руководителя и матрица отдела. Модель здесь не вызывается, имена берутся из данных.
 import { dateWords } from './scene.ts';
 export type MatrixCell = 'один_на_один' | 'помочь' | 'расширить' | 'не_трогать';
 
@@ -68,31 +68,72 @@ export function overdueTasks(
 }
 
 export function overdueLines(rows: { title: string; owner: string; days: number }[]): string[] {
-  if (!rows.length) return ['Просроченных задач исполнителей нет.'];
-  return ['Просроченные задачи:', ...rows.map((row) => `— ${row.owner}: ${row.title}, просрочена на ${row.days} дн.`)];
+  if (!rows.length) return ['Просроченных задач у сотрудников нет.'];
+  return ['Просрочено у сотрудников:', ...rows.map((row) => `— ${row.owner}: ${row.title}, просрочено на ${dayCount(row.days)}`)];
 }
 
-export function morningLines(input: {
-  tasks: { title: string; dueOn: string }[];
-  waiting: { who: string; summary: string }[];
-  quiet: string[];
-  overdue?: { title: string; owner: string; days: number }[];
-}): string[] {
-  const lines = ['Утро. Что действительно ваше:'];
-  if (input.tasks.length) {
-    for (const task of input.tasks) lines.push(`— ${task.title}, срок ${dateWords(task.dueOn)}`);
-  } else {
-    lines.push('— своих задач со сроком нет');
-  }
-  if (input.waiting.length) {
-    lines.push('Ждут вашего решения:');
-    for (const row of input.waiting) lines.push(`— ${row.who}: ${row.summary}`);
-  } else {
-    lines.push('Открытых решений, которые ждут вас, нет.');
-  }
-  if (input.quiet.length) lines.push(`Тихая проблема: ${input.quiet.join(', ')}.`);
-  if (input.overdue) lines.push(...overdueLines(input.overdue));
-  return lines;
+// Совет матрицы глаголом: так строка становится делом руководителя. «Не трогать» делом не бывает.
+export function adviceTitle(row: { name: string; cell: MatrixCell }): string | null {
+  if (row.cell === 'один_на_один') return `${row.name} — поговорить один на один`;
+  if (row.cell === 'помочь') return `${row.name} — помочь по существу`;
+  if (row.cell === 'расширить') return `${row.name} — расширить полномочия`;
+  return null;
+}
+
+export interface MorningInput {
+  today: string;
+  waiting: { who: string; what: string; days: number }[];
+  plan: { title: string; goal: string; minutes: number; why: string }[] | null;
+  returned: { who: string; what: string }[];
+  overdue: { title: string; owner: string; days: number }[];
+  todayMeetings: string[];
+  openItems: string[];
+  share: { onGoal: number; total: number; percent: number };
+}
+
+// Утреннее сообщение целиком: сначала решения, которые ждут руководителя, затем три дела и что сделано без него.
+export function renderMorning(input: MorningInput): string {
+  const blocks: string[][] = [[`План на ${dateWords(input.today)}`]];
+  blocks.push(
+    input.waiting.length
+      ? ['Ждут вашего решения:', ...input.waiting.map((row) => `— ${row.who}: ${row.what} (${waitWords(row.days)})`)]
+      : ['Решений, которые ждут вас, нет.'],
+  );
+  if (input.plan === null) blocks.push(['Три дела на сегодня модель выберет при отправке.']);
+  else if (!input.plan.length) blocks.push(['Три дела на сегодня: модель не выбрала ни одного.']);
+  else
+    blocks.push([
+      'Три дела на сегодня:',
+      ...input.plan.map((item, index) => `${index + 1}. ${item.title}. ${item.minutes} мин, цель «${item.goal}». ${item.why}`),
+    ]);
+  blocks.push(
+    input.returned.length
+      ? ['Помощник сам вернул людям на этой неделе, они решают это сами:', ...input.returned.map((row) => `— ${row.who}: ${row.what}`)]
+      : ['На этой неделе помощник никому письма не возвращал.'],
+  );
+  blocks.push(overdueLines(input.overdue));
+  blocks.push([input.todayMeetings.length ? `Встречи сегодня: ${input.todayMeetings.join('; ')}.` : 'Сегодня встреч в календаре нет.']);
+  if (input.openItems.length) blocks.push(['Открытые вопросы прошлой встречи:', ...input.openItems.map((item) => `— ${item}`)]);
+  blocks.push([
+    `Время встреч на ваши цели: ${input.share.percent}% (${hours(input.share.onGoal)} из ${hours(input.share.total)} ч по календарю).`,
+  ]);
+  return blocks.map((block) => block.join('\n')).join('\n\n');
+}
+
+function waitWords(days: number): string {
+  if (days < 1) return 'ждёт меньше дня';
+  return `ждёт ${dayCount(days)}`;
+}
+
+function dayCount(n: number): string {
+  const tail = n % 10;
+  const hundred = n % 100;
+  const word = tail === 1 && hundred !== 11 ? 'день' : tail >= 2 && tail <= 4 && (hundred < 12 || hundred > 14) ? 'дня' : 'дней';
+  return `${n} ${word}`;
+}
+
+function hours(minutes: number): string {
+  return (Math.round((minutes / 60) * 10) / 10).toLocaleString('ru-RU');
 }
 
 export function goalMinutes(

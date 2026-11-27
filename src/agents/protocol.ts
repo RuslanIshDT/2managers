@@ -118,11 +118,6 @@ export function preparationWords(minutes: number | null): string {
   return `Подготовка: ${minutes} мин`;
 }
 
-export function morningOpenItems(open: string[]): string {
-  if (!open.length) return '';
-  return ['', 'Открытые вопросы прошлого протокола:', ...open.map((item) => `— ${esc(item)}`)].join('\n');
-}
-
 export interface NextMeeting {
   uid: string;
   startsAt: string;
