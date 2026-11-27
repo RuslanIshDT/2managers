@@ -88,6 +88,7 @@ interface FocusScene {
   text: string;
   matrix: { name: string; basis: string; quiet: boolean; cell?: string }[];
   share: { percent: number; onGoal: number; total: number };
+  overdue?: string[];
 }
 
 interface MirrorScene {
@@ -109,7 +110,7 @@ interface Cabinet {
   mirror: MirrorScene;
   revisions: { id: string; category: string; instead: string }[];
   accuracy: { total: number; hit: number; calls: number; forced: number; misses: { pair: string; count: number }[] } | null;
-  protocol: { status: string; open: number } | null;
+  protocol: { status: string; open: number; preparation: string } | null;
   stubs: {
     tasks: { title: string; owner: string; due: string; status: string }[];
     meetings: { summary: string; starts: string }[];
@@ -570,6 +571,7 @@ export function App() {
         <Card className="mb-4">
           <h2 className="text-lg font-semibold">Задачи</h2>
           <p className="mb-3 text-sm text-[#5d6878]">Трекер не подключён. В списке задачи файла и задачи из утверждённого протокола. Разбор ниже считает помощник.</p>
+          {cabinet?.focus.overdue?.length ? <p className="mb-3 whitespace-pre-wrap text-sm">{cabinet.focus.overdue.join('\n')}</p> : null}
           <ul className="grid gap-2 text-sm">
             {(cabinet?.control.tasks ?? []).map((item) => (
               <li key={item.title}>
@@ -650,7 +652,7 @@ export function App() {
           </Button>
           <p className="mt-2 text-sm text-[#5d6878]">
             {cabinet?.protocol
-              ? `Протокол в Telegram: ${cabinet.protocol.status}. Открытых вопросов: ${cabinet.protocol.open}. После «Утвердить» письмо и приглашение уходят в тестовый ящик.`
+              ? `Протокол в Telegram: ${cabinet.protocol.status}. Открытых вопросов: ${cabinet.protocol.open}. ${cabinet.protocol.preparation}. После «Утвердить» письмо и приглашение уходят в тестовый ящик.`
               : 'Расшифровка читается с диска стенда и в репозиторий не входит.'}
           </p>
           <span className="mt-3 flex flex-wrap gap-2">
@@ -779,8 +781,9 @@ function Focus({ focus, pending, onSend }: { focus: FocusScene | undefined; pend
           <div className="mt-2 whitespace-pre-wrap">Не сегодня:{rest}</div>
         </details>
       ) : null}
+      {focus.overdue?.length ? <div className="mt-3 whitespace-pre-wrap text-sm">{focus.overdue.join('\n')}</div> : null}
       <p className="mt-2 text-sm text-[#5d6878]">
-        Расписание: 8:30 каждый день и пятница в 17:00, часовой пояс Москвы. Кнопка отправляет то же сообщение сейчас.
+        Расписание: 8:30 каждый день и пятница в 17:00, часовой пояс Москвы. Кнопка отправляет то же сообщение сейчас. Просрочка считается по сроку и сегодняшней дате.
       </p>
       <Button className="mt-3" type="button" variant="outline" onClick={onSend} disabled={pending}>
         {pending ? 'Отправка…' : 'Прислать сейчас'}
@@ -1333,6 +1336,11 @@ function kindLabel(kind: string): string {
   if (kind === 'вернуть') return 'Вернул';
   if (kind === 'повтор') return 'Повтор, не спрашиваю';
   if (kind === 'не_из_отдела') return 'Не из отдела';
+  if (kind === 'спросить_руководителя') return 'Спросить руководителя';
+  if (kind === 'делегировать') return 'Делегировать';
+  if (kind === 'в_сводку') return 'В сводку';
+  if (kind === 'игнорировать') return 'Игнорировать';
+  if (kind === 'авто') return 'По правилу';
   return kind;
 }
 

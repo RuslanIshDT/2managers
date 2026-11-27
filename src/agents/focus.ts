@@ -50,10 +50,32 @@ export function departmentMatrix(people: MatrixInput[]): MatrixRow[] {
   });
 }
 
+export function overdueTasks(
+  tasks: { title: string; owner: string; dueOn: string; status: string }[],
+  today: string,
+): { title: string; owner: string; dueOn: string; days: number }[] {
+  return tasks
+    .filter((task) => task.status !== 'сделана' && task.status !== 'закрыта')
+    .flatMap((task) => {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(task.dueOn) || task.dueOn >= today) return [];
+      const [year, month, day] = task.dueOn.split('-').map(Number);
+      const [nowYear, nowMonth, nowDay] = today.split('-').map(Number);
+      const days = Math.round((Date.UTC(nowYear, nowMonth - 1, nowDay) - Date.UTC(year, month - 1, day)) / 86_400_000);
+      return [{ title: task.title, owner: task.owner, dueOn: task.dueOn, days }];
+    })
+    .sort((a, b) => a.dueOn.localeCompare(b.dueOn) || a.title.localeCompare(b.title));
+}
+
+export function overdueLines(rows: { title: string; owner: string; days: number }[]): string[] {
+  if (!rows.length) return ['Просроченных задач исполнителей нет.'];
+  return ['Просроченные задачи:', ...rows.map((row) => `— ${row.owner}: ${row.title}, просрочена на ${row.days} дн.`)];
+}
+
 export function morningLines(input: {
   tasks: { title: string; dueOn: string }[];
   waiting: { who: string; summary: string }[];
   quiet: string[];
+  overdue?: { title: string; owner: string; days: number }[];
 }): string[] {
   const lines = ['Утро. Что действительно ваше:'];
   if (input.tasks.length) {
@@ -68,6 +90,7 @@ export function morningLines(input: {
     lines.push('Открытых решений, которые ждут вас, нет.');
   }
   if (input.quiet.length) lines.push(`Тихая проблема: ${input.quiet.join(', ')}.`);
+  if (input.overdue) lines.push(...overdueLines(input.overdue));
   return lines;
 }
 

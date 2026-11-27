@@ -5,7 +5,7 @@ import { z } from 'zod';
 import type { Db } from '../db/client.ts';
 import { emailEtalon, emails, leaders, mailActions } from '../db/schema.ts';
 import { callJson, withLlmScope, type JsonSchema } from '../llm.ts';
-import { chainKey, textSignals } from './k2.ts';
+import { chainKey, leaderMustConfirm, textSignals } from './k2.ts';
 
 export const MAIL_ACTIONS = ['спросить_руководителя', 'делегировать', 'в_сводку', 'игнорировать', 'авто'] as const;
 export type MailAction = (typeof MAIL_ACTIONS)[number];
@@ -32,7 +32,7 @@ const SYSTEM = [
 
 export function forceMailAction(text: string, boss: boolean, chosen: MailAction): { action: MailAction; forced: boolean } {
   const signal = textSignals(text).category;
-  const needsLeader = boss || signal === 'кадры' || signal === 'деньги';
+  const needsLeader = boss || (signal !== null && leaderMustConfirm(signal));
   if (needsLeader && chosen !== 'спросить_руководителя') return { action: 'спросить_руководителя', forced: true };
   return { action: chosen, forced: false };
 }

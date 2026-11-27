@@ -238,6 +238,8 @@ export const protocols = pgTable('protocols', {
   body: text('body').notNull(),
   openItems: jsonb('open_items').notNull(),
   status: text('status').notNull(),
+  transcriptAt: timestamp('transcript_at', { withTimezone: true }),
+  sentAt: timestamp('sent_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
 });
 

@@ -4,7 +4,7 @@ import type { Db } from '../db/client.ts';
 import { decisions, focusPlans, leaders, meetings, seriesKind, tasks } from '../db/schema.ts';
 import { departmentForLeader } from './k1.ts';
 import { chooseFocus, classifySeries, renderPlan, type Candidate, type FocusPlan } from './conductor.ts';
-import { departmentMatrix, goalMinutes, morningLines } from './focus.ts';
+import { departmentMatrix, goalMinutes, morningLines, overdueLines, overdueTasks } from './focus.ts';
 import { withLlmScope } from '../llm.ts';
 import { sendMessage } from '../telegram.ts';
 import { latestProtocol, morningOpenItems } from './protocol.ts';
@@ -13,7 +13,7 @@ export async function focusForLeader(db: Db, leaderId: string, leaderName: strin
   const scene = await sceneFor(db, leaderId, leaderName);
   const stored = await db.select().from(focusPlans).where(eq(focusPlans.leaderId, leaderId)).limit(1);
   const plan = stored[0]?.plan as { text?: string } | undefined;
-  return { matrix: scene.matrix, share: scene.share, text: plan?.text || scene.draft };
+  return { matrix: scene.matrix, share: scene.share, text: plan?.text || scene.draft, overdue: scene.overdue };
 }
 
 export async function sendFocus(db: Db, leaderId: string) {
@@ -26,13 +26,16 @@ export async function sendFocus(db: Db, leaderId: string) {
     () => chooseFocus({ purpose: `k4:${leaderId}`, profile: leader.profile, candidates: scene.candidates }),
   );
   await classifyNewSeries(db, leaderId);
-  const text = renderPlan({
-    plan,
-    yesterday: scene.yesterday,
-    todayMeetings: scene.todayMeetings,
-    matrix: scene.matrix.map((row) => `— ${row.name}: ${row.basis}`),
-    share: `Календарь на цели: ${scene.share.percent}% (${scene.share.onGoal} из ${scene.share.total} мин).`,
-  });
+  const text = [
+    renderPlan({
+      plan,
+      yesterday: scene.yesterday,
+      todayMeetings: scene.todayMeetings,
+      matrix: scene.matrix.map((row) => `— ${row.name}: ${row.basis}`),
+      share: `Календарь на цели: ${scene.share.percent}% (${scene.share.onGoal} из ${scene.share.total} мин).`,
+    }),
+    scene.overdue.join('\n'),
+  ].join('\n\n');
   await db
     .insert(focusPlans)
     .values({ leaderId, plan: { text, today: plan.today, later: plan.later }, createdAt: new Date() })
@@ -64,7 +67,14 @@ async function sceneFor(db: Db, leaderId: string, leaderName: string) {
       lagging: person.kpis.some((kpi) => kpi.weeks.some((week) => week.status === 'отстаёт')),
     })),
   );
+  const today = moscowDay(new Date());
   const ownTasks = taskRows.filter((row) => row.ownerName === leaderName);
+  const overdue = overdueTasks(
+    taskRows
+      .filter((row) => row.ownerName !== leaderName)
+      .map((row) => ({ title: row.title, owner: row.ownerName, dueOn: row.dueOn, status: row.status })),
+    today,
+  );
   const waiting = decisionRows.filter((row) => row.status === 'ждёт');
   const candidates: Candidate[] = [
     ...ownTasks.map((row) => ({
@@ -98,7 +108,6 @@ async function sceneFor(db: Db, leaderId: string, leaderName: string) {
       goal: department.people.find((person) => person.name === row.name)?.goal ?? '',
     })),
   ];
-  const today = moscowDay(new Date());
   const yesterday = shiftDay(today, -1);
   const share = goalMinutes(
     meetingRows.map((row) => ({ minutes: row.minutes, summary: row.summary })),
@@ -123,6 +132,7 @@ async function sceneFor(db: Db, leaderId: string, leaderName: string) {
     share,
     candidates,
     draft,
+    overdue: overdueLines(overdue),
     yesterday: titlesOn(meetingRows, yesterday),
     todayMeetings: titlesOn(meetingRows, today),
   };

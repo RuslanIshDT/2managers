@@ -2,12 +2,13 @@
 import { randomUUID } from 'node:crypto';
 import { and, asc, count, desc, eq, ne } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
-import { authorities, decisions, kpis, leaders, mailIn, people, revisions, tasks, verdicts } from '../db/schema.ts';
+import { authorities, decisions, kpis, leaders, mailActions, mailIn, people, revisions, tasks, verdicts } from '../db/schema.ts';
 import { mailConfig, sendMail, type MailboxLetter } from '../mail.ts';
 import { sendDecisionCard } from '../telegram.ts';
 import { staffFromVerdict } from './dependence.ts';
 import { kpiStatus, personAddresses } from './k1.ts';
-import { cardText, chainKey, discountLimit, enforce, judgeLetter, letterPrompt, type ModelVerdict, type Ruled } from './k2.ts';
+import { forceMailAction, judgeMail } from './accuracy.ts';
+import { cardText, chainKey, discountLimit, enforce, judgeLetter, letterPrompt, textSignals, type ModelVerdict, type Ruled } from './k2.ts';
 import { withLlmScope } from '../llm.ts';
 import { letterHits } from './replay.ts';
 import { applyRevision, revisionPrompt } from './revisions.ts';
@@ -100,6 +101,19 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
     const boss = person?.role === 'руководитель руководителя';
     if (!person || (person.role !== 'подчинённый' && !boss)) {
       if (letter.marked !== false) continue;
+      if (calls >= modelBudget) {
+        deferred += 1;
+        continue;
+      }
+      const letterText = `От: ${letter.fromName}\nТема: ${letter.subject}\n${letter.body}`;
+      const chosen = await withLlmScope(
+        { agent: 'accuracy', leaderId, operationId: `mail:${letter.messageId}`.slice(0, 180), title: letter.subject.slice(0, 180) || 'Разбор письма' },
+        () => judgeMail({ purpose: `accuracy:${letter.id}`, profile: leaderRow.profile, letter: letterText }),
+      );
+      calls += 1;
+      const ruled = forceMailAction(letterText, false, chosen);
+      const signal = textSignals(letterText).category ?? 'иное';
+      const key = chainKey(letter.fromEmail, letter.subject);
       await db.insert(mailIn).values({
         leaderId,
         messageId: letter.messageId,
@@ -109,18 +123,18 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
         fromEmail: letter.fromEmail,
         subject: letter.subject,
         body: letter.body,
-        chainKey: chainKey(letter.fromEmail, letter.subject),
+        chainKey: key,
       });
       await db.insert(verdicts).values({
         id: `v-${letter.messageId}`.slice(0, 120),
         leaderId,
         messageId: letter.messageId,
-        chainKey: chainKey(letter.fromEmail, letter.subject),
-        kind: 'не_из_отдела',
-        category: 'иное',
-        summary: `${letter.fromName}: ${letter.subject}`,
+        chainKey: key,
+        kind: ruled.action,
+        category: signal,
+        summary: `${letter.fromName}: ${letter.subject}. Действие: ${actionWords(ruled.action)}`,
         draft: '',
-        basis: 'Адрес не найден среди подчинённых этого руководителя',
+        basis: ruled.forced ? 'Категория N1: письмо не уходит без подтверждения руководителя' : 'Тот же разбор действия, что для точности писем. Адрес не из отдела',
         context: '',
         recommendation: '',
         authorityOffer: '',
@@ -128,8 +142,60 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
         ifNot: '',
         createdAt: new Date(),
       });
+      await db
+        .insert(mailActions)
+        .values({ leaderId, chainKey: key, action: ruled.action, forced: ruled.forced, createdAt: new Date() })
+        .onConflictDoUpdate({ target: [mailActions.leaderId, mailActions.chainKey], set: { action: ruled.action, forced: ruled.forced } });
+      if (ruled.action === 'спросить_руководителя') {
+        if (!leaderRow.telegramChatId) throw new Error('Telegram-чат руководителя не привязан');
+        await db.insert(decisions).values({
+          id: letter.id,
+          leaderId,
+          chainKey: key,
+          status: 'ждёт',
+          summary: letter.subject,
+          draft: '',
+          replyTo: letter.fromEmail,
+          replyName: letter.fromName,
+          subject: letter.subject,
+          awaitingEdit: false,
+          createdAt: new Date(),
+        });
+        try {
+          await sendDecisionCard(
+            cardText({
+              who: `${letter.fromName}: ${letter.subject}`,
+              вывод: 'Письмо не из отдела и требует вашего подтверждения',
+              рекомендация: 'Подтвердите, если разбираете его сами',
+              основание: 'Категория N1: без подтверждения письмо никуда не уходит',
+              риски: '',
+              если_не_решить: 'Письмо останется без ответа',
+              контекст: '',
+              draft: '',
+            }),
+            letter.id,
+            leaderRow.telegramChatId,
+          );
+        } catch (err) {
+          await db.delete(decisions).where(eq(decisions.id, letter.id));
+          throw err;
+        }
+        decisionRows.push({
+          id: letter.id,
+          leaderId,
+          chainKey: key,
+          status: 'ждёт',
+          summary: letter.subject,
+          draft: '',
+          replyTo: letter.fromEmail,
+          replyName: letter.fromName,
+          subject: letter.subject,
+          awaitingEdit: false,
+          createdAt: new Date(),
+        });
+      }
       seen.add(letter.messageId);
-      lines.push(`${letter.id}: не из отдела`);
+      lines.push(`${letter.id}: ${actionWords(ruled.action)}`);
       continue;
     }
     const key = chainKey(letter.fromEmail, letter.subject);
@@ -395,6 +461,14 @@ export async function deliverReply(name: string, email: string, subject: string,
     `Re: ${subject}`,
     `Кому: ${name} <${email}>\nАдрес подчинённого синтетический, поэтому письмо ушло в тестовый ящик.\n\n${draft}`,
   );
+}
+
+function actionWords(action: string): string {
+  if (action === 'спросить_руководителя') return 'спросить руководителя';
+  if (action === 'в_сводку') return 'в сводку';
+  if (action === 'делегировать') return 'делегировать';
+  if (action === 'игнорировать') return 'игнорировать';
+  return 'сделать по правилу';
 }
 
 function personBlock(

@@ -132,6 +132,7 @@ export function textSignals(text: string): { category: RequestCategory | null; d
   if (discount) return { category: 'деньги', discountPercent: Number(discount[1].replace(',', '.')) };
   if (/отпуск|оффер|увольн/i.test(text)) return { category: 'кадры', discountPercent: null };
   if (/\d[\d\s.,]*\s*(₽|руб|млн)/i.test(text)) return { category: 'деньги', discountPercent: null };
+  if (/обязательств/i.test(text) && /клиент/i.test(text)) return { category: 'обязательства_клиентам', discountPercent: null };
   return { category: null, discountPercent: null };
 }
 

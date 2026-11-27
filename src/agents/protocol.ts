@@ -92,7 +92,8 @@ export function protocolCallback(id: string): string {
 export async function protocolCard(db: Db, leaderId: string) {
   const row = await latestProtocol(db, leaderId);
   if (!row) return null;
-  return { status: row.status, open: row.open.length };
+  const minutes = row.transcriptAt && row.sentAt ? preparationMinutes(row.transcriptAt, row.sentAt) : null;
+  return { status: row.status, open: row.open.length, preparation: preparationWords(minutes) };
 }
 
 export async function latestProtocol(db: Db, leaderId: string) {
@@ -100,7 +101,17 @@ export async function latestProtocol(db: Db, leaderId: string) {
   const row = rows[0];
   if (!row) return null;
   const open = Array.isArray(row.openItems) ? row.openItems.filter((item): item is string => typeof item === 'string') : [];
-  return { id: row.id, source: row.source, body: row.body, open, status: row.status };
+  return { id: row.id, source: row.source, body: row.body, open, status: row.status, transcriptAt: row.transcriptAt, sentAt: row.sentAt };
+}
+
+export function preparationMinutes(arrived: Date, sent: Date): number {
+  return Math.max(0, Math.round((sent.getTime() - arrived.getTime()) / 60_000));
+}
+
+export function preparationWords(minutes: number | null): string {
+  if (minutes === null) return 'Время подготовки не записано';
+  if (minutes < 1) return 'Подготовка: меньше минуты';
+  return `Подготовка: ${minutes} мин`;
 }
 
 export function morningOpenItems(open: string[]): string {
@@ -263,6 +274,7 @@ export async function writeProtocol(db: Db, leaderId: string, dir = process.env.
   const [leader] = await db.select().from(leaders).where(eq(leaders.id, leaderId)).limit(1);
   if (!leader?.telegramChatId) throw new Error('Telegram-чат руководителя не привязан');
   const source = await smallestTranscript(dir);
+  const arrived = (await stat(join(dir, source.name))).mtime;
   const result = await withLlmScope(
     { agent: 'protocol', leaderId, operationId: `protocol:${leaderId}:${Date.now()}`, title: 'Протокол встречи' },
     () => callJson<unknown>({
@@ -300,10 +312,13 @@ export async function writeProtocol(db: Db, leaderId: string, dir = process.env.
     body,
     openItems: draft.open,
     status: 'ждёт',
+    transcriptAt: arrived,
     createdAt: new Date(),
   });
   await sendMessage(body, leader.telegramChatId, {
     reply_markup: { inline_keyboard: [[{ text: 'Утвердить', callback_data: protocolCallback(id) }]] },
   });
+  const sentAt = new Date();
+  await db.update(protocols).set({ sentAt }).where(eq(protocols.id, id));
   return { id };
 }
