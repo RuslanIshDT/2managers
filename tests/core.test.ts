@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { costView, moscowStart, type OperationRow } from '../src/agents/cost.ts';
 import { modelsWithSchema, priceWords } from '../src/agents/models.ts';
 import { sendTrace } from '../src/langfuse.ts';
+import { eventFile, issueDraft, meetingStart, readEvents, relatedSubjects, standEvent, taskUnique } from '../src/agents/materials.ts';
 import { followUpStart, morningOpenItems, parseProtocolCallback, preparationMinutes, preparationWords, protocolRelease, renderProtocol } from '../src/agents/protocol.ts';
 import { providerHeaders } from '../src/llm.ts';
 import { hashPassword, hashToken, verifyPassword } from '../src/auth.ts';
@@ -863,6 +864,28 @@ describe('модели и стоимость T35', () => {
     delete process.env.LANGFUSE_HOST;
     delete process.env.LANGFUSE_PUBLIC_KEY;
     delete process.env.LANGFUSE_SECRET_KEY;
+  });
+});
+
+describe('материалы в трекере и календаре', () => {
+  it('связывает задачу с письмом и собирает событие', () => {
+    expect(taskUnique('leader', 'task-1')).toBe('ecompras-leader-task-1');
+    expect(relatedSubjects('Собрать отчёт по бюджету', ['Бюджет декабря', 'Другое письмо'])).toEqual(['Бюджет декабря']);
+    const draft = issueDraft(
+      { title: 'Собрать отчёт по бюджету', ownerName: 'Анна', dueOn: '2026-12-01', status: 'в работе', source: 'файл' },
+      ['Бюджет декабря'],
+    );
+    expect(draft.summary).toContain('бюджету');
+    expect(draft.description).toContain('Анна');
+    expect(draft.description).toContain('Бюджет декабря');
+    expect(draft.deadline).toBe('2026-12-01');
+    const start = meetingStart('2026-12-07T10:00');
+    expect(start.toISOString()).toBe('2026-12-07T07:00:00.000Z');
+    const ics = standEvent({ uid: 'meet-1', start, minutes: 30, summary: 'План', description: 'Рядом в почте: Бюджет декабря.' });
+    expect(ics).toContain('DTSTART;TZID=Europe/Moscow:20261207T100000');
+    expect(ics).toContain('SUMMARY:План');
+    expect(readEvents(ics)).toEqual([{ uid: 'meet-1', summary: 'План', start: '20261207T100000' }]);
+    expect(eventFile('meet-1')).toMatch(/\.ics$/);
   });
 });
 

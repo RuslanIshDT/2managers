@@ -17,6 +17,7 @@ import { controlOf, withLeader } from '../agents/control.ts';
 import { approveProtocol, parseProtocolCallback, protocolCard } from '../agents/protocol.ts';
 import { costView, type OperationRow } from '../agents/cost.ts';
 import { deskForLeader } from '../agents/desk.ts';
+import { standView } from '../agents/stand-sync.ts';
 import { catalog, isAgentId, MODEL_AGENTS, priceWords } from '../agents/models.ts';
 import { applyClick, applyLeaderAction, hideMailbox, pullInbox, requestFeed, saveEditText } from '../agents/intake.ts';
 import { acceptWeek, acceptWeekByChat, weekScene } from '../agents/week.ts';
@@ -229,6 +230,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       }))), taskRows),
       revisions: await deps.db.select().from(revisions).where(eq(revisions.leaderId, leader.id)).orderBy(asc(revisions.createdAt)),
       lastAudit: last[0] ? { status: last[0].status, mode: last[0].reason, at: last[0].startedAt.toISOString() } : null,
+      stand: await standView(leader.id),
     };
   });
 

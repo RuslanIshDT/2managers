@@ -123,6 +123,10 @@ interface Cabinet {
     signals: { name: string; kpi: string; early: boolean; text: string }[];
   };
   lastAudit: { status: string; mode: string; at: string } | null;
+  stand?: {
+    tracker: { ok: boolean; detail: string; issues: { key: string; summary: string; deadline: string }[] };
+    calendar: { ok: boolean; detail: string; events: { summary: string; start: string }[] };
+  };
 }
 
 type Section = 'home' | 'department' | 'flow' | 'feed' | 'helper' | 'settings' | 'tasks' | 'calendar' | 'mailing';
@@ -570,7 +574,21 @@ export function App() {
       {section === 'tasks' ? (
         <Card className="mb-4">
           <h2 className="text-lg font-semibold">Задачи</h2>
-          <p className="mb-3 text-sm text-[#5d6878]">Трекер не подключён. В списке задачи файла и задачи из утверждённого протокола. Разбор ниже считает помощник.</p>
+          <p className="mb-3 text-sm text-[#5d6878]">
+            {cabinet?.stand?.tracker.ok
+              ? `${cabinet.stand.tracker.detail}. Это те же задачи, что в материалах и в протоколе. В описании — исполнитель и письмо, если тема совпала. Разбор ниже считает помощник.`
+              : `${cabinet?.stand?.tracker.detail ?? 'Трекер не подключён'}. Ниже задачи из базы: файл материалов и утверждённый протокол.`}
+          </p>
+          {cabinet?.stand?.tracker.ok ? (
+            <ul className="mb-4 grid gap-2 text-sm">
+              {cabinet.stand.tracker.issues.map((item) => (
+                <li key={item.key || item.summary}>
+                  <b>{item.summary}</b>
+                  {item.deadline ? <span className="text-[#5d6878]"> — {whenWords(item.deadline)}</span> : null}
+                </li>
+              ))}
+            </ul>
+          ) : null}
           {cabinet?.focus.overdue?.length ? <p className="mb-3 whitespace-pre-wrap text-sm">{cabinet.focus.overdue.join('\n')}</p> : null}
           <ul className="grid gap-2 text-sm">
             {(cabinet?.control.tasks ?? []).map((item) => (
@@ -583,11 +601,25 @@ export function App() {
           </ul>
         </Card>
       ) : null}
-      {section === 'calendar' ? <StubList title="Календарь" note="Заглушка. Календарь не подключён, встречи не создаются и не переносятся." rows={(cabinet?.stubs.meetings ?? []).map((item) => `${whenWords(item.starts)} — ${item.summary}`)} /> : null}
+      {section === 'calendar' ? (
+        <StubList
+          title="Календарь"
+          note={
+            cabinet?.stand?.calendar.ok
+              ? `${cabinet.stand.calendar.detail}. Это те же встречи, что в материалах, и встреча утверждённого протокола. «Отпустить» серию событие не удаляет.`
+              : `${cabinet?.stand?.calendar.detail ?? 'Календарь не подключён'}. Ниже встречи из базы.`
+          }
+          rows={
+            cabinet?.stand?.calendar.ok
+              ? cabinet.stand.calendar.events.map((item) => `${whenWords(item.start)} — ${item.summary}`)
+              : (cabinet?.stubs.meetings ?? []).map((item) => `${whenWords(item.starts)} — ${item.summary}`)
+          }
+        />
+      ) : null}
       {section === 'mailing' ? (
         <StubList
           title="Рассылка протокола"
-          note="После «Утвердить» письмо с протоколом и приглашением .ics уходит в тестовый ящик. Настоящие адресаты названы в тексте. Календарь не подключён."
+          note="После «Утвердить» письмо с протоколом и приглашением .ics уходит в тестовый ящик. Настоящие адресаты названы в тексте. Встреча также встаёт в календарь «Стенд», задачи — в Трекер."
           rows={['Задачи из протокола записываются в базу и видны на экране задач.']}
         />
       ) : null}
@@ -657,10 +689,10 @@ export function App() {
           </p>
           <span className="mt-3 flex flex-wrap gap-2">
             <Button type="button" variant="outline" onClick={() => setSection('tasks')}>
-              Задачи, заглушка
+              Задачи
             </Button>
             <Button type="button" variant="outline" onClick={() => setSection('calendar')}>
-              Календарь, заглушка
+              Календарь
             </Button>
             <Button type="button" variant="outline" onClick={() => setSection('mailing')}>
               Рассылка протокола
@@ -728,7 +760,7 @@ function Mirror({
   return (
     <Card className="mb-4">
       <h2 className="mb-2 text-lg font-semibold">Серии встреч</h2>
-      <p className="mb-2 text-sm text-[#5d6878]">Календарь не подключён: «продлить» и «отпустить» только записывают решение.</p>
+      <p className="mb-2 text-sm text-[#5d6878]">«Продлить» и «отпустить» записывают решение. Событие в календаре «Стенд» от этого не удаляется.</p>
       <ul className="mt-4 grid gap-3 text-sm">
         {mirror.series.map((item) => (
           <li key={item.title}>

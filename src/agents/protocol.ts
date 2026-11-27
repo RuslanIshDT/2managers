@@ -1,5 +1,5 @@
 // Протокол по расшифровке. Текст встречи в репозиторий не входит: его читает стенд с диска.
-// После «Утвердить» протокол уходит в тестовый ящик, задачи пишутся в базу, встреча — файлом .ics.
+// После «Утвердить» протокол уходит в тестовый ящик, задачи пишутся в базу и в Трекер, встреча — в календарь «Стенд» и файлом .ics.
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -10,6 +10,9 @@ import { leaders, people, protocols, tasks } from '../db/schema.ts';
 import { callJson, withLlmScope, type JsonSchema } from '../llm.ts';
 import { mailConfig, sendMail } from '../mail.ts';
 import { sendMessage } from '../telegram.ts';
+import { calendarConfig } from '../yandex/calendar.ts';
+import { publishApproved } from '../yandex/publish.ts';
+import { trackerConfig } from '../yandex/tracker.ts';
 
 const MAX_TRANSCRIPT = 12_000;
 
@@ -172,12 +175,51 @@ export async function approveProtocol(db: Db, id: string, chatId: string): Promi
       })
       .onConflictDoNothing();
   }
-  await sendMail(mailbox.user, release.subject, release.text, [
+  let text = release.text;
+  let placed = false;
+  if (calendarConfig()) {
+    try {
+      await publishApproved(leader.id, [], {
+        uid: `${leader.id}:protocol-${row.id}`,
+        ics: release.ics.replace(/^UID:.*$/m, `UID:${leader.id}:protocol-${row.id}@ecompras`),
+      });
+      placed = true;
+    } catch {
+      placed = false;
+    }
+  }
+  if (placed) {
+    text = text.replace(
+      'Календарь не подключён: приглашение на встречу во вложении.',
+      'Приглашение на встречу во вложении. Та же встреча стоит в календаре «Стенд».',
+    );
+  }
+  await sendMail(mailbox.user, release.subject, text, [
     { filename: 'vstrecha.ics', content: release.ics, contentType: 'text/calendar; charset=utf-8; method=REQUEST' },
   ]);
   await db.update(protocols).set({ status: 'утверждён' }).where(eq(protocols.id, row.id));
+  let trackerNote = '';
+  if (trackerConfig()) {
+    try {
+      const note = await publishApproved(
+        leader.id,
+        release.tasks.map((task, index) => ({
+          externalId: `protocol-${row.id}-${index + 1}`,
+          title: task.title,
+          ownerName: task.owner,
+          dueOn: task.dueOn,
+          status: 'в работе',
+          source: 'протокол',
+        })),
+        null,
+      );
+      trackerNote = ` ${note}`;
+    } catch {
+      trackerNote = ' Трекер задачи не принял.';
+    }
+  }
   const count = release.tasks.length;
-  return `Протокол утверждён. Письмо с приглашением ушло в тестовый ящик, задач записано: ${count}.`;
+  return `Протокол утверждён. Письмо с приглашением ушло в тестовый ящик, задач записано: ${count}.${trackerNote}`;
 }
 
 function participantNames(body: string): string[] {
