@@ -115,8 +115,8 @@ export function renderMorning(input: MorningInput): string {
     ]);
   blocks.push(
     input.returned.length
-      ? ['Помощник сам вернул людям на этой неделе, они решают это сами:', ...input.returned.map((row) => `— ${row.who}: ${row.what}`)]
-      : ['На этой неделе помощник никому письма не возвращал.'],
+      ? ['Помощник ответил сам на этой неделе — сотрудники решают это без вас:', ...input.returned.map((row) => `— ${row.who}: ${row.what}`)]
+      : ['На этой неделе помощник сам ни на одно письмо не отвечал.'],
   );
   blocks.push(overdueLines(input.overdue));
   blocks.push([input.todayMeetings.length ? `Встречи сегодня: ${input.todayMeetings.join('; ')}.` : 'Сегодня встреч в календаре нет.']);
