@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { costView, moscowStart, type OperationRow } from '../src/agents/cost.ts';
 import { modelsWithSchema, priceWords } from '../src/agents/models.ts';
 import { sendTrace } from '../src/langfuse.ts';
+import { providerHeaders } from '../src/llm.ts';
 import { hashPassword, hashToken, verifyPassword } from '../src/auth.ts';
 import { checkDepartment, readDepartment } from '../src/agents/k1.ts';
 import { controlOf, kpiOutlook, reviewTasks, withLeader, type PersonGoal } from '../src/agents/control.ts';
@@ -793,6 +794,31 @@ describe('модели и стоимость T35', () => {
     expect(folded.recent).toHaveLength(1);
     expect(folded.recent[0]?.groupWords).toBe('3 разбора');
     expect(folded.recent[0]?.price).toBe('$0.08');
+  });
+
+  it('запрос подписан ecompras, след несёт окружение, метку и цену', async () => {
+    expect(providerHeaders('secret')['HTTP-Referer']).toBe('ecompras');
+    expect(providerHeaders('secret')['X-Title']).toBe('ecompras');
+    expect(providerHeaders('secret').authorization).toBe('Bearer secret');
+    process.env.LANGFUSE_HOST = 'http://langfuse.invalid';
+    process.env.LANGFUSE_PUBLIC_KEY = 'pk';
+    process.env.LANGFUSE_SECRET_KEY = 'sk';
+    let payload: { batch: { type: string; body: Record<string, unknown> }[] } | undefined;
+    const id = await sendTrace({ ...trace(), costUsd: 0.0052 }, async (_url, init) => {
+      payload = JSON.parse(String(init?.body));
+      return new Response('{}', { status: 200 });
+    });
+    expect(id).not.toBe('');
+    const traceEvent = payload?.batch.find((event) => event.type === 'trace-create');
+    const generation = payload?.batch.find((event) => event.type === 'generation-create');
+    expect(traceEvent?.body.environment).toBe('ecompras');
+    expect(traceEvent?.body.tags).toEqual(['ecompras']);
+    expect(generation?.body.environment).toBe('ecompras');
+    expect(generation?.body.costDetails).toEqual({ total: 0.0052 });
+    expect((generation?.body.usage as { totalCost?: number } | undefined)?.totalCost).toBe(0.0052);
+    delete process.env.LANGFUSE_HOST;
+    delete process.env.LANGFUSE_PUBLIC_KEY;
+    delete process.env.LANGFUSE_SECRET_KEY;
   });
 
   it('выключенный Langfuse не роняет вызов', async () => {

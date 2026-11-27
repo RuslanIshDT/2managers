@@ -3,7 +3,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { appendFile, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { sendTrace } from './langfuse.ts';
+import { APP_MARK, sendTrace } from './langfuse.ts';
 
 export type JsonSchema = Record<string, unknown>;
 
@@ -60,6 +60,15 @@ export function costFromUsage(usage: { cost?: unknown } | undefined): number | n
 
 const DEFAULT_MODEL = 'anthropic/claude-sonnet-5.5';
 
+export function providerHeaders(apiKey: string): Record<string, string> {
+  return {
+    'content-type': 'application/json',
+    authorization: `Bearer ${apiKey}`,
+    'HTTP-Referer': APP_MARK,
+    'X-Title': APP_MARK,
+  };
+}
+
 export function llmConfig() {
   const baseUrl = process.env.LLM_BASE_URL;
   const apiKey = process.env.LLM_API_KEY;
@@ -79,7 +88,7 @@ export async function callJson<T>(call: LlmCall, attempt = 1): Promise<LlmResult
   const started = Date.now();
   const res = await fetch(`${cfg.baseUrl}/chat/completions`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${cfg.apiKey}` },
+    headers: providerHeaders(cfg.apiKey),
     body: JSON.stringify({
       model,
       temperature: 0,

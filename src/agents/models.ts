@@ -1,5 +1,5 @@
 // Каталог моделей и выбор на агента. Имена моделей приходят из ответа провайдера.
-import { llmConfig } from '../llm.ts';
+import { llmConfig, providerHeaders } from '../llm.ts';
 export const MODEL_AGENTS = [
   { id: 'k2', name: 'Проверка полномочий', unit: 'разбор одного письма' },
   { id: 'k5', name: 'Аудит потока', unit: 'аудит недели' },
@@ -79,7 +79,7 @@ export async function catalog(): Promise<{ models: CatalogModel[]; error: string
   try {
     const cfg = llmConfig();
     const res = await fetch(`${cfg.baseUrl}/models`, {
-      headers: { authorization: `Bearer ${cfg.apiKey}` },
+      headers: providerHeaders(cfg.apiKey),
       signal: AbortSignal.timeout(15_000),
     });
     if (!res.ok) error = `Каталог ответил ${res.status}`;

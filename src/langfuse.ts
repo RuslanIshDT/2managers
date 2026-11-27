@@ -1,4 +1,5 @@
 // Трассировка вызова. Сбой Langfuse не мешает разбору: функция возвращает пустую строку.
+export const APP_MARK = 'ecompras';
 export interface TraceInput {
   agent: string;
   leaderId: string;
@@ -38,6 +39,8 @@ export async function sendTrace(input: TraceInput, post: typeof fetch = fetch): 
           id: traceId,
           name: input.title.slice(0, 200),
           userId: input.leaderId,
+          environment: APP_MARK,
+          tags: [APP_MARK],
           metadata: { agent: input.agent, operation: input.operationId },
         },
       },
@@ -52,6 +55,7 @@ export async function sendTrace(input: TraceInput, post: typeof fetch = fetch): 
           model: input.model,
           startTime: started,
           endTime: now.toISOString(),
+          environment: APP_MARK,
           input: input.input.slice(0, 100_000),
           output: input.output.slice(0, 100_000),
           usage: {
@@ -59,8 +63,10 @@ export async function sendTrace(input: TraceInput, post: typeof fetch = fetch): 
             output: input.tokensOut,
             total: input.tokensIn + input.tokensOut,
             unit: 'TOKENS',
+            totalCost: input.costUsd,
           },
-          metadata: { costUsd: input.costUsd },
+          ...(input.costUsd === null ? {} : { costDetails: { total: input.costUsd } }),
+          metadata: { agent: input.agent, operation: input.operationId },
         },
       },
     ],
