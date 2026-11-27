@@ -159,7 +159,7 @@ export async function classifyNewSeries(db: Db, leaderId: string, profile = '', 
   }
   const fresh = [...byTitle.entries()].map(([title, attendees]) => ({ title, attendees }));
   const classified = await withLlmScope(
-    { agent: 'k15', leaderId, operationId: `k15:${leaderId}:${Date.now()}`, title: 'Вид встреч' },
+    { agent: 'k15', leaderId, operationId: `k15:${leaderId}:${Date.now()}`, title: 'Тип встреч' },
     () => classifySeries({ purpose: `k4:series:${leaderId}`, series: fresh, profile }),
   );
   for (const row of classified) {
