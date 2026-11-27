@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { renderMorning, morningHtml } from '../src/agents/focus.ts';
 import { letterById, liveLetterId, parseMailboxSource } from '../src/mail.ts';
-import { oneOnOneBrief, type BriefInput, type BriefLetter } from '../src/agents/one-on-one.ts';
+import { blocksFromVerdicts, briefPackets, oneOnOneBrief, type BriefInput, type BriefLetter, type MeetingPacket, type TurnVerdict } from '../src/agents/one-on-one.ts';
 
 const people = [
   { name: 'Наталья Фомина', email: 'natalia@example.test' },
@@ -26,18 +26,8 @@ const options: BriefLetter = {
   body: 'Оба варианта запуска: первый и второй.',
 };
 
-const reply: BriefLetter = {
-  id: 'letter-reply',
-  at: '2026-12-16T11:00',
-  fromName: 'Наталья Фомина',
-  fromEmail: 'natalia@example.test',
-  toEmail: 'kirill@example.test',
-  subject: 'Re: Варианты запуска',
-  body: 'Берём второй.',
-};
-
-function brief(day: string, letters: BriefLetter[], tasks: BriefInput['tasks'] = [], protocols = [promise]): ReturnType<typeof oneOnOneBrief> {
-  return oneOnOneBrief({
+function input(day: string, letters: BriefLetter[], tasks: BriefInput['tasks'] = [], protocols = [promise]): BriefInput {
+  return {
     leaderName: 'Наталья Фомина',
     leaderEmail: 'natalia@example.test',
     leaderMailbox: 'boss@example.test',
@@ -48,60 +38,42 @@ function brief(day: string, letters: BriefLetter[], tasks: BriefInput['tasks'] =
     letters,
     protocols,
     tasks,
-  });
+  };
+}
+
+function waiting(packet: MeetingPacket, action: string, ids: string[]): TurnVerdict {
+  return { waiting: true, action, sourceIds: ids.length ? ids : packet.sources.map((source) => source.id) };
 }
 
 describe('контекст встречи один на один', () => {
-  it('пока варианты не пришли, пункта нет', () => {
-    expect(brief('2026-12-08', [])).toEqual([]);
+  it('собирает протокол и письма сотрудника и не берёт чужое письмо', () => {
+    const empty = briefPackets(input('2026-12-08', []));
+    expect(empty).toHaveLength(1);
+    expect(empty[0]?.sources.map((source) => source.id)).toEqual(['p:proto-1']);
+    const packet = briefPackets(input('2026-12-15', [options]))[0];
+    expect(packet?.sources.map((source) => source.id)).toEqual(['p:proto-1', 'm:letter-options']);
+    const other: BriefLetter = { ...options, id: 'other', subject: 'Отчёт по складу', body: 'Отчёт по складу готов.', fromName: 'Вера Носова', fromEmail: 'vera@example.test' };
+    expect(briefPackets(input('2026-12-15', [other]))[0]?.sources.some((source) => source.id === 'm:other')).toBe(false);
   });
 
-  it('после вариантов одна строка и два разных источника', () => {
-    const [block] = brief('2026-12-15', [options]);
-    expect(block.name).toBe('Кирилл Белов');
-    expect(block.lines).toHaveLength(1);
-    expect(block.lines[0].text).toContain('выбрать вариант');
-    expect(block.lines[0].text).toContain('Кирилл прислал 9 декабря');
-    expect(block.lines[0].sources.some((source) => source.label.startsWith('Протокол') && source.href.includes('#protocol-'))).toBe(true);
-    expect(block.lines[0].sources.some((source) => source.label.startsWith('Письмо') && source.href.includes('#letter-'))).toBe(true);
+  it('строка есть только если модель ждёт действия и назвала существующий источник', () => {
+    const [packet] = briefPackets(input('2026-12-15', [options]));
+    expect(packet).toBeTruthy();
+    const shown = blocksFromVerdicts([packet!], [waiting(packet!, 'Выбрать вариант запуска.', ['p:proto-1', 'm:letter-options'])]);
+    expect(shown[0]?.name).toBe('Кирилл Белов');
+    expect(shown[0]?.lines[0]?.text).toContain('вариант запуска');
+    expect(shown[0]?.lines[0]?.sources.some((source) => source.href.includes('#protocol-'))).toBe(true);
+    expect(shown[0]?.lines[0]?.sources.some((source) => source.href.includes('#letter-'))).toBe(true);
+    expect(blocksFromVerdicts([packet!], [{ waiting: false, action: 'нет', sourceIds: ['p:proto-1'] }])).toEqual([]);
+    expect(blocksFromVerdicts([packet!], [{ waiting: true, action: 'Выбрать', sourceIds: ['нет-такого'] }])).toEqual([]);
+    expect(blocksFromVerdicts([packet!], [{ waiting: true, action: '  ', sourceIds: ['p:proto-1'] }])).toEqual([]);
   });
 
-  it('чужое письмо и открытая задача сотрудника строку не создают', () => {
-    const other: BriefLetter = { ...options, subject: 'Отчёт по складу', body: 'Отчёт по складу готов.' };
-    expect(brief('2026-12-15', [other])).toEqual([]);
-    const [block] = brief('2026-12-15', [options], [{ key: 't-1', title: 'Запустить кампанию января', owner: 'Кирилл Белов', status: 'в работе' }]);
-    expect(block.lines).toHaveLength(1);
-    expect(block.lines[0].text).not.toContain('кампанию');
-  });
-
-  it('«ещё готовлю» оставляет ход за сотрудником, «приложены» и ссылка передают его', () => {
-    const later: BriefLetter = { ...options, id: 'later', body: 'Ещё готовлю, пришлю завтра.' };
-    expect(brief('2026-12-15', [later])).toEqual([]);
-    const attached: BriefLetter = { ...options, body: 'Оба варианта приложены.' };
-    expect(brief('2026-12-15', [attached])).toHaveLength(1);
-    const link: BriefLetter = { ...options, body: 'Варианты по ссылке https://files.example/launch' };
-    expect(brief('2026-12-15', [link])).toHaveLength(1);
-  });
-
-  it('обещание без ожидания материалов не ждёт письма', () => {
-    const own = {
-      id: 'proto-2',
-      at: '2026-12-07T09:00',
-      title: '1:1 с Кириллом Беловым',
-      steps: [{ owner: 'Наталья Фомина', task: 'Подписать регламент для Кирилла Белова' }],
-    };
-    const [block] = brief('2026-12-08', [], [], [own]);
-    expect(block.lines[0].text).toContain('подписать регламент');
-  });
-
-  it('«посмотрю завтра» не закрывает, «берём второй» и закрытая задача закрывают', () => {
-    const thanks: BriefLetter = { ...reply, id: 'thanks', body: 'Спасибо, посмотрю завтра.' };
-    expect(brief('2026-12-22', [options, thanks])).toHaveLength(1);
-    expect(brief('2026-12-22', [options, reply])).toEqual([]);
-    const sent: BriefLetter = { ...reply, id: 'sent', fromName: 'Ящик', fromEmail: 'boss@example.test' };
-    expect(brief('2026-12-22', [options, sent])).toEqual([]);
-    const closed = brief('2026-12-15', [options], [{ key: 'QUEUE-7', title: 'Выбрать вариант запуска', owner: 'Наталья Фомина', status: 'закрыта' }]);
-    expect(closed).toEqual([]);
+  it('открытая задача сотрудника попадает в источники, закрытая — нет', () => {
+    const open = briefPackets(input('2026-12-15', [options], [{ key: 't-1', title: 'Запустить кампанию января', owner: 'Кирилл Белов', status: 'в работе' }]));
+    expect(open[0]?.sources.some((source) => source.id === 't:t-1')).toBe(true);
+    const closed = briefPackets(input('2026-12-15', [options], [{ key: 'QUEUE-7', title: 'Выбрать вариант запуска', owner: 'Наталья Фомина', status: 'закрыта' }]));
+    expect(closed[0]?.sources.some((source) => source.id.startsWith('t:'))).toBe(false);
   });
 
   it('письмо из отправленных находится по тому же номеру, что в ссылке', () => {
@@ -114,15 +86,17 @@ describe('контекст встречи один на один', () => {
         'Date: Tue, 16 Dec 2026 11:00:00 +0300',
         `Message-ID: ${messageId}`,
         '',
-        'Берём второй.',
+        'Делаем по второму.',
       ].join('\n'),
     );
     expect(parsed?.id).toBe(liveLetterId(messageId));
-    expect(letterById(parsed ? [parsed] : [], parsed?.id ?? '')?.body).toContain('Берём второй');
+    expect(letterById(parsed ? [parsed] : [], parsed?.id ?? '')?.body).toContain('Делаем по второму');
     expect(letterById([], messageId)).toBeNull();
   });
 
   it('блок стоит рядом со встречей и пропадает, когда пунктов нет', () => {
+    const [packet] = briefPackets(input('2026-12-15', [options]));
+    const oneOnOne = blocksFromVerdicts([packet!], [waiting(packet!, 'Выбрать вариант запуска.', [])]);
     const morning = {
       today: '2026-12-15',
       waiting: [],
@@ -133,7 +107,7 @@ describe('контекст встречи один на один', () => {
       todayMeetings: ['09:00 1:1 с Кириллом Беловым'],
       questions: [],
       share: { onGoal: 0, total: 0, percent: 0 },
-      oneOnOne: brief('2026-12-15', [options]),
+      oneOnOne,
     };
     const text = renderMorning(morning);
     expect(text).toMatch(/Встречи сегодня:.*\n\nЧто Кирилл Белов ждёт от вас:/s);
@@ -142,3 +116,35 @@ describe('контекст встречи один на один', () => {
     expect(renderMorning({ ...morning, oneOnOne: [] })).not.toContain('ждёт от вас');
   });
 });
+
+const live = process.env.ONE_ON_ONE_LIVE ? it : it.skip;
+
+live('модель отличает переданный ход, обещание прислать позже и закрытый вопрос', async () => {
+  const cases: { body: string; waiting: boolean; letters?: BriefLetter[] }[] = [
+    { body: 'Оба варианта запуска: первый и второй.', waiting: true },
+    { body: 'Ещё готовлю, пришлю завтра.', waiting: false },
+    { body: 'Оба варианта приложены.', waiting: true },
+    { body: 'Варианты по ссылке https://files.example/launch', waiting: true },
+    { body: 'Вот два макета, созвонимся завтра.', waiting: true },
+    { body: 'Скину варианты к вечеру.', waiting: false },
+  ];
+  for (const item of cases) {
+    const letter = { ...options, body: item.body };
+    const blocks = await oneOnOneBrief(input('2026-12-15', item.letters ?? [letter]));
+    expect(blocks.length > 0, item.body).toBe(item.waiting);
+  }
+  const later: BriefLetter = {
+    id: 'letter-reply',
+    at: '2026-12-16T11:00',
+    fromName: 'Наталья Фомина',
+    fromEmail: 'natalia@example.test',
+    toEmail: 'kirill@example.test',
+    subject: 'Re: Варианты запуска',
+    body: 'Делаем по второму.',
+  };
+  const closed = await oneOnOneBrief(input('2026-12-22', [options, later]));
+  expect(closed).toEqual([]);
+  const thanks: BriefLetter = { ...later, id: 'thanks', body: 'Спасибо, посмотрю завтра.' };
+  const open = await oneOnOneBrief(input('2026-12-22', [options, thanks]));
+  expect(open.length).toBeGreaterThan(0);
+}, 120_000);

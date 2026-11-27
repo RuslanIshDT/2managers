@@ -17,7 +17,9 @@ import { accuracyView } from '../agents/accuracy.ts';
 import { controlOf, withLeader } from '../agents/control.ts';
 import { approveProtocol, askProtocolEdit, chooseProtocolScope, parseProtocolCallback, protocolCard, rejectProtocol, reviseProtocol, saveProtocolEdit, scopeProtocolByChat } from '../agents/protocol.ts';
 import { costView, type OperationRow } from '../agents/cost.ts';
+import { confirmationPoints } from '../agents/confirm.ts';
 import { deskForLeader } from '../agents/desk.ts';
+import { interpretMorning, parseMorningStored, shapeWords, storeMorning } from '../agents/morning.ts';
 import { standView } from '../agents/stand-sync.ts';
 import { catalog, isAgentId, MODEL_AGENTS, priceWords } from '../agents/models.ts';
 import { applyClick, applyLeaderAction, hideMailbox, pullInbox, requestFeed, saveEditText, saveLeaderEdit } from '../agents/intake.ts';
@@ -66,6 +68,22 @@ export interface AppDeps {
   boss: PgBoss;
   standOrigin?: string;
   distDir?: string;
+}
+
+function confirmationNote(profile: string): string {
+  if (confirmationPoints(profile).length) return '';
+  return 'Правила подтверждения не заданы: обязательного подтверждения нет, руководителю уходит только то, что разбор письма сам отнёс к его решению.';
+}
+
+function revisionNote(understood: string): string {
+  const shape = parseMorningStored(understood);
+  return shape ? shapeWords(shape) : '';
+}
+
+async function morningUnderstood(leaderId: string, text: string): Promise<{ stored: string; note: string }> {
+  const result = await interpretMorning(leaderId, text);
+  if (!result.shape) return { stored: '', note: result.note };
+  return { stored: storeMorning(result), note: result.note };
 }
 
 export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
@@ -229,6 +247,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       name: leader.name,
       scene: sceneWords(leader.id),
       profile: hideMailbox(profileRow[0]?.profile ?? '', mailConfig()?.user ?? ''),
+      confirmation: confirmationNote(profileRow[0]?.profile ?? ''),
       linkCode: profileRow[0]?.linkCode ?? '',
       counts: {
         people: Number(peopleN[0]?.n ?? 0),
@@ -265,7 +284,10 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
           weeks: kpi.weeks.map((week) => ({ fact: week.fact, status: week.status })),
         })),
       }))), taskRows),
-      revisions: await deps.db.select().from(revisions).where(eq(revisions.leaderId, leader.id)).orderBy(asc(revisions.createdAt)),
+      revisions: (await deps.db.select().from(revisions).where(eq(revisions.leaderId, leader.id)).orderBy(asc(revisions.createdAt))).map((row) => ({
+        ...row,
+        note: revisionNote(row.understood),
+      })),
       acts: (await deps.db.select().from(leaderActs).where(eq(leaderActs.leaderId, leader.id)).orderBy(desc(leaderActs.at)).limit(30)).map((row) => ({
         id: row.id,
         subject: row.subject,
@@ -372,15 +394,18 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       .safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: 'Нужны область и текст правила' });
     const area = parsed.data.area ?? 'письма';
+    const understood = area === 'утро' ? await morningUnderstood(leader.id, parsed.data.instead) : { stored: '', note: '' };
+    if (area === 'утро' && !understood.stored) return reply.code(422).send({ error: understood.note });
     await deps.db.insert(revisions).values({
       id: randomUUID(),
       leaderId: leader.id,
       category: parsed.data.category ?? area,
       area,
       instead: parsed.data.instead,
+      understood: understood.stored,
       createdAt: new Date(),
     });
-    return { ok: true };
+    return { ok: true, note: understood.note };
   });
 
   app.post('/api/revisions/update', async (request, reply) => {
@@ -390,8 +415,10 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     if (!parsed.success) return reply.code(400).send({ error: 'Нужны правило и текст' });
     const [row] = await deps.db.select().from(revisions).where(eq(revisions.id, parsed.data.id)).limit(1);
     if (!row || row.leaderId !== leader.id) return reply.code(404).send({ error: 'Правило не найдено' });
-    await deps.db.update(revisions).set({ instead: parsed.data.instead }).where(eq(revisions.id, row.id));
-    return { ok: true };
+    const understood = row.area === 'утро' ? await morningUnderstood(leader.id, parsed.data.instead) : { stored: row.understood, note: '' };
+    if (row.area === 'утро' && !understood.stored) return reply.code(422).send({ error: understood.note });
+    await deps.db.update(revisions).set({ instead: parsed.data.instead, understood: understood.stored }).where(eq(revisions.id, row.id));
+    return { ok: true, note: understood.note };
   });
 
   app.post('/api/revisions/delete', async (request, reply) => {

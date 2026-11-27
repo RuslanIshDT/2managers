@@ -4,8 +4,9 @@ import { clockFor } from './scene.ts';
 import { eq } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
 import { authorities, decisions, emailEtalon, seriesKind, emails, flowReports, leaders, meetings, people, rules, verdicts } from '../db/schema.ts';
-import { readHistory, staffFromVerdict, type StaffCard } from './dependence.ts';
-import { leaderMustConfirm } from './k2.ts';
+import { staffFromVerdict, type StaffCard } from './dependence.ts';
+import { historyForLeader } from './trust.ts';
+import { confirmationPoints, leaderMustConfirm } from './confirm.ts';
 import {
   askShare,
   replayWeek,
@@ -17,12 +18,8 @@ import {
   type FlowRule,
 } from './replay.ts';
 
-async function historyOf(leaderId: string) {
-  try {
-    return await readHistory(`data/${leaderId}`);
-  } catch {
-    return [];
-  }
+async function historyOf(db: Db, leaderId: string) {
+  return historyForLeader(db, leaderId);
 }
 
 export async function listFlowRules(db: Db, leaderId: string): Promise<FlowRule[]> {
@@ -43,7 +40,7 @@ export async function listFlowRules(db: Db, leaderId: string): Promise<FlowRule[
 
 export async function weekScene(db: Db, leaderId: string) {
   const [history, ruleRows, verdictRows, decisionRows, letterRows, meetingRows] = await Promise.all([
-    historyOf(leaderId),
+    historyOf(db, leaderId),
     listFlowRules(db, leaderId),
     db.select().from(verdicts).where(eq(verdicts.leaderId, leaderId)),
     db.select().from(decisions).where(eq(decisions.leaderId, leaderId)),
@@ -133,10 +130,11 @@ async function closeReturned(
 }
 
 export async function acceptWeek(db: Db, leaderId: string) {
-  const [history, persons, pieces] = await Promise.all([historyOf(leaderId), db.select().from(people).where(eq(people.leaderId, leaderId)), readPieces(db, leaderId)]);
+  const [history, persons, pieces] = await Promise.all([historyOf(db, leaderId), db.select().from(people).where(eq(people.leaderId, leaderId)), readPieces(db, leaderId)]);
   const offers = trustOffers(history, await currentRights(db, leaderId));
   const emailByPerson = new Map(persons.map((person) => [person.externalId, person.email]));
-  const built = rulesFromAudit(pieces, offers, emailByPerson, await categoriesByLetter(db, leaderId));
+  const categories = await categoriesByLetter(db, leaderId);
+  const built = rulesFromAudit(pieces, offers, emailByPerson, categories.map, categories.points);
   const now = new Date();
   await db.delete(rules).where(eq(rules.leaderId, leaderId));
   if (built.length) {
@@ -168,12 +166,14 @@ export async function acceptWeekByChat(db: Db, chatId: string): Promise<string> 
   return `Правила приняты. Индекс ${scene.before}% → ${scene.after}%`;
 }
 
-async function categoriesByLetter(db: Db, leaderId: string): Promise<Map<string, string>> {
-  const [marks, rows, kinds] = await Promise.all([
+async function categoriesByLetter(db: Db, leaderId: string): Promise<{ map: Map<string, string>; points: string[] }> {
+  const [marks, rows, kinds, leaderRows] = await Promise.all([
     db.select().from(emailEtalon).where(eq(emailEtalon.leaderId, leaderId)),
     db.select().from(emails).where(eq(emails.leaderId, leaderId)),
     db.select().from(seriesKind).where(eq(seriesKind.leaderId, leaderId)),
+    db.select({ profile: leaders.profile }).from(leaders).where(eq(leaders.id, leaderId)).limit(1),
   ]);
+  const points = confirmationPoints(leaderRows[0]?.profile ?? '');
   const byId = new Map(marks.map((row) => [row.externalId, row.category]));
   const map = new Map<string, string>();
   for (const row of rows) {
@@ -181,10 +181,10 @@ async function categoriesByLetter(db: Db, leaderId: string): Promise<Map<string,
     if (!category) continue;
     const key = `${row.fromEmail.toLowerCase()}|${subjectKey(row.subject)}`;
     const prev = map.get(key);
-    if (!prev || leaderMustConfirm(category)) map.set(key, category);
+    if (!prev || leaderMustConfirm(category, points)) map.set(key, category);
   }
   for (const row of kinds) if (row.category) map.set(`встреча|${subjectKey(row.seriesKey)}`, row.category);
-  return map;
+  return { map, points };
 }
 
 export async function ownProposal(db: Db, leaderId: string): Promise<FlowRule[]> {
@@ -192,11 +192,12 @@ export async function ownProposal(db: Db, leaderId: string): Promise<FlowRule[]>
   const pieces = piecesOf(stored[0]?.report);
   if (!pieces.length) return [];
   const [history, persons] = await Promise.all([
-    historyOf(leaderId),
+    historyOf(db, leaderId),
     db.select().from(people).where(eq(people.leaderId, leaderId)),
   ]);
   const emailByPerson = new Map(persons.map((person) => [person.externalId, person.email]));
-  return rulesFromAudit(pieces, trustOffers(history, await currentRights(db, leaderId)), emailByPerson, await categoriesByLetter(db, leaderId));
+  const categories = await categoriesByLetter(db, leaderId);
+  return rulesFromAudit(pieces, trustOffers(history, await currentRights(db, leaderId)), emailByPerson, categories.map, categories.points);
 }
 
 async function readPieces(db: Db, leaderId: string): Promise<AuditPiece[]> {

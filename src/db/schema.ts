@@ -187,6 +187,7 @@ export const revisions = pgTable('revisions', {
   category: text('category').notNull(),
   area: text('area').notNull().default('письма'),
   instead: text('instead').notNull(),
+  understood: text('understood').notNull().default(''),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
 });
 

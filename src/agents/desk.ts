@@ -1,8 +1,9 @@
 // Главная руководителя и происхождение цифр. Имена и числа приходят из данных, в коде их нет.
 import { desc, eq } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
-import { authorities, decisions, emails, focusPlans, kpis, llmCalls, meetings, people, verdicts } from '../db/schema.ts';
-import { readHistory } from './dependence.ts';
+import { authorities, decisions, emails, focusPlans, kpis, leaders, llmCalls, meetings, people, verdicts } from '../db/schema.ts';
+import { confirmationPoints, leaderMustConfirm } from './confirm.ts';
+import { historyForLeader } from './trust.ts';
 import { kpiStatus } from './k1.ts';
 import { letterHits, meetingHits, replayWeek, trustOffers, type FlowRule, type HistoryRow } from './replay.ts';
 import { listFlowRules, ownProposal } from './week.ts';
@@ -10,10 +11,11 @@ import { calendarConfig } from '../yandex/calendar.ts';
 import { trackerConfig } from '../yandex/tracker.ts';
 
 const LETTER_MINUTES = 4;
-const SAFETY =
-  'Деньги, кадры, обещания клиентам и письма руководства код всегда оставляет руководителю. Без его кнопки ничего не отправляется, кроме того, что он сам разрешил правилом.';
 
-const PROTECTED = new Set(['деньги', 'кадры', 'обязательства_клиентам', 'руководство']);
+function safetyText(points: string[]): string {
+  if (!points.length) return 'Правила подтверждения в профиле не заданы. К вам идёт то, что разбор сам отдал вам, и просьба выше полномочия.';
+  return `Пункты профиля «Никогда без подтверждения руководителя» код всегда оставляет вам: ${points.map((point) => `«${point}»`).join('; ')}. Без вашей кнопки ничего из них не отправляется.`;
+}
 
 export interface Origin {
   helper: string;
@@ -72,9 +74,12 @@ export interface DeskInput {
   tasks: { title: string; minutes: number; goal: string }[];
   calls: { purpose: string; at: string }[];
   remote?: { tracker: boolean; calendar: boolean };
+  points?: string[];
 }
 
 export function buildDesk(input: DeskInput): Desk {
+  const points = input.points ?? [];
+  shownSafety = safetyText(points);
   const picture = replayWeek(input.letters, input.meetings, input.rules, input.accepted);
   const heldLetters = input.accepted
     ? input.letters.filter((letter) => {
@@ -90,7 +95,7 @@ export function buildDesk(input: DeskInput): Desk {
     : [];
   const meetingMinutes = heldMeetings.reduce((sum, meeting) => sum + (meeting.minutes > 0 ? meeting.minutes : 0), 0);
   const returned = input.verdicts.filter((row) => row.kind === 'вернуть' || row.kind === 'делегировать');
-  const protectedRows = input.verdicts.filter((row) => row.kind === 'нужен_руководитель' && PROTECTED.has(row.category));
+  const protectedRows = input.verdicts.filter((row) => row.kind === 'нужен_руководитель' && leaderMustConfirm(row.category, points));
   const quiet = input.people.filter((person) => person.laggingWeeks.length > 0 && person.emails === 0);
   const names = new Map(input.people.map((person) => [person.id, person.name]));
   const offers = trustOffers(input.history, input.authorities).map((offer) => ({ ...offer, name: names.get(offer.personId) ?? '' }));
@@ -122,7 +127,7 @@ export function buildDesk(input: DeskInput): Desk {
       minutes: '',
       kind: 'decision',
       lines: [],
-      origin: made('k2', 'Разбор почты', rows.filter(Boolean).join('. '), howModel(input.calls, 'k2', 'скидка в тексте письма выше полномочия этого человека'), rows),
+      origin: made('k2', 'Разбор почты', rows.filter(Boolean).join('. '), howModel(input.calls, 'k2', 'просьба выше полномочия этого человека'), rows),
     });
   }
   for (const person of quiet) {
@@ -222,13 +227,20 @@ export function buildDesk(input: DeskInput): Desk {
   }
   if (protectedRows.length > 0) {
     done.push({
-      text: `Под вашим решением остались ${countWords(protectedRows.length, 'просьба', 'просьбы', 'просьб')}: деньги, кадры, обещания клиентам и письма руководства`,
-      origin: made('k2', 'Разбор почты', 'Категории, которые код не отдаёт без кнопки', 'Посчитано по данным', protectedRows.map((row) => shown(row.summary))),
+      text: points.length
+        ? `Под вашим решением остались ${countWords(protectedRows.length, 'просьба', 'просьбы', 'просьб')} по правилам подтверждения`
+        : `Под вашим решением остались ${countWords(protectedRows.length, 'просьба', 'просьбы', 'просьб')}`,
+      origin: made('k2', 'Разбор почты', 'Пункты профиля, которые код не отдаёт без кнопки', 'Посчитано по данным', protectedRows.map((row) => shown(row.summary))),
+    });
+  } else if (points.length) {
+    done.push({
+      text: 'Письма из правил подтверждения без вашей кнопки не уходят',
+      origin: made('k2', 'Разбор почты', 'Пункты профиля. Таких открытых просьб в ленте сейчас нет', 'Посчитано по данным', points),
     });
   } else {
     done.push({
-      text: 'Деньги, кадры, обещания клиентам и письма руководства без вашей кнопки не уходят',
-      origin: made('k2', 'Разбор почты', 'Правило категорий. Таких открытых просьб в ленте сейчас нет', 'Посчитано по данным', []),
+      text: 'Правила подтверждения не заданы: обязательного подтверждения нет',
+      origin: made('k2', 'Разбор почты', 'В профиле нет раздела с пунктами подтверждения', 'Посчитано по данным', []),
     });
   }
   const indexRows = picture.remaining.map((row) => shown(row));
@@ -261,7 +273,7 @@ export function buildDesk(input: DeskInput): Desk {
 }
 
 export async function deskForLeader(db: Db, leaderId: string, series: { title: string; open: boolean }[] = []): Promise<Desk> {
-  const [decisionRows, verdictRows, letterRows, meetingRows, personRows, kpiRows, authRows, callRows, planRows, rules] = await Promise.all([
+  const [decisionRows, verdictRows, letterRows, meetingRows, personRows, kpiRows, authRows, callRows, planRows, rules, leaderRows] = await Promise.all([
     db.select().from(decisions).where(eq(decisions.leaderId, leaderId)),
     db.select().from(verdicts).where(eq(verdicts.leaderId, leaderId)).orderBy(desc(verdicts.createdAt)),
     db.select().from(emails).where(eq(emails.leaderId, leaderId)),
@@ -272,13 +284,9 @@ export async function deskForLeader(db: Db, leaderId: string, series: { title: s
     db.select({ purpose: llmCalls.purpose, at: llmCalls.at }).from(llmCalls).where(eq(llmCalls.leaderId, leaderId)),
     db.select().from(focusPlans).where(eq(focusPlans.leaderId, leaderId)).limit(1),
     listFlowRules(db, leaderId),
+    db.select({ profile: leaders.profile }).from(leaders).where(eq(leaders.id, leaderId)).limit(1),
   ]);
-  let history: HistoryRow[] = [];
-  try {
-    history = await readHistory(`data/${leaderId}`);
-  } catch {
-    history = [];
-  }
+  const history = await historyForLeader(db, leaderId);
   const mailByPerson = new Map<string, number>();
   for (const letter of letterRows) {
     const person = personRows.find((row) => addressesOf(row).includes(letter.fromEmail.toLowerCase()));
@@ -338,6 +346,7 @@ export async function deskForLeader(db: Db, leaderId: string, series: { title: s
       .map((row) => ({ title: row.title ?? '', minutes: row.minutes ?? 0, goal: row.goal ?? '' })),
     calls: callRows.map((row) => ({ purpose: row.purpose, at: row.at.toISOString() })),
     remote: { tracker: Boolean(trackerConfig()), calendar: Boolean(calendarConfig()) },
+    points: confirmationPoints(leaderRows[0]?.profile ?? ''),
   });
 }
 
@@ -365,7 +374,7 @@ function helperCards(
   const remote = input.remote ?? { tracker: false, calendar: false };
   const cards: HelperCard[] = [
     card('k1', 'Карточка отдела', 'код', 'Собирает зону, цель, KPI и полномочия человека из файлов отдела.', `В каталоге ${input.people.length} человек.`, 'Карточки отдела заполнены из этих файлов.', 'Коннектор кадровой системы — заглушка, поэтому источник — файлы.'),
-    card('k2', 'Разбор почты', input.calls.some((call) => call.purpose.startsWith('k2') || call.purpose.startsWith('mail_ext')) ? 'модель' : 'код', 'Читает письмо и контекст и решает: ответить самому, передать сотруднику, в сводку, без ответа или руководителю. Внутренние письма (сотрудники, коллеги, начальник) и внешние разбираются отдельно.', modelDid('k2', 'Вызовов модели по письмам на этих данных нет.'), returned ? `Ответил сам или передал: ${returned}.` : 'Ответов и пересылок на этих данных нет.', 'Деньги, кадры, обещания клиентам и письма начальника без кнопки руководителя не уходят.'),
+    card('k2', 'Разбор почты', input.calls.some((call) => call.purpose.startsWith('k2') || call.purpose.startsWith('mail_ext')) ? 'модель' : 'код', 'Читает письмо и контекст и решает: ответить самому, передать сотруднику, в сводку, без ответа или руководителю. Внутренние письма (сотрудники, коллеги, начальник) и внешние разбираются отдельно.', modelDid('k2', 'Вызовов модели по письмам на этих данных нет.'), returned ? `Ответил сам или передал: ${returned}.` : 'Ответов и пересылок на этих данных нет.', shownSafety),
     card('k3', 'Матрица отдела', 'код', 'Кладёт каждого по KPI и числу писем: поговорить, помочь, расширить право или не трогать.', `Посчитано по ${input.people.length} человек.`, 'Тихие проблемы — те, у кого KPI отстаёт и писем нет.', 'Модель для матрицы не вызывается.'),
     card('k4', 'Три дела на сегодня', input.calls.some((call) => call.purpose.startsWith('k4')) ? 'модель' : 'код', 'Утром выбирает до трёх дел с наибольшим смыслом на час руководителя.', modelDid('k4', 'Сохранённого выбора модели на этих данных нет.'), input.tasks.length ? `В плане ${countWords(input.tasks.length, 'дело', 'дела', 'дел')}.` : 'Плана на сегодня нет.', 'Протокол после утверждения уходит письмом в тестовый ящик.'),
     card('k5', 'Аудит потока', input.calls.some((call) => call.purpose.startsWith('аудитор')) ? 'модель' : 'код', 'Говорит, каких писем и встреч не должно быть и какое изменение организации их убирает.', modelDid('аудитор', 'Прогона аудита на этих данных нет.'), input.rules.length ? `Правил в базе: ${input.rules.length}.` : 'Принятых правил нет.', 'Эталонные метки писем в запрос модели не входят.'),
@@ -373,7 +382,7 @@ function helperCards(
     card('k7', 'Задачи', 'код', 'Смотрит, двигает ли задача цель исполнителя и реален ли срок.', 'Считает по задачам каталога.', 'Задача без цели — кандидат её снять.', remote.tracker ? 'Экран списка читает очередь Трекера.' : 'Экран списка задач — заглушка: Трекер не подключён.'),
     card('k8', 'Контроль KPI', 'код', 'Сравнивает план и факт по неделям и поднимает отставание раньше письма.', `Отстающих недель: ${input.people.reduce((sum, person) => sum + person.laggingWeeks.length, 0)}.`, 'Сигнал появляется, когда писем от человека нет.', 'Прогноз — ещё один шаг того же наклона, не конец квартала.'),
     card('k9', 'Контекст решения', input.calls.some((call) => call.purpose.startsWith('k2')) ? 'модель' : 'код', 'К просьбе, которая осталась у руководителя, добавляет контекст и один вариант решения.', modelDid('k2', 'Отдельного вызова на контекст нет: его пишет разбор письма.'), 'Руководитель видит рекомендацию и основание.', 'Решение всё равно принимает руководитель.'),
-    card('k10', 'Правила потока', 'код', 'Принятое изменение становится правилом, и закрытые им письма больше не доходят.', input.accepted ? `Правил: ${input.rules.length}.` : 'Правила недели ещё не приняты.', saved || 'Снятых часов на этих данных нет.', 'Деньги, кадры, обещания клиентам и письма руководства правило не забирает.'),
+    card('k10', 'Правила потока', 'код', 'Принятое изменение становится правилом, и закрытые им письма больше не доходят.', input.accepted ? `Правил: ${input.rules.length}.` : 'Правила недели ещё не приняты.', saved || 'Снятых часов на этих данных нет.', 'Письмо пункта подтверждения правило не забирает.'),
     card('k11', 'Индекс зависимости', 'код', 'Считает, какая доля потока всё ещё требует руководителя.', input.accepted ? `Сейчас ${picture.after}% из ${picture.before}%.` : 'Правил нет, доля — весь каталог.', `Остаются ${picture.stillLetters} писем и ${picture.stillMeetings} встреч.`, 'Это итог блока «Сделано без вас», не отдельная цифра.'),
     card('k12', 'Доверие по решениям', 'код', 'После нескольких утверждений подряд без правок предлагает отдать право.', `В истории ${countWords(input.history.length, 'решение', 'решения', 'решений')}.`, trustOffers(input.history, input.authorities).length ? 'Есть предложение отдать право.' : 'Порога для нового права история не достигла.', 'Пока руководитель не нажмёт «Принять», право не действует.'),
     card('k13', 'Карточка решения', 'код', 'Оставляет руководителю одну строку, рекомендацию, основание и кнопки.', `Ждут решения: ${input.decisions.filter((row) => row.status === 'ждёт').length}.`, 'Кнопки: утвердить, отклонить, отложить.', 'Без кнопки ответ по такой карточке не отправляется.'),
@@ -392,8 +401,10 @@ function card(id: string, name: string, mode: HelperCard['mode'], does: string, 
   return { id, name, mode, does, did, result, value };
 }
 
-function made(helper: string, who: string, data: string, how: string, rows: string[]): Origin {
-  return { helper, who, data: data || 'Записей для этой строки нет', how: how || 'Посчитано по данным', safety: SAFETY, rows: rows.filter(Boolean).map(shown) };
+let shownSafety = safetyText([]);
+
+function made(helper: string, who: string, data: string, how: string, rows: string[], safety = shownSafety): Origin {
+  return { helper, who, data: data || 'Записей для этой строки нет', how: how || 'Посчитано по данным', safety, rows: rows.filter(Boolean).map(shown) };
 }
 
 function howModel(calls: { purpose: string; at: string }[], prefix: string, rule: string): string {

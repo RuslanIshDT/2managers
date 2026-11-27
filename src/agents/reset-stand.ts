@@ -1,5 +1,5 @@
 // Какое письмо каталога после сброса должно ждать решения. Id и имена в функцию не зашиты.
-import { textSignals } from './k2.ts';
+import { limitBreaches } from './confirm.ts';
 
 export interface CatalogLetter {
   id: string;
@@ -13,21 +13,23 @@ export interface CatalogLetter {
 export interface PersonLimit {
   email: string;
   name: string;
-  limit: number;
+  area: string;
+  limit: string;
+  unit: string;
 }
 
-export function pickDiscountAboveLimit(letters: CatalogLetter[], limits: PersonLimit[]): CatalogLetter | null {
+export function pickAboveLimit(letters: CatalogLetter[], limits: PersonLimit[]): CatalogLetter | null {
   const hits = letters.flatMap((letter) => {
-    const person = limits.find(
+    const rows = limits.filter(
       (row) =>
         row.email.trim().toLowerCase() === letter.fromEmail.trim().toLowerCase() ||
         row.name.trim().toLowerCase() === letter.fromName.trim().toLowerCase(),
     );
-    if (!person) return [];
-    const signal = textSignals(`${letter.subject}\n${letter.body}`);
-    if (signal.discountPercent === null || signal.discountPercent <= person.limit) return [];
-    return [{ letter, percent: signal.discountPercent }];
+    const breaches = limitBreaches(`${letter.subject}\n${letter.body}`, rows);
+    if (!breaches.length) return [];
+    const excess = Math.max(...breaches.map((row) => row.asked / row.limit));
+    return [{ letter, excess }];
   });
-  hits.sort((a, b) => b.percent - a.percent || b.letter.received.localeCompare(a.letter.received));
+  hits.sort((a, b) => b.excess - a.excess || b.letter.received.localeCompare(a.letter.received));
   return hits[0]?.letter ?? null;
 }

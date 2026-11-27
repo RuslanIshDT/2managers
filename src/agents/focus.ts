@@ -1,5 +1,5 @@
 // Утро руководителя и матрица отдела. Модель здесь не вызывается, имена берутся из данных.
-import { morningBlockOrder, type MorningBlockId } from './memory.ts';
+import { applyMorning, morningLimit, type MorningBlockId, type MorningShape } from './morning.ts';
 import { dateWords } from './scene.ts';
 export type MatrixCell = 'один_на_один' | 'помочь' | 'расширить' | 'не_трогать';
 
@@ -117,7 +117,7 @@ export interface MorningInput {
   questions: { title: string; items: string[] }[];
   share: { onGoal: number; total: number; percent: number };
   notes?: string[];
-  rules?: string[];
+  morning?: MorningShape | null;
 }
 
 // Утреннее сообщение (порядок — владелец 27.11.2026, T66). Сначала то, что взято из систем: решения из почты,
@@ -159,12 +159,18 @@ export function renderMorning(input: MorningInput): string {
       : 'На этой неделе помощник сам ни на одно письмо не отвечал.',
   );
   const blocks = [`План на ${dateWords(input.today)}`];
-  for (const id of morningBlockOrder(input.rules ?? [])) {
-    const text = parts.get(id);
+  for (const id of applyMorning(input.morning)) {
+    const text = capLines(parts.get(id), morningLimit(input.morning, id));
     if (text) blocks.push(text);
   }
   if (input.notes?.length) blocks.push(input.notes.join('\n'));
   return blocks.join('\n\n');
+}
+
+function capLines(text: string | undefined, max: number | null): string | undefined {
+  if (!text || !max || max < 1) return text;
+  const lines = text.split('\n');
+  return [lines[0], ...lines.slice(1, 1 + max)].filter((line) => line !== undefined).join('\n');
 }
 
 function meetingsBlock(input: MorningInput): string {

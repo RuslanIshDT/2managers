@@ -7,7 +7,8 @@ import { authorities, emailEtalon, emails, kpis, leaders, people, revisions, tas
 import { withLlmScope } from '../llm.ts';
 import { readHistory } from './dependence.ts';
 import { personAddresses } from './k1.ts';
-import { discountLimit, enforce, failedRuling, leaderMustConfirm, type Ruled } from './k2.ts';
+import { confirmationPoints, leaderMustConfirm, limitBreaches } from './confirm.ts';
+import { enforce, failedRuling, type Ruled } from './k2.ts';
 import { externalContext, judgeWithTools, k2Context } from './k2-tools.ts';
 import { mailRevisions } from './memory.ts';
 
@@ -54,10 +55,10 @@ export interface EvalScore {
 
 const ratio = (a: number, b: number) => (b ? a / b : 1);
 
-export function evalScore(rows: EvalRow[]): EvalScore {
+export function evalScore(rows: EvalRow[], points: string[] = []): EvalScore {
   const need = rows.filter((row) => row.expected === LEADER_ACTION);
   const flagged = rows.filter((row) => row.toLeader);
-  const n1 = rows.filter((row) => leaderMustConfirm(row.category));
+  const n1 = rows.filter((row) => leaderMustConfirm(row.category, points));
   const correct = rows.filter((row) => row.toLeader === (row.expected === LEADER_ACTION));
   const roles = [...new Set(rows.map((row) => row.senderRole))].sort((a, b) => a.localeCompare(b, 'ru'));
   const toolCalls: Record<string, number> = {};
@@ -122,8 +123,8 @@ export async function runEval(
   return pool(letters, options.concurrency ?? 4, async (letter) => {
     const mark = etalon.get(letter.externalId)!;
     const person = persons.find((row) => personAddresses(row).includes(letter.fromEmail.toLowerCase()));
-    const boss = person?.role === 'руководитель руководителя';
     const base = { id: letter.externalId, subject: letter.subject, senderRole: letter.senderRole, category: mark.category, expected: mark.expectedAction };
+    const points = confirmationPoints(leader.profile);
     const inside = Boolean(person && person.role !== 'руководитель');
     // Прежние письма отправителя — только те, что пришли раньше этого.
     const earlier = letterRows
@@ -135,8 +136,8 @@ export async function runEval(
       inside && person
         ? k2Context(person, { authorities: authRows, kpi: kpiRows, tasks: taskRows, history, mail: earlier, revisions: edits, people: peopleList })
         : externalContext({ name: letter.fromName, email: letter.fromEmail }, { mail: earlier, revisions: edits, people: peopleList });
-    const limit = discountLimit(ctx.authorities.map((item) => ({ area: item.area, limit: item.limitValue })));
     const text = `${letter.subject}\n${letter.body}`;
+    const breaches = limitBreaches(text, ctx.authorities.map((item) => ({ area: item.area, limit: item.limitValue, unit: item.unit })));
     const agent = inside ? 'k2' : 'mail_ext';
     let ruled: Ruled;
     let tools: string[] = [];
@@ -147,10 +148,10 @@ export async function runEval(
         () => judgeWithTools({ purpose: `eval:${agent}:${letter.externalId}`, profile: leader.profile, subject: letter.subject, body: letter.body, ctx }),
       );
       tools = run.steps.map((step) => step.tool);
-      ruled = enforce(run.verdict, text, limit, null, boss, [], staff, letter.fromEmail);
+      ruled = enforce(run.verdict, text, points, breaches, null, [], staff, letter.fromEmail);
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
-      ruled = failedRuling(text, error, boss);
+      ruled = failedRuling(text, error);
     }
     const row: EvalRow = { ...base, route: inside ? 'k2' : 'mail', action: etalonAction(ruled.kind), toLeader: ruled.ask, tools, error };
     options.onRow?.(row);
@@ -173,7 +174,7 @@ export function evalReport(score: EvalScore, meta: { model: string; at: string; 
     `|---|---|`,
     `| Совпало с эталоном «руководитель нужен / не нужен» | ${score.correct} из ${score.total}, ${pct(score.accuracy)} |`,
     `| Письма, которым нужен руководитель: дошли | ${score.caught} из ${score.needLeader}, ${pct(score.recall)} |`,
-    `| Письма N1 (деньги, кадры, обязательства клиентам, руководство): дошли | ${score.n1Caught} из ${score.n1} |`,
+    `| Письма пунктов подтверждения из профиля: дошли | ${score.n1Caught} из ${score.n1} |`,
     `| Лишние письма руководителю | ${score.falseAlarms}, точность ${pct(score.precision)} |`,
     `| Точное действие из пяти (ответить, передать, в сводку, без ответа, руководителю) | ${score.mailExact.correct} из ${score.mailExact.total} |`,
     `| Сбои разбора | ${score.errors} |`,

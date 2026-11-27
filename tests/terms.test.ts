@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { limitBreaches } from '../src/agents/confirm.ts';
 import { latestDecision } from '../src/agents/intake.ts';
 import { chainKey, enforce, type ModelVerdict } from '../src/agents/k2.ts';
 import { changeWords, letterTerms, termChanges } from '../src/agents/terms.ts';
@@ -60,21 +61,26 @@ describe('T56: изменение условий в продолжающейся
 
   it('без изменений письмо — повтор, с новыми условиями — разбор заново, N1 идёт руководителю', () => {
     const prior = { id: 'x1', status: 'исполнено', summary: 'Скидка 7% согласована' };
-    const repeat = enforce(model, same, 10, prior, false, termChanges([first], same));
+    const repeat = enforce(model, same, [], [], prior, termChanges([first], same));
     expect(repeat.kind).toBe('повтор');
     expect(repeat.ask).toBe(false);
 
-    const changed = enforce(model, higher, 10, prior, false, termChanges([first], higher));
-    expect(changed.kind).toBe('нужен_руководитель');
-    expect(changed.category).toBe('деньги');
-    expect(changed.ask).toBe(true);
-    expect(changed.send).toBe(false);
+    const changed = enforce(model, higher, [], [], prior, termChanges([first], higher));
+    expect(changed.kind).toBe('вернуть');
+    expect(changed.category).toBe('иное');
     expect(changed.summary).toContain('Условия изменились');
     expect(changed.basis).toContain('это не повтор');
 
-    const promised = enforce(model, promise, 10, prior, false, termChanges([first, higher], promise));
-    expect(promised.category).toBe('обязательства_клиентам');
-    expect(promised.ask).toBe(true);
+    const point = 'деньги и бюджеты (скидки)';
+    const guarded = enforce({ ...model, категория: point }, higher, [point], [], prior, termChanges([first], higher));
+    expect(guarded.category).toBe(point);
+    expect(guarded.ask).toBe(true);
+    expect(guarded.send).toBe(false);
+
+    const asked = 'Прошу скидку 11% вместо прежних условий.';
+    const over = enforce(model, asked, [], limitBreaches(asked, [{ area: 'скидка', limit: '5', unit: '%' }]), prior, termChanges([first], asked));
+    expect(over.ask).toBe(true);
+    expect(over.basis).toContain('выше права');
   });
 
   it('прежнее решение цепочки — то, что ждёт, иначе самое позднее', () => {

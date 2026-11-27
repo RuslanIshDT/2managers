@@ -10,6 +10,7 @@ import { sendFocusAll } from '../agents/focus-run.ts';
 import { pullInbox } from '../agents/intake.ts';
 import { readSyntheticInbox } from '../mail.ts';
 import { seedIfEmpty, seedMissingCatalogs } from '../db/seed.ts';
+import { reloadProfiles } from '../agents/profile-file.ts';
 import { startBoss } from '../jobs/flow-audit-job.ts';
 import { buildApp } from './app.ts';
 
@@ -23,6 +24,8 @@ const seeded = await seedIfEmpty(db);
 if (seeded.seeded) console.log(`Каталог руководителя загружен. Вход: ${seeded.login}`);
 const added = await seedMissingCatalogs(db);
 if (added.length) console.log(`Добавлены входы: ${added.join(', ')}`);
+const profiles = await reloadProfiles(db);
+if (profiles.length) console.log(`Профиль обновлён из файла: ${profiles.join(', ')}`);
 const leaderRows = await db.select({ id: leaders.id }).from(leaders);
 for (const row of leaderRows) {
   const dir = `data/${row.id}`;

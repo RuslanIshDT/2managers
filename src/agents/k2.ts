@@ -1,20 +1,12 @@
-// Разбор письма (T67): модель читает письмо и контекст и выбирает действие — руководителю, ответить, передать,
-// в сводку или без ответа. Код не пускает категории N1 и письма начальника без руководителя и проверяет, кому передать.
+// Разбор письма: модель выбирает действие и пункт подтверждения из профиля этого руководителя.
+// Код отправляет к руководителю письмо пункта и просьбу выше числового предела полномочия.
 import { z } from 'zod';
 import { callJson, type ChatMessage, type JsonSchema, type ToolSpec } from '../llm.ts';
+import { breachBasis, canonicalCategory, categoryChoices, type LimitBreach, OTHER } from './confirm.ts';
 import { changeWords, type TermChange } from './terms.ts';
 
 export const ACTIONS = ['руководителю', 'ответить', 'передать', 'в_сводку', 'без_ответа'] as const;
 export type MailDecision = (typeof ACTIONS)[number];
-export const MODEL_CATEGORIES = ['деньги', 'кадры', 'обязательства_клиентам', 'иное'] as const;
-export const CATEGORIES = [...MODEL_CATEGORIES, 'руководство'] as const;
-export type RequestCategory = (typeof CATEGORIES)[number];
-
-const N1 = new Set<RequestCategory>(['деньги', 'кадры', 'обязательства_клиентам', 'руководство']);
-
-export function leaderMustConfirm(category: string): boolean {
-  return N1.has(category as RequestCategory);
-}
 
 export interface ModelVerdict {
   действие: MailDecision;
@@ -22,7 +14,7 @@ export interface ModelVerdict {
   в_полномочиях: 'да' | 'нет' | 'неясно';
   есть_предложение: 'да' | 'нет';
   только_руководитель: 'да' | 'нет';
-  категория: RequestCategory;
+  категория: string;
   суть: string;
   контекст: string;
   рекомендация: string;
@@ -41,7 +33,7 @@ export type RuledKind = 'нужен_руководитель' | 'вернуть'
 export interface Ruled {
   kind: RuledKind;
   forwardTo?: { name: string; email: string };
-  category: RequestCategory;
+  category: string;
   summary: string;
   draft: string;
   basis: string;
@@ -54,12 +46,17 @@ export interface Ruled {
   send: boolean;
 }
 
+export interface PriorDecision {
+  id: string;
+  status: string;
+  summary: string;
+}
+
 // Модель не дала разбор: письмо уходит руководителю, повторного вызова нет.
-export function failedRuling(letterText: string, reason: string, boss: boolean): Ruled {
-  const category: RequestCategory = boss ? 'руководство' : textSignals(letterText).category ?? 'иное';
+export function failedRuling(_letterText: string, reason: string): Ruled {
   return {
     kind: 'нужен_руководитель',
-    category,
+    category: OTHER,
     summary: 'Разбор не удался, письмо ждёт вас',
     draft: '',
     basis: `Модель не дала ответ по схеме (${reason.slice(0, 160)}). Повторного разбора не будет`,
@@ -73,72 +70,73 @@ export function failedRuling(letterText: string, reason: string, boss: boolean):
   };
 }
 
-export interface PriorDecision {
-  id: string;
-  status: string;
-  summary: string;
+function verdictContract(points: string[]) {
+  const choices = categoryChoices(points) as [string, ...string[]];
+  const zod = z.object({
+    действие: z.enum(ACTIONS),
+    кому_передать: z.string().max(200),
+    в_полномочиях: z.enum(['да', 'нет', 'неясно']),
+    есть_предложение: z.enum(['да', 'нет']),
+    только_руководитель: z.enum(['да', 'нет']),
+    категория: z.enum(choices),
+    суть: z.string().min(1).max(800),
+    контекст: z.string().max(1200),
+    рекомендация: z.string().max(1200),
+    черновик_ответа: z.string().max(2000),
+    предложение_полномочия: z.string().max(800),
+    основание: z.string().min(1).max(800),
+    риски: z.string().max(800),
+    если_не_решить: z.string().max(800),
+    уверенность: z.number().min(0).max(1),
+  });
+  const schema: JsonSchema = {
+    type: 'object',
+    additionalProperties: false,
+    required: [
+      'действие',
+      'кому_передать',
+      'в_полномочиях',
+      'есть_предложение',
+      'только_руководитель',
+      'категория',
+      'суть',
+      'контекст',
+      'рекомендация',
+      'черновик_ответа',
+      'предложение_полномочия',
+      'основание',
+      'риски',
+      'если_не_решить',
+      'уверенность',
+    ],
+    properties: {
+      действие: { type: 'string', enum: [...ACTIONS] },
+      кому_передать: { type: 'string' },
+      в_полномочиях: { type: 'string', enum: ['да', 'нет', 'неясно'] },
+      есть_предложение: { type: 'string', enum: ['да', 'нет'] },
+      только_руководитель: { type: 'string', enum: ['да', 'нет'] },
+      категория: { type: 'string', enum: choices },
+      суть: { type: 'string' },
+      контекст: { type: 'string' },
+      рекомендация: { type: 'string' },
+      черновик_ответа: { type: 'string' },
+      предложение_полномочия: { type: 'string' },
+      основание: { type: 'string' },
+      риски: { type: 'string' },
+      если_не_решить: { type: 'string' },
+      уверенность: { type: 'number' },
+    },
+  };
+  return { zod, schema };
 }
 
-const modelZod = z.object({
-  действие: z.enum(ACTIONS),
-  кому_передать: z.string().max(200),
-  в_полномочиях: z.enum(['да', 'нет', 'неясно']),
-  есть_предложение: z.enum(['да', 'нет']),
-  только_руководитель: z.enum(['да', 'нет']),
-  категория: z.enum(MODEL_CATEGORIES),
-  суть: z.string().min(1).max(800),
-  контекст: z.string().max(1200),
-  рекомендация: z.string().max(1200),
-  черновик_ответа: z.string().max(2000),
-  предложение_полномочия: z.string().max(800),
-  основание: z.string().min(1).max(800),
-  риски: z.string().max(800),
-  если_не_решить: z.string().max(800),
-  уверенность: z.number().min(0).max(1),
-});
-
-const schema: JsonSchema = {
-  type: 'object',
-  additionalProperties: false,
-  required: [
-    'действие',
-    'кому_передать',
-    'в_полномочиях',
-    'есть_предложение',
-    'только_руководитель',
-    'категория',
-    'суть',
-    'контекст',
-    'рекомендация',
-    'черновик_ответа',
-    'предложение_полномочия',
-    'основание',
-    'риски',
-    'если_не_решить',
-    'уверенность',
-  ],
-  properties: {
-    действие: { type: 'string', enum: [...ACTIONS] },
-    кому_передать: { type: 'string' },
-    в_полномочиях: { type: 'string', enum: ['да', 'нет', 'неясно'] },
-    есть_предложение: { type: 'string', enum: ['да', 'нет'] },
-    только_руководитель: { type: 'string', enum: ['да', 'нет'] },
-    категория: { type: 'string', enum: [...MODEL_CATEGORIES] },
-    суть: { type: 'string' },
-    контекст: { type: 'string' },
-    рекомендация: { type: 'string' },
-    черновик_ответа: { type: 'string' },
-    предложение_полномочия: { type: 'string' },
-    основание: { type: 'string' },
-    риски: { type: 'string' },
-    если_не_решить: { type: 'string' },
-    уверенность: { type: 'number' },
-  },
-};
-
-const SYSTEM = `Ты разбираешь одно письмо, пришедшее руководителю, и решаешь, что с ним сделать. Прочитай письмо целиком и опирайся на контекст: кто пишет, о чём переписка, что уже решено, чьё это дело.
+export function mailSystem(points: string[]): string {
+  const list = points.length
+    ? `Категория — дословно один из пунктов профиля «Никогда без подтверждения руководителя»: ${points.map((point) => `«${point}»`).join('; ')}. Если письмо не про такой пункт, категория «${OTHER}». Письмо пункта руководитель увидит в любом случае: это проверит код.`
+    : `В профиле нет пунктов «Никогда без подтверждения руководителя». Категория всегда «${OTHER}». Обязательного подтверждения нет.`;
+  return `Ты разбираешь одно письмо, пришедшее руководителю, и решаешь, что с ним сделать. Прочитай письмо целиком и опирайся на контекст: кто пишет, о чём переписка, что уже решено, чьё это дело.
 Действие — одно из пяти:
-руководителю — без него нельзя: деньги и бюджеты, кадры, обязательства клиентам, письмо его начальника, просьба выше полномочий отправителя, решение только его уровня, приглашение, где нужно его согласие.
+руководителю — без него нельзя: письмо относится к пункту подтверждения из профиля, просьба выше полномочий отправителя, решение только его уровня, приглашение, где нужно его согласие.
 ответить — нужен ответ, и помощник может дать его сам: подтвердить участие или перенос внутренней встречи по правилам профиля, ответить на вопрос по данным, сказать сотруднику, что решение в его полномочиях (назови полномочие), попросить предложить вариант, если человек принёс проблему без решения.
 передать — письмо по зоне сотрудника руководителя: в кому_передать впиши его имя и фамилию из списка людей, в черновик_ответа — короткую записку ему, что сделать и к какому сроку.
 в_сводку — ответа не нужно: статус, отчёт, информация, уведомление, напоминание о том, что уже в работе. Руководитель прочтёт это в сводке.
@@ -147,7 +145,9 @@ const SYSTEM = `Ты разбираешь одно письмо, пришедш�
 Для «руководителю» заполни контекст (что известно из данных), рекомендацию (один вариант и основание), риски и если_не_решить; черновик — ответ, который уйдёт после согласия руководителя.
 предложение_полномочия — если такие письма можно больше не носить руководителю: какое право дать и кому. Иначе пусто.
 суть — одна фраза, о чём письмо. основание — одна фраза: какое правило, полномочие, данные или прошлое решение привели к действию.
-категория: деньги — нужно решение о деньгах (скидка, бюджет, оплата, закупка); кадры — найм, отпуск, оффер, увольнение; обязательства_клиентам — дать или изменить обещание клиенту (срок, условия, гарантия); иное — всё остальное, в том числе статус и жалоба, которую разбирает ответственный. Категорию «руководство» не ставь: её назначает код. Каждое текстовое поле короче 400 знаков. Эталонных меток писем у тебя нет.`;
+${list}
+Каждое текстовое поле короче 400 знаков. Эталонных меток писем у тебя нет.`;
+}
 
 // Ответ и пересылка — та же цепочка: «Re:», «Fwd:», «Отв:» в начале темы не учитываются.
 export function chainKey(fromEmail: string, subject: string): string {
@@ -160,30 +160,14 @@ export function chainKey(fromEmail: string, subject: string): string {
   return `${fromEmail.trim().toLowerCase()}|${topic}`;
 }
 
-export function textSignals(text: string): { category: RequestCategory | null; discountPercent: number | null } {
-  const discount = text.match(/скидк[а-яё]*[^0-9\n]{0,24}(\d+(?:[.,]\d+)?)\s*%/i);
-  if (discount) return { category: 'деньги', discountPercent: Number(discount[1].replace(',', '.')) };
-  if (/отпуск|оффер|увольн/i.test(text)) return { category: 'кадры', discountPercent: null };
-  if (/\d[\d\s.,]*\s*(₽|руб|млн)/i.test(text)) return { category: 'деньги', discountPercent: null };
-  if (/обязательств/i.test(text) && /клиент/i.test(text)) return { category: 'обязательства_клиентам', discountPercent: null };
-  return { category: null, discountPercent: null };
-}
-
-export function discountLimit(authorities: { area: string; limit: string }[]): number | null {
-  const row = authorities.find((item) => item.area.toLowerCase().includes('скидк'));
-  if (!row) return null;
-  const value = Number(row.limit.replace(',', '.'));
-  return Number.isFinite(value) ? value : null;
-}
-
-// changes — новые условия против прежних писем цепочки (terms.ts). С ними письмо не повтор:
-// прежнее решение принималось на прежних условиях, письмо разбирается заново.
+// changes — новые условия против прежних писем цепочки. С ними письмо не повтор.
+// points — пункты подтверждения этого руководителя. breaches — числа выше предела полномочия отправителя.
 export function enforce(
   model: ModelVerdict,
-  letterText: string,
-  limit: number | null,
+  _letterText: string,
+  points: string[],
+  breaches: LimitBreach[],
   prior: PriorDecision | null,
-  boss: boolean,
   changes: TermChange[] = [],
   staff: { name: string; email: string }[] = [],
   senderEmail = '',
@@ -191,7 +175,7 @@ export function enforce(
   if (prior && !changes.length) {
     return {
       kind: 'повтор',
-      category: 'иное',
+      category: OTHER,
       summary: `Повтор. Решение «${prior.status}»: ${prior.summary}`,
       draft: '',
       basis: 'По этой переписке уже есть решение, второй раз не спрашиваю',
@@ -204,37 +188,21 @@ export function enforce(
       send: false,
     };
   }
-  const signal = textSignals(letterText);
-  let category: RequestCategory = model.категория;
+  const category = canonicalCategory(model.категория, points);
   const reasons: string[] = [];
-  if (boss) {
-    category = 'руководство';
-    reasons.push('письмо от начальника руководителя');
-  }
-  if (signal.category && signal.category !== category) {
-    category = signal.category;
-    reasons.push(`в тексте признак категории «${signal.category}»`);
-  }
-  if (signal.discountPercent !== null && limit !== null && signal.discountPercent > limit) {
-    category = 'деньги';
-    reasons.push(`скидка ${signal.discountPercent}% выше полномочия ${limit}%`);
-  }
-  if (changes.some((change) => change.kind === 'обязательство') && !N1.has(category)) {
-    category = 'обязательства_клиентам';
-    reasons.push('в переписке появилось новое обязательство');
-  }
+  const over = breachBasis(breaches);
+  if (over) reasons.push(over);
   if (changes.length) reasons.push(`по переписке уже было решение${prior ? ` «${prior.status}»` : ''}, условия изменились (${changeWords(changes)}) — это не повтор`);
-  // Ответ или пересылку нельзя сделать без черновика и без человека из списка — тогда решает руководитель.
   let target = model.действие === 'передать' ? findPerson(model.кому_передать, staff) : null;
-  // «Передать» самому отправителю — это ответ ему.
   const toSender = Boolean(target && senderEmail && target.email.toLowerCase() === senderEmail.toLowerCase());
   if (toSender) target = null;
   const action: MailDecision = toSender ? 'ответить' : model.действие;
   if (action === 'передать' && !target) reasons.push(`передать «${model.кому_передать || 'не указано'}» — такого человека нет в списке`);
   if ((action === 'ответить' || action === 'передать') && !model.черновик_ответа.trim()) reasons.push('нет текста ответа');
+  const protectedPoint = category !== OTHER;
   const mustAsk =
-    N1.has(category) ||
-    boss ||
+    protectedPoint ||
+    breaches.length > 0 ||
     action === 'руководителю' ||
     (action === 'передать' && !target) ||
     ((action === 'ответить' || action === 'передать') && !model.черновик_ответа.trim());
@@ -265,13 +233,11 @@ export function enforce(
   };
 }
 
-// Кому передать: полное имя или однозначная фамилия/имя из списка людей руководителя.
 export function findPerson(name: string, staff: { name: string; email: string }[]): { name: string; email: string } | null {
   const wanted = name.trim().toLowerCase();
   if (!wanted) return null;
   const exact = staff.find((row) => row.name.toLowerCase() === wanted);
   if (exact) return exact;
-  // Имя или фамилия в любом падеже: основа без двух последних букв, не короче 4 букв.
   const words = wanted.split(/\s+/).filter((word) => word.length >= 4);
   const hits = staff.filter((row) => words.some((word) => row.name.toLowerCase().split(/\s+/).some((part) => part.startsWith(word.slice(0, Math.max(4, word.length - 2))))));
   return hits.length === 1 ? hits[0] : null;
@@ -316,24 +282,31 @@ export function cardText(input: {
   return lines.join('\n');
 }
 
-// messages — разговор агента с инструментами; без них — один запрос с готовой карточкой (prompt).
-export async function judgeLetter(input: { purpose: string; prompt: string; messages?: ChatMessage[]; tools?: ToolSpec[] }): Promise<ModelVerdict> {
+export async function judgeLetter(input: {
+  purpose: string;
+  prompt: string;
+  messages?: ChatMessage[];
+  tools?: ToolSpec[];
+  points: string[];
+}): Promise<ModelVerdict> {
+  const { zod, schema } = verdictContract(input.points);
+  const system = mailSystem(input.points);
   let detail = '';
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     const retry = `Прошлый ответ не прошёл проверку (${detail}). Заполни все поля по схеме.`;
     const messages: ChatMessage[] | undefined = input.messages
-      ? [{ role: 'system', content: SYSTEM }, ...input.messages.filter((m) => m.role !== 'system'), ...(attempt === 1 ? [] : [{ role: 'user' as const, content: retry }])]
+      ? [{ role: 'system', content: system }, ...input.messages.filter((m) => m.role !== 'system'), ...(attempt === 1 ? [] : [{ role: 'user' as const, content: retry }])]
       : undefined;
     const result = await callJson<unknown>({
       purpose: input.purpose,
-      system: SYSTEM,
+      system,
       user: attempt === 1 ? input.prompt : `${input.prompt}\n\n${retry}`,
       schemaName: 'k2_verdict',
       schema,
       messages,
       tools: input.tools,
     });
-    const parsed = modelZod.safeParse(result.data);
+    const parsed = zod.safeParse(result.data);
     if (parsed.success) return parsed.data;
     detail = parsed.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.code}`).join('; ').slice(0, 300);
   }
@@ -346,16 +319,14 @@ export function letterPrompt(input: {
   tasks: string;
   subject: string;
   body: string;
-  limit: number | null;
   revisions?: string;
 }): string {
   return [
     'Профиль руководителя:',
     input.profile.trim(),
     '',
-    'Карточка подчинённого:',
+    'Карточка отправителя:',
     input.person,
-    input.limit === null ? 'Лимит скидки не задан.' : `Лимит скидки: ${input.limit}%.`,
     '',
     'Открытые задачи:',
     input.tasks || 'нет',

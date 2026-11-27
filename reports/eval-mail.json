@@ -1,21 +1,40 @@
 {
   "model": "anthropic/claude-haiku-4.5",
-  "at": "27.11.2026, 19:38:57 МСК",
-  "costUsd": 1.3604391000000005,
-  "calls": 241,
-  "minutes": 3.1,
+  "at": "28.11.2026, 00:43:46 МСК",
+  "costUsd": 1.4999726000000004,
+  "calls": 243,
+  "minutes": 2.9,
   "score": {
     "total": 80,
-    "correct": 77,
-    "accuracy": 0.9625,
+    "correct": 76,
+    "accuracy": 0.95,
     "needLeader": 40,
-    "caught": 40,
-    "recall": 1,
+    "caught": 39,
+    "recall": 0.975,
     "falseAlarms": 3,
-    "precision": 0.9302325581395349,
+    "precision": 0.9285714285714286,
     "n1": 36,
-    "n1Caught": 36,
-    "missed": [],
+    "n1Caught": 35,
+    "missed": [
+      {
+        "id": "m070",
+        "subject": "Итоги встречи с партнёром",
+        "senderRole": "руководитель руководителя",
+        "category": "руководство",
+        "expected": "спросить_руководителя",
+        "route": "k2",
+        "action": "авто",
+        "toLeader": false,
+        "tools": [
+          "person_card",
+          "thread",
+          "past_decisions",
+          "open_tasks",
+          "kpi"
+        ],
+        "error": ""
+      }
+    ],
     "alarms": [
       {
         "id": "m025",
@@ -95,23 +114,23 @@
       {
         "role": "руководитель руководителя",
         "total": 10,
-        "correct": 10
+        "correct": 9
       }
     ],
     "mailExact": {
       "total": 80,
-      "correct": 75
+      "correct": 74
     },
     "errors": 0,
     "toolCalls": {
-      "thread": 38,
-      "people": 23,
-      "leader_edits": 10,
+      "thread": 43,
+      "people": 24,
+      "leader_edits": 25,
       "person_card": 60,
-      "kpi": 16,
-      "open_tasks": 5,
-      "authorities": 34,
-      "past_decisions": 22
+      "kpi": 17,
+      "authorities": 31,
+      "past_decisions": 22,
+      "open_tasks": 1
     }
   },
   "rows": [
@@ -142,7 +161,8 @@
       "toLeader": false,
       "tools": [
         "thread",
-        "people"
+        "people",
+        "leader_edits"
       ],
       "error": ""
     },
@@ -155,7 +175,10 @@
       "route": "mail",
       "action": "игнорировать",
       "toLeader": false,
-      "tools": [],
+      "tools": [
+        "thread",
+        "leader_edits"
+      ],
       "error": ""
     },
     {
@@ -168,7 +191,8 @@
       "action": "игнорировать",
       "toLeader": false,
       "tools": [
-        "thread"
+        "thread",
+        "leader_edits"
       ],
       "error": ""
     },
@@ -183,8 +207,8 @@
       "toLeader": true,
       "tools": [
         "thread",
-        "people",
-        "leader_edits"
+        "leader_edits",
+        "people"
       ],
       "error": ""
     },
@@ -216,7 +240,6 @@
       "tools": [
         "person_card",
         "kpi",
-        "open_tasks",
         "thread"
       ],
       "error": ""
@@ -232,7 +255,7 @@
       "toLeader": false,
       "tools": [
         "person_card",
-        "authorities"
+        "leader_edits"
       ],
       "error": ""
     },
@@ -278,7 +301,6 @@
       "tools": [
         "person_card",
         "kpi",
-        "open_tasks",
         "thread"
       ],
       "error": ""
@@ -420,7 +442,8 @@
       "toLeader": false,
       "tools": [
         "person_card",
-        "kpi"
+        "kpi",
+        "thread"
       ],
       "error": ""
     },
@@ -435,8 +458,8 @@
       "toLeader": true,
       "tools": [
         "thread",
-        "people",
-        "leader_edits"
+        "leader_edits",
+        "people"
       ],
       "error": ""
     },
@@ -484,7 +507,8 @@
       "toLeader": false,
       "tools": [
         "person_card",
-        "kpi"
+        "kpi",
+        "thread"
       ],
       "error": ""
     },
@@ -546,7 +570,8 @@
       "toLeader": false,
       "tools": [
         "person_card",
-        "kpi"
+        "kpi",
+        "thread"
       ],
       "error": ""
     },
@@ -623,8 +648,8 @@
       "toLeader": true,
       "tools": [
         "thread",
-        "people",
-        "leader_edits"
+        "leader_edits",
+        "people"
       ],
       "error": ""
     },
@@ -752,7 +777,7 @@
       "toLeader": false,
       "tools": [
         "person_card",
-        "authorities"
+        "leader_edits"
       ],
       "error": ""
     },
@@ -831,7 +856,7 @@
       "toLeader": false,
       "tools": [
         "person_card",
-        "thread"
+        "leader_edits"
       ],
       "error": ""
     },
@@ -846,7 +871,8 @@
       "toLeader": false,
       "tools": [
         "person_card",
-        "kpi"
+        "kpi",
+        "thread"
       ],
       "error": ""
     },
@@ -892,7 +918,8 @@
       "toLeader": false,
       "tools": [
         "person_card",
-        "kpi"
+        "kpi",
+        "thread"
       ],
       "error": ""
     },
@@ -922,7 +949,7 @@
       "toLeader": false,
       "tools": [
         "person_card",
-        "thread"
+        "leader_edits"
       ],
       "error": ""
     },
@@ -952,7 +979,9 @@
       "action": "игнорировать",
       "toLeader": false,
       "tools": [
-        "thread"
+        "thread",
+        "leader_edits",
+        "people"
       ],
       "error": ""
     },
@@ -968,7 +997,6 @@
       "tools": [
         "person_card",
         "kpi",
-        "open_tasks",
         "thread"
       ],
       "error": ""
@@ -985,7 +1013,6 @@
       "tools": [
         "person_card",
         "kpi",
-        "open_tasks",
         "thread"
       ],
       "error": ""
@@ -1000,7 +1027,8 @@
       "action": "игнорировать",
       "toLeader": false,
       "tools": [
-        "thread"
+        "thread",
+        "leader_edits"
       ],
       "error": ""
     },
@@ -1015,8 +1043,8 @@
       "toLeader": true,
       "tools": [
         "thread",
-        "people",
-        "leader_edits"
+        "leader_edits",
+        "people"
       ],
       "error": ""
     },
@@ -1110,7 +1138,8 @@
       "action": "игнорировать",
       "toLeader": false,
       "tools": [
-        "thread"
+        "thread",
+        "leader_edits"
       ],
       "error": ""
     },
@@ -1125,7 +1154,8 @@
       "toLeader": false,
       "tools": [
         "person_card",
-        "kpi"
+        "kpi",
+        "thread"
       ],
       "error": ""
     },
@@ -1155,7 +1185,8 @@
       "action": "игнорировать",
       "toLeader": false,
       "tools": [
-        "thread"
+        "thread",
+        "leader_edits"
       ],
       "error": ""
     },
@@ -1186,7 +1217,7 @@
       "toLeader": false,
       "tools": [
         "person_card",
-        "authorities"
+        "leader_edits"
       ],
       "error": ""
     },
@@ -1197,12 +1228,14 @@
       "category": "руководство",
       "expected": "спросить_руководителя",
       "route": "k2",
-      "action": "спросить_руководителя",
-      "toLeader": true,
+      "action": "авто",
+      "toLeader": false,
       "tools": [
         "person_card",
         "thread",
-        "past_decisions"
+        "past_decisions",
+        "open_tasks",
+        "kpi"
       ],
       "error": ""
     },
@@ -1217,7 +1250,8 @@
       "toLeader": false,
       "tools": [
         "thread",
-        "people"
+        "people",
+        "leader_edits"
       ],
       "error": ""
     },
@@ -1249,7 +1283,6 @@
       "tools": [
         "person_card",
         "kpi",
-        "open_tasks",
         "thread"
       ],
       "error": ""
@@ -1264,7 +1297,8 @@
       "action": "игнорировать",
       "toLeader": false,
       "tools": [
-        "thread"
+        "thread",
+        "leader_edits"
       ],
       "error": ""
     },
@@ -1278,7 +1312,8 @@
       "action": "игнорировать",
       "toLeader": false,
       "tools": [
-        "thread"
+        "thread",
+        "leader_edits"
       ],
       "error": ""
     },

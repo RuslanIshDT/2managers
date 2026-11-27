@@ -1,8 +1,10 @@
-// Перед встречей один на один: что сотрудник уже передал и какого действия ждёт от руководителя.
-// Имена и формулировки берутся из писем, протоколов и задач, в коде их нет.
+// Перед встречей один на один модель решает, ждёт ли сотрудник действия руководителя.
+// Код только собирает источники и проверяет, что названные в ответе записи есть в собранном списке.
+import { z } from 'zod';
 import { and, eq } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
 import { emails, mailIn, people, protocols, seriesKind, tasks as taskTable } from '../db/schema.ts';
+import { callJson, type JsonSchema } from '../llm.ts';
 import type { LiveTask } from './live-sources.ts';
 import { meetingOfFile } from './protocol-context.ts';
 import { dateWords } from './scene.ts';
@@ -72,102 +74,108 @@ export interface BriefInput {
   tasks: BriefTask[];
 }
 
-const CLOSED = new Set(['сделана', 'закрыта', 'отменена', 'готово']);
-const STOP = new Set([
-  'обещаю',
-  'обязуюсь',
-  'выбрать',
-  'сделать',
-  'решить',
-  'посмотреть',
-  'согласовать',
-  'утвердить',
-  'подписать',
-  'назвать',
-  'определить',
-  'ответить',
-  'когда',
-  'будут',
-  'пришли',
-  'пришлет',
-  'прислать',
-  'после',
-  'только',
-  'чтобы',
-  'нужно',
-  'нужен',
-  'нужна',
-  'нужны',
-  'этого',
-  'этому',
-]);
-
-interface Question {
-  person: string;
-  action: string;
-  at: string;
-  waiting: boolean;
-  thread: string;
-  words: string[];
-  sources: BriefSource[];
-  kind: 'promise' | 'task';
+export interface PacketSource {
+  id: string;
+  label: string;
+  href: string;
+  text: string;
 }
 
-export function oneOnOneBrief(input: BriefInput): OneOnOneBlock[] {
+export interface MeetingPacket {
+  name: string;
+  summary: string;
+  sources: PacketSource[];
+}
+
+export interface TurnVerdict {
+  waiting: boolean;
+  action: string;
+  sourceIds: string[];
+}
+
+const CLOSED = new Set(['сделана', 'закрыта', 'отменена', 'готово']);
+const LETTER_CAP = 12;
+
+const verdictZod = z.object({
+  ждёт: z.boolean(),
+  действие: z.string().max(300),
+  источники: z.array(z.string().max(120)).max(8),
+});
+
+const verdictSchema: JsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['ждёт', 'действие', 'источники'],
+  properties: {
+    ждёт: { type: 'boolean' },
+    действие: { type: 'string' },
+    источники: { type: 'array', items: { type: 'string' } },
+  },
+};
+
+export function briefPackets(input: BriefInput): MeetingPacket[] {
   const until = stamp(input.until);
   const day = until.slice(0, 10);
   const people = input.people.filter((person) => person.name.trim() && !sameName(person.name, input.leaderName));
-  const visibleLetters = input.letters.filter((letter) => stamp(letter.at) && stamp(letter.at) <= until);
-  const visibleProtocols = input.protocols.filter((protocol) => stamp(protocol.at) && stamp(protocol.at) <= until);
-  const questions: Question[] = [];
-  for (const protocol of visibleProtocols) {
-    for (const step of protocol.steps) {
-      if (!sameName(step.owner, input.leaderName)) continue;
-      const person = personOfText(step.task, people) ?? personOfTitle(protocol.title, people);
-      const action = actionFrom(step.task);
-      if (!person || !action) continue;
-      questions.push(question(person, action, protocol.at, step.task, '', sourceOf(input.origin, 'protocol', protocol.id, `Протокол ${dateWords(protocol.at)}: ${step.task}`), 'promise'));
-    }
-  }
-  for (const letter of visibleLetters) {
-    if (!fromLeader(letter, input)) continue;
-    const person = personOfAddress(letter.toEmail, people) ?? personOfText(`${letter.subject} ${letter.body}`, people);
-    const action = actionFrom(`${letter.subject}. ${letter.body}`);
-    if (!person || !action) continue;
-    questions.push(
-      question(
-        person,
-        action,
-        letter.at,
-        `${letter.subject} ${letter.body}`,
-        threadOf(letter.subject),
-        sourceOf(input.origin, 'letter', letter.id, `Письмо ${dateWords(letter.at)} «${letter.subject}»`),
-        'promise',
-      ),
-    );
-  }
-  for (const task of input.tasks) {
-    if (!sameName(task.owner, input.leaderName) || CLOSED.has(task.status)) continue;
-    const person = personOfText(task.title, people);
-    const action = actionFrom(task.title) ?? task.title.trim();
-    if (!person || !action) continue;
-    const key = /^[A-Za-z][A-Za-z0-9]*-\d+$/.test(task.key) ? task.key : '';
-    const href = key ? `https://tracker.yandex.ru/${key}` : '';
-    questions.push(question(person, action, '1970-01-01T00:00', task.title, '', { label: `Задача${key ? ` ${key}` : ''} «${task.title}»`, href }, 'task'));
-  }
-  const blocks: OneOnOneBlock[] = [];
+  const packets: MeetingPacket[] = [];
   for (const meeting of input.meetings) {
     if (dayOf(meeting.startsAt) !== day || !isPersonalMeeting(meeting.summary, meeting.kind)) continue;
-    const named = (meeting.attendees ?? [])
-      .map((name) => people.find((row) => sameName(row.name, name)))
-      .find((row) => row);
-    const personName = named?.name ?? personOfTitle(meeting.summary, people);
-    if (!personName) continue;
-    const lines = linesFor(personName, questions, visibleLetters, input.tasks, until, input);
-    if (!lines.length || blocks.some((block) => block.name === personName)) continue;
-    blocks.push({ name: personName, lines });
+    const named = (meeting.attendees ?? []).map((name) => people.find((row) => sameName(row.name, name))).find((row) => row);
+    const person = named ?? people.find((row) => personOfTitle(meeting.summary, [row]) === row.name);
+    if (!person || packets.some((packet) => sameName(packet.name, person.name))) continue;
+    packets.push({ name: person.name, summary: meeting.summary, sources: sourcesFor(person, input, until) });
   }
-  return blocks;
+  return packets;
+}
+
+export function blocksFromVerdicts(packets: MeetingPacket[], verdicts: TurnVerdict[]): OneOnOneBlock[] {
+  return packets.flatMap((packet, index) => {
+    const verdict = verdicts[index];
+    if (!verdict?.waiting || !verdict.action.trim()) return [];
+    const sources = verdict.sourceIds.flatMap((id) => {
+      const source = packet.sources.find((row) => row.id === id);
+      return source ? [{ label: source.label, href: source.href }] : [];
+    });
+    if (!sources.length) return [];
+    return [{ name: packet.name, lines: [{ text: verdict.action.trim(), sources }] }];
+  });
+}
+
+export async function judgeTurn(leaderId: string, packet: MeetingPacket): Promise<TurnVerdict> {
+  const list = packet.sources.map((source) => `${source.id} | ${source.label} | ${clip(source.text)}`).join('\n');
+  const result = await callJson<unknown>({
+    purpose: `one-on-one:${leaderId}:${packet.name}`,
+    system: [
+      'Ты решаешь по источникам, ждёт ли сотрудник к этой встрече один на один действия руководителя.',
+      'Ждёт, если свою часть сотрудник уже передал и ход за руководителем.',
+      'Не ждёт, если сотрудник ещё не передал свою часть или руководитель уже закрыл вопрос.',
+      'действие — одно короткое предложение, чего ждут. Пустая строка, если не ждёт.',
+      'источники — id записей, на которых основан ответ. Только id из списка, без новых.',
+    ].join(' '),
+    user: `Встреча: ${packet.summary}. Сотрудник: ${packet.name}.\n${list || 'Источников нет.'}`,
+    schemaName: 'one_on_one',
+    schema: verdictSchema,
+  });
+  const parsed = verdictZod.safeParse(result.data);
+  if (!parsed.success) return { waiting: false, action: '', sourceIds: [] };
+  return { waiting: parsed.data.ждёт, action: parsed.data.действие.trim(), sourceIds: parsed.data.источники };
+}
+
+export async function oneOnOneBrief(
+  input: BriefInput,
+  judge: (packet: MeetingPacket) => Promise<TurnVerdict> = (packet) => judgeTurn('brief', packet),
+): Promise<OneOnOneBlock[]> {
+  const packets = briefPackets(input);
+  const verdicts: TurnVerdict[] = [];
+  for (const packet of packets) {
+    try {
+      verdicts.push(await judge(packet));
+    } catch (error) {
+      console.error('Сводка к встрече не собрана', error instanceof Error ? error.message : error);
+      verdicts.push({ waiting: false, action: '', sourceIds: [] });
+    }
+  }
+  return blocksFromVerdicts(packets, verdicts);
 }
 
 export async function oneOnOneForDay(
@@ -237,102 +245,79 @@ export async function oneOnOneForDay(
       dueOn: row.dueOn,
       status: row.status,
     }));
-  return oneOnOneBrief({
-    leaderName,
-    leaderEmail: leader?.email ?? '',
-    leaderMailbox: mailConfig()?.user ?? '',
-    origin: process.env.STAND_ORIGIN ?? '',
-    until: `${day}T08:30`,
-    people: staff.map((person) => ({ name: person.name, email: person.email })),
-    meetings: meetings.map((meeting) => ({ ...meeting, kind: kindOf.get(meeting.summary) })),
-    letters,
-    protocols: briefProtocols,
-    tasks: storedTasks.map((task) => ({ key: task.id, title: task.title, owner: task.owner, status: task.status })),
-  });
+  return oneOnOneBrief(
+    {
+      leaderName,
+      leaderEmail: leader?.email ?? '',
+      leaderMailbox: mailConfig()?.user ?? '',
+      origin: process.env.STAND_ORIGIN ?? '',
+      until: `${day}T08:30`,
+      people: staff.map((person) => ({ name: person.name, email: person.email })),
+      meetings: meetings.map((meeting) => ({ ...meeting, kind: kindOf.get(meeting.summary) })),
+      letters,
+      protocols: briefProtocols,
+      tasks: storedTasks.map((task) => ({ key: task.id, title: task.title, owner: task.owner, status: task.status })),
+    },
+    (packet) => judgeTurn(leaderId, packet),
+  );
 }
 
-function linesFor(person: string, questions: Question[], letters: BriefLetter[], tasks: BriefTask[], until: string, input: BriefInput): OneOnOneLine[] {
-  const lines: OneOnOneLine[] = [];
-  const seen = new Set<string>();
-  for (const item of questions.filter((row) => sameName(row.person, person)).sort((a, b) => a.at.localeCompare(b.at))) {
-    const key = item.action.toLowerCase();
-    if (seen.has(key)) continue;
-    const delivery = item.waiting ? deliveryFor(item, person, letters, until) : null;
-    if (item.waiting && !delivery) continue;
-    if (closed(item, delivery, letters, tasks, until, input)) continue;
-    seen.add(key);
-    const sources = [...item.sources];
-    if (delivery) sources.push(sourceOf(input.origin, 'letter', delivery.id, `Письмо ${dateWords(delivery.at)} «${delivery.subject}»`));
-    lines.push({ text: lineText(person, item.action, delivery, item.kind), sources });
+function sourcesFor(person: { name: string; email: string }, input: BriefInput, until: string): PacketSource[] {
+  const sources: PacketSource[] = [];
+  for (const protocol of input.protocols) {
+    if (!stamp(protocol.at) || stamp(protocol.at) > until) continue;
+    const about = personOfTitle(protocol.title, [person]) || protocol.steps.some((step) => mentioned(person.name, `${step.owner} ${step.task}`));
+    if (!about) continue;
+    const text = protocol.steps.map((step) => `${step.owner}: ${step.task}`).join('\n');
+    sources.push({
+      id: `p:${protocol.id}`,
+      label: `Протокол ${dateWords(protocol.at)}`,
+      href: href(input.origin, 'protocol', protocol.id),
+      text,
+    });
   }
-  return lines;
+  const letters = input.letters
+    .filter((letter) => stamp(letter.at) && stamp(letter.at) <= until && aboutLetter(letter, person))
+    .sort((a, b) => stamp(b.at).localeCompare(stamp(a.at)))
+    .slice(0, LETTER_CAP)
+    .reverse();
+  for (const letter of letters) {
+    sources.push({
+      id: `m:${letter.id}`,
+      label: `Письмо ${dateWords(letter.at)} «${letter.subject}»`,
+      href: href(input.origin, 'letter', letter.id),
+      text: `${letter.fromName}: ${letter.subject}. ${letter.body}`,
+    });
+  }
+  for (const task of input.tasks) {
+    if (CLOSED.has(task.status)) continue;
+    const about = sameName(task.owner, person.name) || mentioned(person.name, task.title);
+    if (!about) continue;
+    sources.push({
+      id: `t:${task.key}`,
+      label: `Задача${task.key ? ` ${task.key}` : ''} «${task.title}»`,
+      href: /^[A-Za-z][A-Za-z0-9]*-\d+$/.test(task.key) ? `https://tracker.yandex.ru/${task.key}` : '',
+      text: `${task.owner}: ${task.title}`,
+    });
+  }
+  return sources;
 }
 
-function question(person: string, action: string, at: string, raw: string, thread: string, source: BriefSource, kind: Question['kind']): Question {
-  return {
-    person,
-    action,
-    at: stamp(at),
-    waiting: waitsForMaterials(raw),
-    thread,
-    words: contentWords(raw),
-    sources: [source],
-    kind,
-  };
+function aboutLetter(letter: BriefLetter, person: { name: string; email: string }): boolean {
+  if (sameName(letter.fromName, person.name)) return true;
+  if (person.email && letter.toEmail.toLowerCase().includes(person.email.toLowerCase())) return true;
+  if (person.email && letter.fromEmail.toLowerCase() === person.email.toLowerCase()) return true;
+  return mentioned(person.name, `${letter.subject} ${letter.body}`);
 }
 
-function sourceOf(origin: string, kind: 'protocol' | 'letter', id: string, label: string): BriefSource {
+function href(origin: string, kind: 'protocol' | 'letter', id: string): string {
   const base = origin.trim().replace(/\/+$/, '');
-  return { label, href: base && id ? `${base}/#${kind}-${encodeURIComponent(id)}` : '' };
+  return base && id ? `${base}/#${kind}-${encodeURIComponent(id)}` : '';
 }
 
-function deliveryFor(item: Question, person: string, letters: BriefLetter[], until: string): BriefLetter | null {
-  const found = letters
-    .filter((letter) => stamp(letter.at) > item.at && stamp(letter.at) <= until && sameName(letter.fromName, person))
-    .filter((letter) => overlaps(item.words, `${letter.subject} ${letter.body}`) && handsOver(letter))
-    .sort((a, b) => stamp(a.at).localeCompare(stamp(b.at)));
-  return found[0] ?? null;
-}
-
-function closed(item: Question, delivery: BriefLetter | null, letters: BriefLetter[], tasks: BriefTask[], until: string, input: BriefInput): boolean {
-  const threads = new Set([item.thread, delivery ? threadOf(delivery.subject) : ''].filter(Boolean));
-  const after = delivery ? stamp(delivery.at) : item.at;
-  const leaderReply = letters.some((letter) => {
-    if (!(stamp(letter.at) > after && stamp(letter.at) <= until)) return false;
-    if (!isLeader(letter, input, 'reply')) return false;
-    const related = threads.has(threadOf(letter.subject)) || overlaps(item.words, `${letter.subject} ${letter.body}`);
-    return related && fulfills(item.action, letter);
-  });
-  const done = tasks.some((task) => CLOSED.has(task.status) && sameName(task.owner, input.leaderName) && overlaps(item.words, task.title));
-  return leaderReply || done;
-}
-
-// Письмо передаёт ход, когда материалы уже в тексте, по ссылке или названы приложенными. «Ещё готовлю, пришлю завтра» ход не передаёт.
-export function handsOver(letter: BriefLetter): boolean {
-  const body = letter.body;
-  if (/приложен|во вложени|прилага|https?:\/\//i.test(body)) return true;
-  if (/ещ[её]\s+готов|пришлю|отправлю|завтра|позже|пока не|не готов|не успел|подготовлю/i.test(body)) return false;
-  return /оба варианта|варианты\s*:|первы[йе]|второ[йе]|вот\s/i.test(body);
-}
-
-// «Посмотрю завтра» обещание не закрывает. «Берём второй» закрывает обещание выбрать.
-export function fulfills(action: string, letter: BriefLetter): boolean {
-  const body = letter.body;
-  if (/бер[её]м|выбираю|выбрал|утверждаю|остановим|подходит\s|перв(?:ый|ого|ым|ая)|втор(?:ой|ого|ым|ая)|трет(?:ий|ьего|ья)/i.test(body) && /выбрать|вариант/i.test(action)) return true;
-  if (/подпис/i.test(action) && /подписал|подписан/i.test(body)) return true;
-  if (/соглас/i.test(action) && /согласован|согласна|согласен/i.test(body)) return true;
-  if (/сделать/i.test(action) && /сделал|сделано|готово/i.test(body)) return true;
-  if (/утверд/i.test(action) && /утвердил|утверждено/i.test(body)) return true;
-  if (/ответ/i.test(action) && /ответил/i.test(body)) return true;
-  return false;
-}
-
-function lineText(person: string, action: string, delivery: BriefLetter | null, kind: Question['kind']): string {
-  const head = kind === 'task' ? `Нужно: ${lowerFirst(action)}.` : `Вы обещали ${lowerFirst(action)}.`;
-  if (!delivery) return kind === 'task' ? head : `${head} Ответа в переписке пока не видно.`;
-  const verb = /[ая]$/i.test(firstName(person)) ? 'прислала' : 'прислал';
-  const what = firstSentence(delivery.body) || delivery.subject;
-  return `${head} ${firstName(person)} ${verb} ${dateWords(delivery.at)}: ${what} Ответа в переписке пока не видно.`;
+function clip(text: string): string {
+  const clean = text.replace(/\s+/g, ' ').trim();
+  return clean.length > 400 ? `${clean.slice(0, 399).trim()}…` : clean;
 }
 
 export function isPersonalMeeting(title: string, kind = ''): boolean {
@@ -340,75 +325,9 @@ export function isPersonalMeeting(title: string, kind = ''): boolean {
   return /(?:^|[^a-zа-яё0-9])(?:1\s*[:\-]\s*1|один на один)(?![a-zа-яё])/i.test(title);
 }
 
-function actionFrom(text: string): string | null {
-  const promised = /(?:обещаю|обязуюсь|беру на себя|возьму на себя)\s+([^.\n]+)/i.exec(text);
-  if (promised) return cleanAction(promised[1] ?? '');
-  const verb = /(?:^|[.!?\n]\s*|^\s*|и\s+)((?:выбрать|сделать|решить|посмотреть|согласовать|утвердить|подписать|назвать|определить|ответить)\s+[^.\n]+)/i.exec(text);
-  if (verb) return cleanAction(verb[1] ?? '');
-  return null;
-}
-
-function cleanAction(raw: string): string {
-  return raw
-    .split(/,|\sкогда\b|\sпосле\b|\sкак только\b/i)[0]
-    .replace(/\s+/g, ' ')
-    .trim()
-    .replace(/[.!?,;:]+$/g, '');
-}
-
-function waitsForMaterials(text: string): boolean {
-  return /пришл|жду|нужн|подготов|как только|когда будут|после того как/i.test(text);
-}
-
-function contentWords(text: string): string[] {
-  const words = text
-    .toLowerCase()
-    .replace(/ё/g, 'е')
-    .split(/[^a-zа-я0-9]+/i)
-    .filter((word) => word.length >= 5 && !STOP.has(word));
-  return [...new Set(words)];
-}
-
-function overlaps(words: string[], text: string): boolean {
-  if (!words.length) return false;
-  const hay = text.toLowerCase().replace(/ё/g, 'е');
-  return words.some((word) => hay.includes(word.slice(0, Math.max(5, word.length - 1))));
-}
-
-function threadOf(subject: string): string {
-  let text = subject.toLowerCase().replace(/ё/g, 'е').trim();
-  let previous = '';
-  while (text !== previous) {
-    previous = text;
-    text = text.replace(/^(re|fwd|fw|отв|ответ|пересыл)\s*:\s*/i, '').trim();
-  }
-  return text;
-}
-
-function fromLeader(letter: BriefLetter, input: BriefInput): boolean {
-  return isLeader(letter, input, 'promise');
-}
-
-function isLeader(letter: BriefLetter, input: BriefInput, mode: 'promise' | 'reply'): boolean {
-  const from = letter.fromEmail.toLowerCase();
-  if (input.leaderEmail && from === input.leaderEmail.toLowerCase()) return true;
-  if (mode === 'reply' && input.leaderMailbox && from === input.leaderMailbox.toLowerCase()) return true;
-  return sameName(letter.fromName, input.leaderName);
-}
-
-function personOfAddress(email: string, people: { name: string; email: string }[]): string | null {
-  const found: string[] = email.toLowerCase().match(/[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}/g) ?? [];
-  const hit = people.filter((person) => found.includes(person.email.toLowerCase()));
-  return hit.length === 1 ? hit[0].name : null;
-}
-
-function personOfText(text: string, people: { name: string }[]): string | null {
-  const hits = people.filter((person) => mentioned(person.name, text));
-  return hits.length === 1 ? hits[0].name : null;
-}
-
 function personOfTitle(title: string, people: { name: string }[]): string | null {
-  return personOfText(title, people);
+  const hits = people.filter((person) => mentioned(person.name, title));
+  return hits.length === 1 ? hits[0].name : null;
 }
 
 function mentioned(name: string, text: string): boolean {
@@ -420,21 +339,6 @@ function mentioned(name: string, text: string): boolean {
 
 function sameName(left: string, right: string): boolean {
   return left.trim().toLowerCase().replace(/ё/g, 'е') === right.trim().toLowerCase().replace(/ё/g, 'е');
-}
-
-function firstName(name: string): string {
-  return name.trim().split(/\s+/)[0] ?? name;
-}
-
-function lowerFirst(text: string): string {
-  return text ? text.charAt(0).toLowerCase() + text.slice(1) : text;
-}
-
-function firstSentence(text: string): string {
-  const clean = text.replace(/\s+/g, ' ').trim();
-  const end = clean.search(/[.!?](\s|$)/);
-  const sentence = (end === -1 ? clean : clean.slice(0, end + 1)).trim();
-  return sentence.length > 140 ? `${sentence.slice(0, 139).trim()}…` : sentence;
 }
 
 function stepsOf(value: unknown): BriefStep[] {

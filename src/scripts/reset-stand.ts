@@ -1,7 +1,7 @@
 // Очищает решения, вердикты, ленту и принятые правила руководителя с Telegram.
 // Каталог писем не трогает. Карточку «ждёт» берёт из письма, где скидка выше полномочия, и разбирает его моделью.
 import { eq, isNotNull } from 'drizzle-orm';
-import { pickDiscountAboveLimit } from '../agents/reset-stand.ts';
+import { pickAboveLimit } from '../agents/reset-stand.ts';
 import { chainKey } from '../agents/k2.ts';
 import { pullInbox } from '../agents/intake.ts';
 import { createDb, createPool, migrate } from '../db/client.ts';
@@ -39,14 +39,12 @@ const [catalog, staff, rights] = await Promise.all([
   db.select().from(people).where(eq(people.leaderId, leaderId)),
   db.select().from(authorities).where(eq(authorities.leaderId, leaderId)),
 ]);
-const limits = staff.flatMap((person) => {
-  const row = rights.find((right) => right.personId === person.externalId && right.area.toLowerCase().includes('скидк'));
-  if (!row) return [];
-  const limit = Number(row.limitValue.replace(',', '.'));
-  if (!Number.isFinite(limit)) return [];
-  return [{ email: person.email, name: person.name, limit }];
-});
-const letter = pickDiscountAboveLimit(
+const limits = staff.flatMap((person) =>
+  rights
+    .filter((right) => right.personId === person.externalId)
+    .map((right) => ({ email: person.email, name: person.name, area: right.area, limit: right.limitValue, unit: right.unit })),
+);
+const letter = pickAboveLimit(
   catalog.map((row) => ({
     id: row.externalId,
     fromEmail: row.fromEmail,

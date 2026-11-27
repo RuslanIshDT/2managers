@@ -1,0 +1,1 @@
+ALTER TABLE revisions ADD COLUMN IF NOT EXISTS understood text NOT NULL DEFAULT '';

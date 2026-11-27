@@ -2,10 +2,11 @@
 // Провал (код выхода 1): дошло меньше всех писем N1 или совпадение ниже порога --min (по умолчанию 0.85).
 import { writeFile } from 'node:fs/promises';
 import { and, eq, gte, like } from 'drizzle-orm';
+import { confirmationPoints } from '../agents/confirm.ts';
 import { evalReport, evalScore, runEval } from '../agents/eval.ts';
 import { createDb, createPool, migrate } from '../db/client.ts';
 import { installLlmRecording } from '../db/llm-record.ts';
-import { agentModels, llmCalls } from '../db/schema.ts';
+import { agentModels, leaders, llmCalls } from '../db/schema.ts';
 import { LEADER_ID } from '../db/seed.ts';
 import { llmConfig } from '../llm.ts';
 
@@ -42,7 +43,8 @@ const calls = await db
   .from(llmCalls)
   .where(and(gte(llmCalls.at, started), like(llmCalls.purpose, 'eval:%')));
 const costUsd = calls.reduce((sum, row) => sum + Number(row.cost ?? 0), 0);
-const score = evalScore(rows);
+const [leaderRow] = await db.select({ profile: leaders.profile }).from(leaders).where(eq(leaders.id, leaderId)).limit(1);
+const score = evalScore(rows, confirmationPoints(leaderRow?.profile ?? ''));
 const minutes = Math.round((Date.now() - started.getTime()) / 6000) / 10;
 const at = started.toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' }) + ' МСК';
 const report = evalReport(score, { model, at, costUsd, calls: calls.length, minutes });

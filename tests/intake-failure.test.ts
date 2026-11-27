@@ -28,13 +28,13 @@ describe('T52: сбой разбора одного письма', () => {
   });
 
   it('нет ответа модели — письмо уходит руководителю, ничего не отправляется', () => {
-    const plain = failedRuling('Перенос созвона\nМожно в четверг?', 'основание: too_small', false);
+    const plain = failedRuling('Перенос созвона\nМожно в четверг?', 'основание: too_small');
     expect(plain.kind).toBe('нужен_руководитель');
     expect(plain.ask).toBe(true);
     expect(plain.send).toBe(false);
     expect(plain.draft).toBe('');
     expect(plain.basis).toContain('too_small');
-    expect(failedRuling('Скидка 7% клиенту', 'x', false).category).toBe('деньги');
-    expect(failedRuling('Отчёт', 'x', true).category).toBe('руководство');
+    expect(plain.category).toBe('иное');
+    expect(failedRuling('Скидка 7% клиенту', 'x').category).toBe('иное');
   });
 });

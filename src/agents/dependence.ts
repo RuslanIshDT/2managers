@@ -1,6 +1,6 @@
 // K10–K13. Индекс, порог доверия и карточка считаются кодом. Модель не вызывается.
 import { readFile } from 'node:fs/promises';
-import { textSignals } from './k2.ts';
+import { nearestAmount, normalizeUnit } from './confirm.ts';
 import { parseCsv } from '../data/synthetic.ts';
 
 export interface HistoryRow {
@@ -47,6 +47,7 @@ export interface AuthorityRule {
   email: string;
   area: string;
   limit: number;
+  unit?: string;
 }
 
 export function dependenceIndex(flowHours: number, stillHours: number): number {
@@ -72,17 +73,17 @@ export function authorityBlocks(
   letter: { fromEmail: string; subject: string; body: string },
   rules: AuthorityRule[],
 ): AuthorityRule | null {
-  const signal = textSignals(`${letter.subject}\n${letter.body}`);
-  if (signal.discountPercent === null) return null;
+  const text = `${letter.subject}\n${letter.body}`;
   const email = letter.fromEmail.toLowerCase();
   return (
-    rules.find(
-      (rule) =>
-        rule.email.toLowerCase() === email &&
-        rule.area.toLowerCase().includes('скид') &&
-        signal.discountPercent !== null &&
-        signal.discountPercent <= rule.limit,
-    ) ?? null
+    rules.find((rule) => {
+      if (rule.email.toLowerCase() !== email) return false;
+      const units = rule.unit ? [normalizeUnit(rule.unit)] : ['%', '₽', 'ч'];
+      return units.some((unit) => {
+        const asked = nearestAmount(text, rule.area, unit);
+        return asked !== null && asked <= rule.limit;
+      });
+    }) ?? null
   );
 }
 

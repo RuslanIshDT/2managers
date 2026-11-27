@@ -1,5 +1,5 @@
 // Пересчёт недели через правила. Код не знает людей и лимиты синтетики: они приходят в данных.
-import { leaderMustConfirm, textSignals } from './k2.ts';
+import { leaderMustConfirm, normalizeUnit, unitInText, withinLimit } from './confirm.ts';
 
 export interface HistoryRow {
   personId: string;
@@ -56,8 +56,8 @@ export interface Replay {
   remaining: string[];
 }
 
-export function ruleEffect(verdict: string, category: string): 'стоп' | 'карточка' | null {
-  if (leaderMustConfirm(category)) return verdict === 'должно' ? null : 'карточка';
+export function ruleEffect(verdict: string, category: string, points: string[] = []): 'стоп' | 'карточка' | null {
+  if (leaderMustConfirm(category, points)) return verdict === 'должно' ? null : 'карточка';
   if (verdict === 'должно' || verdict === '') return null;
   if (verdict === 'не_должно') return 'стоп';
   return 'карточка';
@@ -132,6 +132,7 @@ export function rulesFromAudit(
   offers: TrustOffer[],
   emailByPerson: Map<string, string>,
   categoryByKey: Map<string, string> = new Map(),
+  points: string[] = [],
 ): FlowRule[] {
   const rules: FlowRule[] = [];
   for (const piece of pieces) {
@@ -139,7 +140,7 @@ export function rulesFromAudit(
     const fromEmail = split >= 0 ? piece.key.slice(0, split) : '';
     const subject = subjectKey(split >= 0 ? piece.key.slice(split + 1) : piece.title);
     const category = piece.kind === 'письма' ? categoryByKey.get(`${fromEmail.toLowerCase()}|${subject}`) ?? '' : categoryByKey.get(`встреча|${subject}`) ?? '';
-    const effect = ruleEffect(piece.verdict, category);
+    const effect = ruleEffect(piece.verdict, category, points);
     if (!effect) continue;
     if (piece.kind === 'письма') {
       rules.push({
@@ -201,16 +202,15 @@ export function letterHits(
       rule.subjectKey === key &&
       (rule.effect === 'стоп' || rule.effect === 'дайджест' || rule.effect === 'карточка'),
   );
-  const signal = textSignals(`${letter.subject}\n${letter.body}`);
+  const text = `${letter.subject}\n${letter.body}`;
   const authority =
-    signal.discountPercent === null
-      ? null
-      : rules.find((rule) => {
-          if (rule.kind !== 'полномочие' || rule.effect !== 'сам') return false;
-          if (rule.fromEmail.toLowerCase() !== email) return false;
-          const limit = Number(rule.limitValue);
-          return Number.isFinite(limit) && rule.limitValue !== '' && signal.discountPercent !== null && signal.discountPercent <= limit;
-        }) ?? null;
+    rules.find((rule) => {
+      if (rule.kind !== 'полномочие' || rule.effect !== 'сам') return false;
+      if (rule.fromEmail.toLowerCase() !== email) return false;
+      const limit = Number(rule.limitValue);
+      const unit = normalizeUnit(rule.limitValue) || unitInText(rule.title);
+      return Number.isFinite(limit) && rule.limitValue !== '' && unit !== '' && withinLimit(text, rule.area, limit, unit);
+    }) ?? null;
   if (authority && thread?.effect !== 'стоп' && thread?.effect !== 'дайджест') return authority;
   if (thread) return thread;
   return authority;

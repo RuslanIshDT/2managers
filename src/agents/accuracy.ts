@@ -5,24 +5,32 @@ import { z } from 'zod';
 import type { Db } from '../db/client.ts';
 import { emailEtalon, emails, leaders, mailActions } from '../db/schema.ts';
 import { callJson, withLlmScope, type JsonSchema } from '../llm.ts';
-import { chainKey, leaderMustConfirm, textSignals } from './k2.ts';
+import { confirmationPoints, leaderMustConfirm } from './confirm.ts';
+import { chainKey } from './k2.ts';
 
 export const MAIL_ACTIONS = ['спросить_руководителя', 'делегировать', 'в_сводку', 'игнорировать', 'авто'] as const;
 export type MailAction = (typeof MAIL_ACTIONS)[number];
 
-const actionZod = z.object({ действие: z.enum(MAIL_ACTIONS) });
-
-const schema: JsonSchema = {
-  type: 'object',
-  additionalProperties: false,
-  required: ['действие'],
-  properties: { действие: { type: 'string', enum: [...MAIL_ACTIONS] } },
-};
+function accuracyContract(points: string[]) {
+  const choices = [...points, 'иное'] as unknown as [string, ...string[]];
+  const zod = z.object({ действие: z.enum(MAIL_ACTIONS), категория: z.enum(choices) });
+  const schema: JsonSchema = {
+    type: 'object',
+    additionalProperties: false,
+    required: ['действие', 'категория'],
+    properties: {
+      действие: { type: 'string', enum: [...MAIL_ACTIONS] },
+      категория: { type: 'string', enum: choices },
+    },
+  };
+  return { zod, schema };
+}
 
 const SYSTEM = [
   'Ты разбираешь одно письмо по правилам профиля руководителя.',
-  'Выбери одно действие и ничего больше.',
-  'спросить_руководителя — без него нельзя: деньги, кадры, обязательство клиенту, письмо его руководству.',
+  'Выбери действие и категорию.',
+  'Категория — дословно пункт раздела «Никогда без подтверждения руководителя», если письмо про этот пункт, иначе «иное».',
+  'спросить_руководителя — письмо относится к такому пункту, просьба выше полномочий отправителя или решение только его уровня.',
   'делегировать — это в зоне исполнителя, ответ возвращает ему ответственность.',
   'в_сводку — отчёт или статус, ответа не нужно.',
   'игнорировать — рассылка или письмо не ему.',
@@ -30,10 +38,8 @@ const SYSTEM = [
   'Эталонных меток у тебя нет.',
 ].join(' ');
 
-export function forceMailAction(text: string, boss: boolean, chosen: MailAction): { action: MailAction; forced: boolean } {
-  const signal = textSignals(text).category;
-  const needsLeader = boss || (signal !== null && leaderMustConfirm(signal));
-  if (needsLeader && chosen !== 'спросить_руководителя') return { action: 'спросить_руководителя', forced: true };
+export function forceMailAction(category: string, points: string[], chosen: MailAction): { action: MailAction; forced: boolean } {
+  if (leaderMustConfirm(category, points) && chosen !== 'спросить_руководителя') return { action: 'спросить_руководителя', forced: true };
   return { action: chosen, forced: false };
 }
 
@@ -59,7 +65,9 @@ export function mailScore(rows: { expected: string; action: string }[]): {
   };
 }
 
-export async function judgeMail(input: { purpose: string; profile: string; letter: string }): Promise<MailAction> {
+export async function judgeMail(input: { purpose: string; profile: string; letter: string }): Promise<{ action: MailAction; category: string }> {
+  const points = confirmationPoints(input.profile);
+  const { zod, schema } = accuracyContract(points);
   const result = await callJson<unknown>({
     purpose: input.purpose,
     system: SYSTEM,
@@ -67,9 +75,9 @@ export async function judgeMail(input: { purpose: string; profile: string; lette
     schemaName: 'mail_action',
     schema,
   });
-  const parsed = actionZod.safeParse(result.data);
+  const parsed = zod.safeParse(result.data);
   if (!parsed.success) throw new Error('Ответ модели не совпал со схемой действия');
-  return parsed.data.действие;
+  return { action: parsed.data.действие, category: parsed.data.категория };
 }
 
 export async function accuracyView(db: Db, leaderId: string) {
@@ -100,23 +108,23 @@ export async function measureAccuracy(db: Db, leaderId: string): Promise<{ calls
   ]);
   const known = new Set(etalonRows.map((row) => row.externalId));
   const done = new Set(stored.map((row) => row.chainKey));
-  const threads = new Map<string, { letter: string; boss: boolean }>();
+  const threads = new Map<string, { letter: string }>();
   for (const letter of letterRows) {
     if (!known.has(letter.externalId)) continue;
     const key = chainKey(letter.fromEmail, letter.subject);
     if (done.has(key) || threads.has(key)) continue;
     threads.set(key, {
       letter: `От: ${letter.fromName}\nТема: ${letter.subject}\n${letter.body}`,
-      boss: letter.senderRole === 'руководитель руководителя',
     });
   }
+  const points = confirmationPoints(leader.profile);
   let calls = 0;
   for (const [key, thread] of threads) {
     const chosen = await withLlmScope(
       { agent: 'accuracy', leaderId, operationId: crypto.randomUUID(), title: 'Разбор письма для точности' },
       () => judgeMail({ purpose: `accuracy:${leaderId}`, profile: leader.profile, letter: thread.letter }),
     );
-    const ruled = forceMailAction(`${thread.letter}`, thread.boss, chosen);
+    const ruled = forceMailAction(chosen.category, points, chosen.action);
     await db.insert(mailActions).values({
       leaderId,
       chainKey: key,

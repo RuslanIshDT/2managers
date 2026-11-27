@@ -48,20 +48,9 @@ export function actionAndDue(text: string): { action: string; due: string } | nu
   return { action: action.charAt(0).toUpperCase() + action.slice(1), due };
 }
 
-function letterRule(rules: { area?: string; category?: string; instead: string }[]): string | null {
-  const hit = rules.find((row) => (row.area === 'письма' || row.category === 'письма') && /начинай с действия и срока/i.test(row.instead));
-  return hit?.instead ?? null;
-}
-
-// Черновик для получателя: без служебной фразы. Правило «начинай с действия и срока» ставит в начало действие и срок этого письма.
-export function finishDraft(draft: string, letterText: string, rules: { area?: string; category?: string; instead: string }[], team: boolean): string {
-  const clean = draft.replace(/\n*По вашей правке:[\s\S]*$/u, '').trim();
-  if (!team || !letterRule(rules)) return clean;
-  const opening = actionAndDue(letterText);
-  if (!opening) return clean;
-  const head = opening.action.slice(0, Math.min(12, opening.action.length)).toLowerCase();
-  if (clean.toLowerCase().startsWith(head)) return clean;
-  return `${opening.action}, ${opening.due}.\n\n${clean}`.trim();
+// Черновик для получателя: без служебной фразы. Формулировку правила применяет модель, которая пишет текст.
+export function finishDraft(draft: string, _letterText = '', _rules: { area?: string; category?: string; instead: string }[] = [], _team = false): string {
+  return draft.replace(/\n*По вашей правке:[\s\S]*$/u, '').trim();
 }
 
 const GREETING = /^(?:здравствуйте|добрый(?:\s+|-)(?:день|вечер|утро)|привет(?:ствую)?|доброго\s+времени(?:\s+суток)?)[!.,…\s]*/i;
@@ -130,8 +119,7 @@ export function acceptRewrite(draft: string, instruction: string, candidate: str
   return next;
 }
 
-export function rewriteLetter(draft: string, instruction: string, letterText: string): string | null {
-  if (/начинай с действия и срока/i.test(instruction)) return finishDraft(draft, letterText, [{ area: 'письма', instead: instruction }], true);
+export function rewriteLetter(draft: string, instruction: string, _letterText = ''): string | null {
   return localRewrite(draft, instruction);
 }
 
@@ -175,36 +163,6 @@ export function replaceStepLine(body: string, before: ProtocolStep, after: Proto
   return body;
 }
 
-export type MorningBlockId = 'waiting' | 'own' | 'meetings' | 'plan' | 'overdue' | 'questions' | 'share' | 'returned';
-
-const MORNING_ORDER: MorningBlockId[] = ['waiting', 'own', 'meetings', 'plan', 'overdue', 'questions', 'share', 'returned'];
-
-function blockByPhrase(phrase: string): MorningBlockId | null {
-  if (/просроч/i.test(phrase)) return 'overdue';
-  if (/ожида|ждут|решени/i.test(phrase)) return 'waiting';
-  if (/ваши задачи|задач руководителя/i.test(phrase)) return 'own';
-  if (/встреч/i.test(phrase)) return 'meetings';
-  if (/три дела|дела на сегодня/i.test(phrase)) return 'plan';
-  if (/вопрос/i.test(phrase)) return 'questions';
-  if (/цел/i.test(phrase)) return 'share';
-  if (/ответил/i.test(phrase)) return 'returned';
-  return null;
-}
-
-// «Сначала …, затем …» меняет порядок двух блоков. Без правила — обычный порядок утра.
-export function morningBlockOrder(rules: string[]): MorningBlockId[] {
-  const rule = [...rules].reverse().find((text) => /сначала/i.test(text) && /затем/i.test(text));
-  if (!rule) return [...MORNING_ORDER];
-  const match = /сначала\s+(.+?)\s*,?\s*затем\s+(.+)/i.exec(rule);
-  if (!match) return [...MORNING_ORDER];
-  const first = blockByPhrase(match[1] ?? '');
-  const second = blockByPhrase(match[2] ?? '');
-  if (!first || !second || first === second) return [...MORNING_ORDER];
-  const rest = MORNING_ORDER.filter((id) => id !== first && id !== second);
-  rest.splice(Math.min(MORNING_ORDER.indexOf(first), MORNING_ORDER.indexOf(second)), 0, first, second);
-  return rest;
-}
-
 export interface ActExample {
   subject: string;
   action: string;
@@ -235,6 +193,6 @@ export function ruleHint(rules: { area?: string; instead: string }[]): string {
   return [
     'Правила писем руководителя. Соблюдай их в черновике и не цитируй формулировку правила.',
     ...rows.slice(-8).map((row) => `— ${row.instead.trim()}`),
-    'Деньги, кадры, обещания клиентам и письма начальника по-прежнему только с подтверждением руководителя.',
+    'Пункты профиля «Никогда без подтверждения руководителя» по-прежнему только с его подтверждением.',
   ].join('\n');
 }

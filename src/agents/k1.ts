@@ -3,10 +3,10 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { and, eq, count } from 'drizzle-orm';
 import { loadSynthetic, parseCsv } from '../data/synthetic.ts';
+import { dateWords, moscowDay, parseSceneFile } from './scene.ts';
 import type { Db } from '../db/client.ts';
 import { agentRuns, authorities, emails, kpis, people } from '../db/schema.ts';
 
-const CUTOFF = '2026-12-07';
 const LAG = 0.05;
 
 export interface DepartmentRow {
@@ -108,6 +108,7 @@ export async function readDepartment(dir: string): Promise<DepartmentFiles> {
 export function checkDepartment(
   peopleRows: { id: string; name: string; role: string }[],
   files: DepartmentFiles,
+  until = moscowDay(new Date()),
 ): { errors: string[]; cards: SubordinateCard[] } {
   const errors: string[] = [];
   const byId = new Map(peopleRows.map((p) => [p.id, p]));
@@ -127,7 +128,7 @@ export function checkDepartment(
   for (const row of files.kpis) {
     if (!byId.has(row.personId)) errors.push(`kpi: неизвестный человек ${row.personId}`);
     if (row.better !== 'больше' && row.better !== 'меньше') errors.push(`kpi: better «${row.better}» у ${row.personId}`);
-    if (row.week !== 'квартал' && !mondayBefore(row.week)) errors.push(`kpi: неделя «${row.week}» у ${row.personId} не понедельник до 7.12`);
+    if (row.week !== 'квартал' && !mondayBefore(row.week, until)) errors.push(`kpi: неделя «${row.week}» у ${row.personId} не понедельник до ${dateWords(until)}`);
     const list = kpiByPerson.get(row.personId) ?? [];
     list.push(row);
     kpiByPerson.set(row.personId, list);
@@ -150,7 +151,7 @@ export function checkDepartment(
     if (points.length === 0) errors.push(`${person.name}: нет KPI`);
     const series = seriesOf(points);
     for (const item of series) {
-      if (item.weeks.length < 4) errors.push(`${person.name}: у KPI «${item.name}» меньше 4 недель до 7.12`);
+      if (item.weeks.length < 4) errors.push(`${person.name}: у KPI «${item.name}» меньше 4 недель до ${dateWords(until)}`);
       if (!item.quarter) errors.push(`${person.name}: у KPI «${item.name}» нет строки квартала`);
     }
     const powers = authByPerson.get(person.id) ?? [];
@@ -174,7 +175,7 @@ export function checkDepartment(
 export async function loadDepartment(db: Db, leaderId: string, dir = 'data/synthetic') {
   const data = await loadSynthetic(dir);
   const files = await readDepartment(dir);
-  const checked = checkDepartment(data.people, files);
+  const checked = checkDepartment(data.people, files, await sceneUntil(dir));
   const now = new Date();
   if (checked.errors.length === 0) {
     await db.transaction(async (tx) => {
@@ -324,8 +325,16 @@ function seriesOf(points: KpiPoint[]): KpiSeries[] {
   });
 }
 
-function mondayBefore(week: string): boolean {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(week) || week >= CUTOFF) return false;
+async function sceneUntil(dir: string): Promise<string> {
+  try {
+    return parseSceneFile(await readFile(join(dir, 'scene.csv'), 'utf8')) ?? moscowDay(new Date());
+  } catch {
+    return moscowDay(new Date());
+  }
+}
+
+function mondayBefore(week: string, until: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(week) || week >= until) return false;
   const [year, month, day] = week.split('-').map(Number);
   return new Date(Date.UTC(year, month - 1, day)).getUTCDay() === 1;
 }

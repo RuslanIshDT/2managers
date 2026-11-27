@@ -3,7 +3,9 @@ import { enforce, type ModelVerdict } from '../src/agents/k2.ts';
 import { renderMorning } from '../src/agents/focus.ts';
 import { leaderEditReport } from '../src/agents/k2-tools.ts';
 import { revisionPrompt } from '../src/agents/revisions.ts';
-import { acceptRewrite, dueFromInstruction, exampleBlock, finishDraft, localRewrite, mailRevisions, morningBlockOrder, replaceStepLine, ruleFromChoice, stepIndex } from '../src/agents/memory.ts';
+import { limitBreaches } from '../src/agents/confirm.ts';
+import { applyMorning } from '../src/agents/morning.ts';
+import { acceptRewrite, dueFromInstruction, exampleBlock, finishDraft, localRewrite, mailRevisions, replaceStepLine, ruleFromChoice, stepIndex } from '../src/agents/memory.ts';
 
 const letter = 'Нужно подготовить справку по оттоку до 16 декабря. Клиент ждёт цифры.';
 const rule = [{ area: 'письма', instead: 'В письмах команде начинай с действия и срока' }];
@@ -45,12 +47,11 @@ describe('профиль и память', () => {
     expect(ruleFromChoice('В письмах команде начинай с действия и срока', 'approve')).toBeNull();
   });
 
-  it('ответ сотруднику начинается с действия и срока этого письма и без служебной фразы', () => {
-    const draft = finishDraft('Ольга, беру в работу.', letter, rule, true);
-    expect(draft.startsWith('Подготовить справку по оттоку, до 16 декабря.')).toBe(true);
+  it('черновик для получателя не получает служебную фразу и не переписывается кодом по формулировке правила', () => {
+    const draft = finishDraft('Ольга, беру в работу.\n\nПо вашей правке: старое', letter, rule, true);
+    expect(draft).toBe('Ольга, беру в работу.');
     expect(draft).not.toContain('По вашей правке');
-    expect(draft).not.toContain('начинай с действия');
-    expect(finishDraft('Ольга, беру в работу.', letter, rule, false)).toBe('Ольга, беру в работу.');
+    expect(draft.startsWith('Подготовить справку')).toBe(false);
   });
 
   it('правило стиля не снимает подтверждение по деньгам', () => {
@@ -71,7 +72,8 @@ describe('профиль и память', () => {
       предложение_полномочия: '',
       уверенность: 1,
     };
-    const ruled = enforce(model, 'Прошу скидку 12% до 16 декабря', 5, null, false);
+    const text = 'Прошу скидку 12% до 16 декабря';
+    const ruled = enforce(model, text, [], limitBreaches(text, [{ area: 'скидка', limit: '5', unit: '%' }]), null);
     expect(ruled.ask).toBe(true);
     expect(finishDraft(ruled.draft, 'Прошу скидку 12% до 16 декабря', rule, true)).not.toContain('По вашей правке');
   });
@@ -92,10 +94,10 @@ describe('профиль и память', () => {
     expect(ruleFromChoice(instruction, 'once')).toBeNull();
   });
 
-  it('утренний порядок применяется и снимается вместе с правилом', () => {
-    const phrase = 'сначала просроченные задачи, затем ожидающие решения';
-    expect(morningBlockOrder([phrase]).indexOf('overdue')).toBeLessThan(morningBlockOrder([phrase]).indexOf('waiting'));
-    expect(morningBlockOrder([]).indexOf('waiting')).toBeLessThan(morningBlockOrder([]).indexOf('overdue'));
+  it('утренний порядок берётся из разобранной структуры и снимается вместе с ней', () => {
+    const shape = { order: ['overdue' as const, 'waiting' as const], hide: [], limit: [], focus: '' };
+    expect(applyMorning(shape).indexOf('overdue')).toBeLessThan(applyMorning(shape).indexOf('waiting'));
+    expect(applyMorning(null).indexOf('waiting')).toBeLessThan(applyMorning(null).indexOf('overdue'));
     const input = {
       today: '2026-12-11',
       waiting: [{ who: 'Ольга', what: 'Скидка', days: 1 }],
@@ -107,10 +109,12 @@ describe('профиль и память', () => {
       questions: [],
       share: { onGoal: 0, total: 0, percent: 0 },
     };
-    const changed = renderMorning({ ...input, rules: [phrase] });
+    const changed = renderMorning({ ...input, morning: shape });
     const usual = renderMorning(input);
+    const hidden = renderMorning({ ...input, morning: { order: [], hide: ['share'], limit: [], focus: '' } });
     expect(changed.indexOf('Просрочено у сотрудников')).toBeLessThan(changed.indexOf('Ждут вашего решения'));
     expect(usual.indexOf('Ждут вашего решения')).toBeLessThan(usual.indexOf('Просрочено у сотрудников'));
+    expect(hidden).not.toContain('Время встреч на ваши цели');
   });
 
   it('примеры берутся из решений руководителя, не из действий помощника', () => {

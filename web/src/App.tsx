@@ -141,6 +141,7 @@ interface Cabinet {
   name: string;
   scene?: string;
   profile: string;
+  confirmation?: string;
   linkCode: string;
   counts: { people: number; emails: number; meetings: number; tasks: number };
   mail: 'configured' | 'missing';
@@ -150,7 +151,7 @@ interface Cabinet {
   week: WeekScene;
   focus: FocusScene;
   mirror: MirrorScene;
-  revisions: { id: string; category: string; area?: string; instead: string }[];
+  revisions: { id: string; category: string; area?: string; instead: string; note?: string }[];
   acts?: { id: string; subject: string; when: string; action: string; result: string; original: string; approved: string; auto: boolean }[];
   protocols?: { id: string; status: string; title: string; pending: boolean }[];
   accuracy: { total: number; hit: number; calls: number; forced: number; misses: { pair: string; count: number }[] } | null;
@@ -686,6 +687,7 @@ export function App() {
       <Card className="mb-4">
         <h2 className="mb-2 text-lg font-semibold">Профиль</h2>
         <p className="mb-2 text-sm text-[#5d6878]">Полный профиль руководителя. Ниже — действующие правила: их можно добавить, изменить и удалить. Правило применяется со следующего письма, протокола или утреннего плана.</p>
+        {cabinet?.confirmation ? <p className="mb-2 text-sm text-[#a3302a]">{cabinet.confirmation}</p> : null}
         <div className="whitespace-pre-wrap font-sans text-sm leading-relaxed">{plainProfile(cabinet?.profile ?? '')}</div>
       </Card>
       <ModelsPanel
@@ -1052,7 +1054,7 @@ function Revisions({
   protocols,
   onSaved,
 }: {
-  rows: { id: string; category: string; area?: string; instead: string }[];
+  rows: { id: string; category: string; area?: string; instead: string; note?: string }[];
   acts: { id: string; subject: string; when: string; action: string; result: string; original: string; approved: string; auto: boolean }[];
   protocols: { id: string; status: string; title: string; pending: boolean }[];
   onSaved: () => Promise<void>;
@@ -1098,7 +1100,7 @@ function Revisions({
   return (
     <Card className="mb-4">
       <h2 className="mb-2 text-lg font-semibold">Правила</h2>
-      <p className="mb-2 text-sm text-[#5d6878]">Правило действует со следующего письма, протокола или утреннего плана. Деньги, кадры, обещания клиентам и письма начальника по-прежнему ждут вашего подтверждения.</p>
+      <p className="mb-2 text-sm text-[#5d6878]">Правило письма и протокола действует со следующего текста. Правило утра применяется, если его удалось разобрать: как оно понято, видно сразу под правилом.</p>
       <ul className="mb-3 grid gap-2 text-sm">
         {rows.map((row) => (
           <RuleRow key={row.id} row={row} onChange={change} onDelete={remove} />
@@ -1186,7 +1188,7 @@ function RuleRow({
   onChange,
   onDelete,
 }: {
-  row: { id: string; category: string; area?: string; instead: string };
+  row: { id: string; category: string; area?: string; instead: string; note?: string };
   onChange: (id: string, text: string) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
 }) {
@@ -1194,7 +1196,7 @@ function RuleRow({
   const area = row.area || row.category;
   return (
     <li className="grid gap-1">
-      <span className="text-[#5d6878]">{area}</span>
+      <span className="text-[#5d6878]">{area}{row.note ? ` · ${row.note}` : ''}</span>
       <span className="flex flex-wrap gap-2">
         <Input value={text} onChange={(event) => setText(event.target.value)} />
         <Button type="button" variant="outline" onClick={() => onChange(row.id, text)}>Изменить</Button>
@@ -1549,8 +1551,7 @@ function rowOrigin(helper: string, who: string, data: string, rows: string[]): O
     who,
     data,
     how: 'Посчитано по данным',
-    safety:
-      'Деньги, кадры, обещания клиентам и письма руководства код всегда оставляет руководителю. Без его кнопки ничего не отправляется, кроме того, что он сам разрешил правилом.',
+    safety: 'Письмо из правил подтверждения профиля код оставляет руководителю. Без его кнопки такое письмо не уходит.',
     rows,
   };
 }
@@ -1776,8 +1777,6 @@ function actionWords(pair: string): string {
 }
 
 function categoryWords(category: string): string {
-  if (category === 'обязательства_клиентам') return 'обещание клиенту';
-  if (category === 'руководство') return 'письмо руководства';
   if (category === 'иное') return 'рабочий вопрос';
   if (category === 'не_из_отдела') return 'не из отдела';
   return category;

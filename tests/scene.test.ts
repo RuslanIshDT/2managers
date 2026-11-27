@@ -93,14 +93,15 @@ describe('N1 в предложениях T48', () => {
   it('серия с деньгами, кадрами или обещанием клиенту правилом не убирается', async () => {
     const { rulesFromAudit } = await import('../src/agents/replay.ts');
     const { seriesCategory } = await import('../src/agents/focus-run.ts');
-    expect(seriesCategory('Бюджет и прогноз', 'иное')).toBe('деньги');
-    expect(seriesCategory('Интервью кандидата', 'кадры')).toBe('кадры');
-    expect(seriesCategory('Синк с ИТ', 'иное')).toBe('иное');
+    const points = ['кадры (найм, отпуска)'];
+    expect(seriesCategory('иное', points)).toBe('иное');
+    expect(seriesCategory(points[0] ?? '', points)).toBe(points[0]);
+    expect(seriesCategory('деньги', points)).toBe('иное');
     const pieces = [
       { kind: 'встречи' as const, key: 'Интервью кандидата', title: 'Интервью кандидата', verdict: 'не_должно', change: '', cause: 'руководитель_лишний' },
       { kind: 'встречи' as const, key: 'Синк с ИТ', title: 'Синк с ИТ', verdict: 'не_должно', change: '', cause: 'руководитель_лишний' },
     ];
-    const rules = rulesFromAudit(pieces, [], new Map(), new Map([['встреча|интервью кандидата', 'кадры']]));
+    const rules = rulesFromAudit(pieces, [], new Map(), new Map([['встреча|интервью кандидата', 'кадры']]), points);
     expect(rules.find((rule) => rule.seriesKey === 'Интервью кандидата')?.effect ?? 'карточка').toBe('карточка');
     expect(rules.find((rule) => rule.seriesKey === 'Синк с ИТ')?.effect).toBe('стоп');
   });

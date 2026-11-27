@@ -9,14 +9,16 @@ import { hashPassword, hashToken, verifyPassword } from '../src/auth.ts';
 import { checkDepartment, readDepartment } from '../src/agents/k1.ts';
 import { controlOf, kpiOutlook, reviewTasks, withLeader, type PersonGoal } from '../src/agents/control.ts';
 import { readFile } from 'node:fs/promises';
-import { chainKey, discountLimit, enforce, textSignals, type ModelVerdict } from '../src/agents/k2.ts';
+import { chainKey, enforce, type ModelVerdict } from '../src/agents/k2.ts';
+import { limitBreaches } from '../src/agents/confirm.ts';
 import { hideMailbox, isOwnAddress, lettersForMailbox } from '../src/agents/intake.ts';
-import { pickDiscountAboveLimit } from '../src/agents/reset-stand.ts';
+import { pickAboveLimit, type PersonLimit } from '../src/agents/reset-stand.ts';
 import { buildDesk, type DeskInput } from '../src/agents/desk.ts';
 import { subjectKey, type FlowRule } from '../src/agents/replay.ts';
 import { freshVerdictKind } from '../src/agents/week.ts';
 import { applyRevision, revisionPrompt } from '../src/agents/revisions.ts';
 import { loadSynthetic } from '../src/data/synthetic.ts';
+import { parseSceneFile } from '../src/agents/scene.ts';
 import { parseMailboxSource, syntheticSource } from '../src/mail.ts';
 import { applyOrigin, formOrigin, requestOrigin } from '../src/http/origin.ts';
 import { mailConfig } from '../src/mail.ts';
@@ -47,7 +49,7 @@ describe('отдел D4', () => {
   it('раскладывает цели и оставляет проверки K2 и K3 видимыми', async () => {
     const data = await loadSynthetic('data/synthetic');
     const files = await readDepartment('data/synthetic');
-    const checked = checkDepartment(data.people, files);
+    const checked = checkDepartment(data.people, files, '2026-12-11');
     expect(checked.errors).toEqual([]);
     expect(checked.cards).toHaveLength(7);
 
@@ -79,9 +81,33 @@ describe('отдел D4', () => {
       ],
       authorities: [],
     };
-    const checked = checkDepartment(people, files);
+    const checked = checkDepartment(people, files, '2026-12-11');
     expect(checked.errors.join(' ')).toContain('нет полномочий');
     expect(checked.cards).toHaveLength(0);
+  });
+
+  it('недели после 7 декабря проходят, если дата сцены позже, и неделя после сцены называет её дату', () => {
+    const people = [{ id: 'p02', name: 'Ольга Смирнова', role: 'подчинённый' }];
+    const weeks = ['2026-12-14', '2026-12-21', '2026-12-28', '2027-01-04'].map((week) => ({
+      personId: 'p02',
+      kpiId: 'k',
+      name: 'План',
+      unit: '%',
+      better: 'больше',
+      week,
+      plan: '100',
+      fact: '100',
+    }));
+    const files = {
+      department: [{ personId: 'p02', zone: 'Продажи', goal: 'План', leaderGoal: '1' }],
+      kpis: [...weeks, { personId: 'p02', kpiId: 'k', name: 'План', unit: '%', better: 'больше', week: 'квартал', plan: '100', fact: '100' }],
+      authorities: [{ personId: 'p02', area: 'скидка', limit: '5', unit: '%', note: '' }],
+    };
+    expect(checkDepartment(people, files, '2027-01-11').errors).toEqual([]);
+    const late = checkDepartment(people, files, '2026-12-20');
+    expect(late.errors.join(' ')).toContain('20 декабря');
+    expect(late.errors.join(' ')).not.toContain('7 декабря');
+    expect(late.cards).toHaveLength(0);
   });
 });
 
@@ -163,41 +189,52 @@ const modelReturn: ModelVerdict = {
   уверенность: 0.8,
 };
 
+const moneyPoint = 'деньги и бюджеты (скидки, перераспределения)';
+const peoplePoint = 'кадры (найм, офферы, отпуска)';
+
 describe('просьба подчинённого', () => {
-  it('категорию «руководство» ставит только код по оргструктуре', () => {
+  it('роль начальника сама категорию не ставит, пункт профиля уходит руководителю', () => {
     const text = 'Подтвердите участие в планёрке в пятницу.';
-    const fromTeam = enforce({ ...modelReturn, действие: 'руководителю', суть: 'Планёрка' }, text, null, null, false);
-    const forecast = enforce({ ...modelReturn, суть: 'Прогноз 94%' }, 'Прогноз выполнения плана: 94%.', null, null, false);
-    const fromBoss = enforce({ ...modelReturn, действие: 'ответить', суть: 'Вопрос сверху' }, text, null, null, true);
+    const fromTeam = enforce({ ...modelReturn, действие: 'руководителю', суть: 'Планёрка' }, text, [moneyPoint], [], null);
+    const forecast = enforce({ ...modelReturn, суть: 'Прогноз 94%' }, 'Прогноз выполнения плана: 94%.', [], [], null);
+    const fromBoss = enforce({ ...modelReturn, действие: 'ответить', суть: 'Вопрос сверху' }, text, [moneyPoint], [], null);
+    const pointed = enforce({ ...modelReturn, действие: 'ответить', категория: moneyPoint }, text, [moneyPoint], [], null);
     expect(fromTeam.category).toBe('иное');
-    // Модель сказала «руководителю» — код не спорит.
     expect(fromTeam.kind).toBe('нужен_руководитель');
     expect(forecast.category).toBe('иное');
-    expect(fromBoss.category).toBe('руководство');
-    expect(fromBoss.ask).toBe(true);
+    expect(fromBoss.category).toBe('иное');
+    expect(fromBoss.kind).toBe('вернуть');
+    expect(pointed.category).toBe(moneyPoint);
+    expect(pointed.ask).toBe(true);
+    expect(pointed.send).toBe(false);
   });
 
-  it('скидка выше лимита идёт к руководителю, повтор не спрашивает, N1 само не уходит', () => {
+  it('число выше права идёт к руководителю, повтор не спрашивает, отпуск сам по тексту не уходит', () => {
     const text = 'Скидка 12% для «Ромашка-Ритейл», маржа 18%';
-    expect(textSignals(text).discountPercent).toBe(12);
-    const over = enforce(modelReturn, text, 10, null, false);
+    const breaches = limitBreaches(text, [{ area: 'скидка', limit: '10', unit: '%' }]);
+    expect(breaches[0]?.asked).toBe(12);
+    const over = enforce(modelReturn, text, [], breaches, null);
     expect(over.kind).toBe('нужен_руководитель');
-    expect(over.category).toBe('деньги');
     expect(over.ask).toBe(true);
     expect(over.send).toBe(false);
-    const again = enforce(modelReturn, text, 10, { id: 'm062', status: 'ждёт', summary: 'скидка' }, false);
+    expect(over.basis).toContain('скидка 12% выше права 10%');
+    const again = enforce(modelReturn, text, [], breaches, { id: 'old', status: 'ждёт', summary: 'скидка' });
     expect(again.kind).toBe('повтор');
     expect(again.ask).toBe(false);
     expect(again.send).toBe(false);
-    const vacation = enforce(modelReturn, 'Прошу согласовать отпуск Ирины', null, null, false);
-    expect(vacation.kind).toBe('нужен_руководитель');
-    expect(vacation.category).toBe('кадры');
-    expect(vacation.send).toBe(false);
+    const vacation = enforce(modelReturn, 'Прошу согласовать отпуск Ирины', [], [], null);
+    expect(vacation.kind).toBe('вернуть');
+    expect(vacation.category).toBe('иное');
+    const compensation = limitBreaches('Прошу компенсацию клиенту 8 000 ₽', [{ area: 'компенсация клиенту', limit: '5000', unit: '₽' }]);
+    expect(compensation[0]?.asked).toBe(8000);
+    const budget = limitBreaches('Прошу бюджет кампании 250 000 ₽', [{ area: 'бюджет кампании', limit: '200000', unit: '₽' }]);
+    expect(budget[0]?.asked).toBe(250000);
+    expect(enforce(modelReturn, 'Прошу бюджет кампании 250 000 ₽', [], budget, null).basis).toContain('выше права');
   });
 
-  it('жалоба без признаков N1 возвращается исполнителю', () => {
+  it('жалоба без пункта профиля возвращается исполнителю', () => {
     const text = 'Клиент недоволен временем ответа. Предлагаю разбор на планёрке.';
-    const ruled = enforce({ ...modelReturn, суть: 'Жалоба' }, text, null, null, false);
+    const ruled = enforce({ ...modelReturn, суть: 'Жалоба' }, text, [moneyPoint], [], null);
     expect(ruled.kind).toBe('вернуть');
     expect(ruled.send).toBe(true);
     expect(ruled.ask).toBe(false);
@@ -228,7 +265,6 @@ describe('просьба подчинённого', () => {
     expect(kept.map((letter) => letter.id)).toEqual(['a', 'b']);
     expect(isOwnAddress('Box@Example.com', 'box@example.com')).toBe(true);
     expect(isOwnAddress('other@example.com', 'box@example.com')).toBe(false);
-    expect(discountLimit([{ area: 'скидка', limit: '10' }])).toBe(10);
     const source = syntheticSource(
       { id: 'm062', fromName: 'Ольга Смирнова', fromEmail: 'p02@company.example', subject: first?.subject ?? '', body: first?.body ?? '', received: '2026-12-10 15:52' },
       'leader@example.com',
@@ -341,17 +377,17 @@ describe('просьба подчинённого', () => {
 
   it('шаблона нет: статус уходит в сводку без ответа, ответ — текст модели по письму', () => {
     // Письма придуманы для теста, в синтетике их нет.
-    const status = enforce({ ...modelReturn, действие: 'в_сводку', черновик_ответа: 'лишний текст', суть: 'Статус по отгрузкам' }, 'Отгрузки идут по графику, отклонений нет.', null, null, false);
+    const status = enforce({ ...modelReturn, действие: 'в_сводку', черновик_ответа: 'лишний текст', суть: 'Статус по отгрузкам' }, 'Отгрузки идут по графику, отклонений нет.', [], [], null);
     expect(status.kind).toBe('в_сводку');
     expect(status.send).toBe(false);
     expect(status.ask).toBe(false);
     expect(status.draft).toBe('');
-    const answer = enforce(modelReturn, 'Клиент недоволен временем ответа, разберитесь.', null, null, false);
+    const answer = enforce(modelReturn, 'Клиент недоволен временем ответа, разберитесь.', [], [], null);
     expect(answer.kind).toBe('вернуть');
     expect(answer.draft).toBe(modelReturn.черновик_ответа);
     expect(answer.draft).not.toMatch(/Доделайте просьбу/);
     // Ответить без текста нельзя — решает руководитель.
-    const empty = enforce({ ...modelReturn, черновик_ответа: ' ' }, 'Вопрос по графику смен', null, null, false);
+    const empty = enforce({ ...modelReturn, черновик_ответа: ' ' }, 'Вопрос по графику смен', [], [], null);
     expect(empty.ask).toBe(true);
   });
 
@@ -360,14 +396,14 @@ describe('просьба подчинённого', () => {
       { name: 'Пётр Сидоров', email: 'p@x.example' },
       { name: 'Вера Петрова', email: 'v@x.example' },
     ];
-    const forward = enforce({ ...modelReturn, действие: 'передать', кому_передать: 'Сидоров', черновик_ответа: 'Пётр, подготовь КП до пятницы.' }, 'Просим КП на 20 лицензий', null, null, false, [], staff);
+    const forward = enforce({ ...modelReturn, действие: 'передать', кому_передать: 'Сидоров', черновик_ответа: 'Пётр, подготовь КП до пятницы.' }, 'Просим КП на 20 лицензий', [], [], null, [], staff);
     expect(forward.kind).toBe('делегировать');
     expect(forward.forwardTo).toEqual(staff[0]);
     expect(forward.send).toBe(true);
-    const nobody = enforce({ ...modelReturn, действие: 'передать', кому_передать: 'Николай Иванов', черновик_ответа: 'Сделай' }, 'Просим КП', null, null, false, [], staff);
+    const nobody = enforce({ ...modelReturn, действие: 'передать', кому_передать: 'Николай Иванов', черновик_ответа: 'Сделай' }, 'Просим КП', [], [], null, [], staff);
     expect(nobody.ask).toBe(true);
     // Передать самому отправителю — это ответ ему.
-    const back = enforce({ ...modelReturn, действие: 'передать', кому_передать: 'Вера Петрова', черновик_ответа: 'Вера, разберите сами.' }, 'Жалоба клиента', null, null, false, [], staff, 'v@x.example');
+    const back = enforce({ ...modelReturn, действие: 'передать', кому_передать: 'Вера Петрова', черновик_ответа: 'Вера, разберите сами.' }, 'Жалоба клиента', [], [], null, [], staff, 'v@x.example');
     expect(back.kind).toBe('вернуть');
     expect(back.forwardTo).toBeUndefined();
     expect(findPerson('Пет', staff)).toBeNull();
@@ -604,15 +640,16 @@ describe('пересчёт недели', () => {
     expect(open.after).toBe(100);
     expect(closed.after).toBeLessThan(100);
     expect(closed.stillMeetings).toBe(2);
-    expect(ruleEffect('не_должно', 'кадры')).toBe('карточка');
-    expect(ruleEffect('в_другом_виде', 'иное')).toBe('карточка');
-    expect(ruleEffect('не_должно', 'иное')).toBe('стоп');
-    expect(ruleEffect('должно', 'деньги')).toBeNull();
+    expect(ruleEffect('не_должно', 'кадры', [peoplePoint])).toBe('карточка');
+    expect(ruleEffect('в_другом_виде', 'иное', [peoplePoint])).toBe('карточка');
+    expect(ruleEffect('не_должно', 'иное', [peoplePoint])).toBe('стоп');
+    expect(ruleEffect('должно', 'деньги', [moneyPoint])).toBeNull();
     const guarded = rulesFromAudit(
       [{ kind: 'письма', key: 'a@example|отпуск', title: 'Отпуск', verdict: 'не_должно', change: '', cause: 'кадры' }],
       [],
       new Map(),
       new Map([['a@example|отпуск', 'кадры']]),
+      [peoplePoint],
     );
     expect(guarded[0]?.effect).toBe('карточка');
     const twice = replayWeek(
@@ -658,24 +695,22 @@ describe('правка и второй каталог', () => {
 });
 
 describe('точность почты', () => {
-  it('код переводит деньги и кадры в вопрос руководителю и сам ничего не шлёт', () => {
-    expect(forceMailAction('Прошу скидку 12%', false, 'делегировать')).toEqual({
+  it('код переводит пункт профиля в вопрос руководителю и иное не трогает', () => {
+    const points = [moneyPoint, peoplePoint, 'обязательства клиентам (сроки, условия)'];
+    expect(forceMailAction('деньги', points, 'делегировать')).toEqual({
       action: 'спросить_руководителя',
       forced: true,
     });
-    expect(forceMailAction('Отпуск с 20 декабря', false, 'в_сводку')).toEqual({
+    expect(forceMailAction('кадры', points, 'в_сводку')).toEqual({
       action: 'спросить_руководителя',
       forced: true,
     });
-    expect(forceMailAction('Прогноз плана 94%', true, 'в_сводку')).toEqual({
+    expect(forceMailAction('иное', points, 'в_сводку')).toEqual({ action: 'в_сводку', forced: false });
+    expect(forceMailAction('обязательства_клиентам', points, 'делегировать')).toEqual({
       action: 'спросить_руководителя',
       forced: true,
     });
-    expect(forceMailAction('Дашборд обновлён', false, 'в_сводку')).toEqual({ action: 'в_сводку', forced: false });
-    expect(forceMailAction('Есть обязательство клиенту по сроку', false, 'делегировать')).toEqual({
-      action: 'спросить_руководителя',
-      forced: true,
-    });
+    expect(forceMailAction('клиенты', points, 'делегировать')).toEqual({ action: 'делегировать', forced: false });
   });
 
   it('считает совпадения и группирует расхождения', () => {
@@ -796,11 +831,11 @@ describe('лента и сброс стенда', () => {
       body: '',
       received: '2026-11-02T10:00:00',
     };
-    const limits = [
-      { email: 'a@example.com', name: 'Аня', limit: 10 },
-      { email: 'new@example.com', name: 'Боря', limit: 10 },
+    const limits: PersonLimit[] = [
+      { email: 'a@example.com', name: 'Аня', area: 'скидка', limit: '10', unit: '%' },
+      { email: 'new@example.com', name: 'Боря', area: 'скидка', limit: '10', unit: '%' },
     ];
-    expect(pickDiscountAboveLimit([within, above], limits)?.id).toBe('high');
+    expect(pickAboveLimit([within, above], limits)?.id).toBe('high');
     const source = await readFile('src/scripts/reset-stand.ts', 'utf8');
     const picker = await readFile('src/agents/reset-stand.ts', 'utf8');
     expect(source + picker).not.toMatch(/m062|Ольга|10%/);
@@ -855,6 +890,7 @@ describe('главная T34', () => {
         { title: 'Кира: писем 0, тихая проблема', minutes: 15, goal: '' },
       ],
       calls: [],
+      points: [moneyPoint],
     };
     const desk = buildDesk(input);
     expect(desk.work.filter((item) => item.kind === 'series')).toHaveLength(1);
@@ -1066,7 +1102,8 @@ function trace() {
 async function scene(dir: string) {
   const data = await loadSynthetic(dir);
   const files = await readDepartment(dir);
-  const checked = checkDepartment(data.people, files);
+  const until = parseSceneFile(await readFile(`${dir}/scene.csv`, 'utf8')) ?? '2026-12-11';
+  const checked = checkDepartment(data.people, files, until);
   const mail = new Map<string, number>();
   for (const letter of data.emails) {
     const person = data.people.find((row) => row.email.toLowerCase() === letter.fromEmail.toLowerCase());

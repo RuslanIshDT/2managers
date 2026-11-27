@@ -7,7 +7,8 @@ import { mailConfig, sendMail, type MailboxLetter } from '../mail.ts';
 import { sendDecisionCard } from '../telegram.ts';
 import { staffFromVerdict } from './dependence.ts';
 import { kpiStatus, personAddresses } from './k1.ts';
-import { cardText, chainKey, discountLimit, enforce, failedRuling, judgeLetter, letterPrompt, type ModelVerdict, type Ruled } from './k2.ts';
+import { confirmationPoints, limitBreaches } from './confirm.ts';
+import { cardText, chainKey, enforce, failedRuling, judgeLetter, letterPrompt, type ModelVerdict, type Ruled } from './k2.ts';
 import { callJson, withLlmScope, type JsonSchema } from '../llm.ts';
 import { externalContext, judgeWithTools, k2Context, stepsWords } from './k2-tools.ts';
 import { readHistory } from './dependence.ts';
@@ -130,18 +131,18 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
       const person = persons.find((row) => personAddresses(row).includes(letter.fromEmail.toLowerCase()));
       // Внутреннее письмо — от человека организации (подчинённый, коллега, начальник); остальные — внешние.
       const inside = Boolean(person && person.role !== 'руководитель');
-      const boss = person?.role === 'руководитель руководителя';
       const key = chainKey(letter.fromEmail, letter.subject);
       const letterText = `${letter.subject}\n${letter.body}`;
       const ownAuth = person ? authRows.filter((row) => row.personId === person.externalId) : [];
-      const limit = discountLimit(ownAuth.map((row) => ({ area: row.area, limit: row.limitValue })));
+      const points = confirmationPoints(leaderRow.profile);
+      const breaches = limitBreaches(letterText, ownAuth.map((row) => ({ area: row.area, limit: row.limitValue, unit: row.unit })));
       const prior = latestDecision(decisionRows, key, letter.id);
       let ruled: Ruled;
       const covered = letterHits(letter, authority);
       const copyOnly = (letter.to?.length ?? 0) > 0 && !letter.to!.some((address) => leaderAddresses.has(address));
       if (copyOnly) {
         ruled = copyRuling(letter.cc?.some((address) => leaderAddresses.has(address)) ?? false);
-      } else if (covered && covered.effect !== 'карточка') {
+      } else if (covered && covered.effect !== 'карточка' && breaches.length === 0) {
         ruled = {
           kind: covered.effect === 'сам' ? 'вернуть' : 'в_сводку',
           category: 'иное',
@@ -162,7 +163,7 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
         const changes: TermChange[] = prior || chainSeen(verdictRows, key) ? termChanges(before, letterText) : [];
         const earlier = chainSeen(verdictRows, key);
         if (prior && !changes.length) {
-          ruled = enforce(DUMMY, letterText, limit, prior, boss);
+          ruled = enforce(DUMMY, letterText, points, breaches, prior);
         } else if (!prior && earlier && !changes.length) {
           ruled = repeatRuling(earlier);
         } else if (calls >= modelBudget) {
@@ -194,13 +195,13 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
                 console.error('Разбор с инструментами не сработал', letter.id, err instanceof Error ? err.message : err);
                 return judgeLetter({
                   purpose: `${agent}:${letter.id}`,
+                  points,
                   prompt: letterPrompt({
                     profile: leaderRow.profile,
                     person: person && inside ? personBlock(person, ownAuth, kpiRows.filter((row) => row.personId === person.externalId)) : `${letter.fromName} <${letter.fromEmail}>, не из организации`,
                     tasks: person && inside ? taskRows.filter((row) => row.ownerName === person.name).map((row) => `${row.title}, срок ${row.dueOn}, ${row.status}`).join('\n') : '',
                     subject: letter.subject,
                     body: modelBody,
-                    limit,
                     revisions: [revisionPrompt(edits), `Люди руководителя:\n${peopleList.map((row) => `${row.name} — ${row.position}; зона: ${row.zone}`).join('\n')}`].join('\n\n'),
                   }),
                 });
@@ -210,7 +211,7 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
             (err: unknown) => ({ model: null, error: err instanceof Error ? err.message : String(err) }),
           );
           calls += 1;
-          ruled = judged.model ? enforce(judged.model, letterText, limit, prior, boss, changes, staff, letter.fromEmail) : failedRuling(letterText, judged.error, boss);
+          ruled = judged.model ? enforce(judged.model, letterText, points, breaches, prior, changes, staff, letter.fromEmail) : failedRuling(letterText, judged.error);
           if (!judged.model && changes.length) ruled = { ...ruled, summary: `Условия изменились: ${changeWords(changes)}. ${ruled.summary}` };
           if (steps) ruled = { ...ruled, context: [ruled.context, steps].filter(Boolean).join('\n') };
           if (changes.length && ruled.ask) await supersede(db, leaderId, key, letter.id, decisionRows);

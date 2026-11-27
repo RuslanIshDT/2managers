@@ -6,8 +6,9 @@ import { calendarAfter } from './free-time.ts';
 import { departmentForLeader } from './k1.ts';
 import { chooseFocus, classifySeries, GOAL_KINDS, type Candidate, type FocusPlan } from './conductor.ts';
 import { adviceTitle, departmentMatrix, goalMinutes, isLeaderTask, morningHtml, overdueLines, overdueTasks, ownWeekTasks, renderMorning } from './focus.ts';
+import { parseMorningStored, type MorningShape } from './morning.ts';
 import { withLlmScope } from '../llm.ts';
-import { textSignals } from './k2.ts';
+import { canonicalCategory, confirmationPoints } from './confirm.ts';
 import { sendMessage } from '../telegram.ts';
 import { morningQuestions } from './protocol-context.ts';
 import { oneOnOneForDay } from './one-on-one.ts';
@@ -16,8 +17,8 @@ import { liveSources, type LiveMeeting, type LiveTask } from './live-sources.ts'
 import { sendTaskReminders } from './reminders.ts';
 
 export async function focusForLeader(db: Db, leaderId: string, leaderName: string) {
-  const rules = await morningRules(db, leaderId);
-  const scene = await sceneFor(db, leaderId, leaderName, undefined, rules);
+  const morning = await morningShape(db, leaderId);
+  const scene = await sceneFor(db, leaderId, leaderName, undefined, morning);
   const stored = await db.select().from(focusPlans).where(eq(focusPlans.leaderId, leaderId)).limit(1);
   const plan = stored[0]?.plan as { text?: string } | undefined;
   return { matrix: scene.matrix, share: scene.share, text: plan?.text || scene.draft, overdue: scene.overdue };
@@ -29,13 +30,13 @@ export async function sendFocus(db: Db, leaderId: string) {
   if (!leader.telegramChatId) throw new Error('Telegram-чат руководителя не привязан');
   // Задачи и встречи — из Трекера и календаря; что не ответило — из базы, с пометкой в сообщении.
   const live = await liveSources(db, leaderId, leader.name);
-  const rules = await morningRules(db, leaderId);
+  const morning = await morningShape(db, leaderId);
   // Вид новых серий — до подсчёта времени на цели: оно считается по видам встреч. Встреча, поставленная в календаре руками, — тоже серия.
   await classifyNewSeries(db, leaderId, leader.profile, false, (live.meetings ?? []).filter((row) => !row.goal).map((row) => row.summary));
-  const scene = await sceneFor(db, leaderId, leader.name, live, rules);
+  const scene = await sceneFor(db, leaderId, leader.name, live, morning);
   const plan = await withLlmScope(
     { agent: 'k4', leaderId, operationId: `k4:${leaderId}:${Date.now()}`, title: 'Утреннее сообщение' },
-    () => chooseFocus({ purpose: `k4:${leaderId}`, profile: leader.profile, candidates: scene.candidates, names: scene.names }),
+    () => chooseFocus({ purpose: `k4:${leaderId}`, profile: leader.profile, candidates: scene.candidates, names: scene.names, hint: morning?.focus }),
   );
   const questions = await morningQuestions(db, leaderId, scene.meetings, scene.morning.today, shiftDay(scene.morning.today, 1));
   let oneOnOne: { name: string; lines: { text: string; sources: { label: string; href: string }[] }[] }[] = [];
@@ -44,7 +45,7 @@ export async function sendFocus(db: Db, leaderId: string) {
   } catch (err) {
     console.error('Сводка к встрече один на один не собралась', err instanceof Error ? err.message : err);
   }
-  const text = renderMorning({ ...scene.morning, plan: plan.today, questions, notes: live.notes, rules, oneOnOne });
+  const text = renderMorning({ ...scene.morning, plan: plan.today, questions, notes: live.notes, morning, oneOnOne });
   try {
     await sendTaskReminders(db, leaderId, leader.name, live.tasks, clockFor(leaderId).today);
   } catch (err) {
@@ -67,12 +68,16 @@ export async function sendFocusAll(db: Db) {
 }
 
 // live — задачи и встречи из Трекера и календаря; без него (кабинет) — из базы, чтобы страница не ждала внешние сервисы.
-async function morningRules(db: Db, leaderId: string): Promise<string[]> {
+async function morningShape(db: Db, leaderId: string): Promise<MorningShape | null> {
   const rows = await db.select().from(revisions).where(and(eq(revisions.leaderId, leaderId), eq(revisions.area, 'утро')));
-  return rows.map((row) => row.instead);
+  for (const row of [...rows].reverse()) {
+    const shape = parseMorningStored(row.understood);
+    if (shape) return shape;
+  }
+  return null;
 }
 
-async function sceneFor(db: Db, leaderId: string, leaderName: string, live?: { tasks: LiveTask[] | null; meetings: LiveMeeting[] | null }, rules: string[] = []) {
+async function sceneFor(db: Db, leaderId: string, leaderName: string, live?: { tasks: LiveTask[] | null; meetings: LiveMeeting[] | null }, morningRule: MorningShape | null = null) {
   const [department, taskRows, decisionRows, verdictRows, storedMeetings, freedRows, kindRows] = await Promise.all([
     departmentForLeader(db, leaderId),
     db.select().from(tasks).where(eq(tasks.leaderId, leaderId)),
@@ -152,7 +157,6 @@ async function sceneFor(db: Db, leaderId: string, leaderName: string, live?: { t
     overdue,
     todayMeetings: titlesOn(meetingRows, today),
     share,
-    rules,
   };
   return {
     matrix,
@@ -160,7 +164,7 @@ async function sceneFor(db: Db, leaderId: string, leaderName: string, live?: { t
     candidates,
     names: department.people.map((person) => person.name),
     morning,
-    draft: renderMorning({ ...morning, plan: null, questions: [], notes: [], rules }),
+    draft: renderMorning({ ...morning, plan: null, questions: [], notes: [], morning: morningRule }),
     meetings: meetingRows,
     overdue: overdueLines(overdue),
   };
@@ -192,7 +196,7 @@ export async function classifyNewSeries(db: Db, leaderId: string, profile = '', 
     () => classifySeries({ purpose: `k4:series:${leaderId}`, series: fresh, profile }),
   );
   for (const row of classified) {
-    const category = seriesCategory(row.title, row.category);
+    const category = seriesCategory(row.category, confirmationPoints(profile));
     await db
       .insert(seriesKind)
       .values({ leaderId, seriesKey: row.title, kind: row.kind, category })
@@ -227,16 +231,7 @@ function meetingDay(startsAt: string): string {
 
 export type { FocusPlan };
 
-// Категорию встречи предлагает модель, код перепроверяет по признакам в названии: N1 в названии сильнее «иное».
-export function seriesCategory(title: string, model: string): string {
-  const signal = textSignals(title).category ?? titleSignal(title);
-  if (signal && model === 'иное') return signal;
-  return model || signal || 'иное';
-}
-
-function titleSignal(title: string): string | null {
-  if (/бюджет|скидк|закупк/i.test(title)) return 'деньги';
-  if (/найм|интервью|кандидат|оффер|отпуск|увольн/i.test(title)) return 'кадры';
-  if (/жалоб|договор|(^|[^А-Яа-яЁё])КП([^А-Яа-яЁё]|$)|коммерческ|гарант/i.test(title)) return 'обязательства_клиентам';
-  return null;
+// Категорию встречи предлагает модель. Код оставляет её, только если это пункт профиля или «иное».
+export function seriesCategory(model: string, points: string[]): string {
+  return canonicalCategory(model, points);
 }

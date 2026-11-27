@@ -4,6 +4,7 @@
 import { callTools, type ChatMessage, type ToolCall, type ToolSpec } from '../llm.ts';
 import { mailRevisions } from './memory.ts';
 import { kpiStatus } from './k1.ts';
+import { confirmationPoints } from './confirm.ts';
 import { judgeLetter, type ModelVerdict } from './k2.ts';
 
 export interface K2Person {
@@ -145,7 +146,7 @@ export async function judgeWithTools(input: { purpose: string; profile: string; 
     }
   }
   messages.push({ role: 'user', content: FINAL });
-  const verdict = await judgeLetter({ purpose: input.purpose, prompt: '', messages, tools });
+  const verdict = await judgeLetter({ purpose: input.purpose, prompt: '', messages, tools, points: confirmationPoints(input.profile) });
   return { verdict, steps, rounds };
 }
 
