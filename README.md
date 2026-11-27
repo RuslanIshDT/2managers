@@ -1,4 +1,4 @@
-# ecompras
+# 2managers
 
 ИИ-помощник руководителя, трек «Цифровой аватар». Постановка — [docs/tz.md](docs/tz.md), архитектура — [docs/architecture.md](docs/architecture.md), задачи — [docs/backlog.md](docs/backlog.md).
 
