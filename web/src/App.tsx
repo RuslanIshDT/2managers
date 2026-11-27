@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { createContext, useContext, useEffect, useState, type FormEvent } from 'react';
 import { Button } from './components/ui/button.tsx';
 import { Card } from './components/ui/card.tsx';
 import { Input } from './components/ui/input.tsx';
@@ -91,9 +91,48 @@ interface FocusScene {
   overdue?: string[];
 }
 
+interface FreeUse {
+  id: string;
+  title: string;
+  summary: string;
+  why: string;
+}
+
 interface MirrorScene {
   notes: { name: string; email: string; text: string; quiet: boolean }[];
-  series: { title: string; verdict: string; change: string; hours: number; action: string; reason: string; kind: string }[];
+  series: {
+    title: string;
+    verdict: string;
+    change: string;
+    hours: number;
+    action: string;
+    reason: string;
+    kind: string;
+    freed: { count: number; minutes: number; use: string; useId: string; dates: string[] } | null;
+  }[];
+  uses: FreeUse[];
+}
+
+// Куда отдать время отпущенной серии: выбор общий для главной и раздела серий.
+const ReleaseChoice = createContext<{ uses: FreeUse[]; use: string; setUse: (id: string) => void }>({ uses: [], use: '', setUse: () => {} });
+
+function UseSelect() {
+  const { uses, use, setUse } = useContext(ReleaseChoice);
+  if (!uses.length) return null;
+  const chosen = uses.find((row) => row.id === use) ?? uses[0];
+  return (
+    <label className="grid gap-1 text-sm">
+      <span className="text-[#5d6878]">Освободившееся время отдать:</span>
+      <select className="rounded border border-[#d7dde6] bg-white px-2 py-1" value={chosen.id} onChange={(event) => setUse(event.target.value)}>
+        {uses.map((row) => (
+          <option key={row.id} value={row.id}>
+            {row.title}
+          </option>
+        ))}
+      </select>
+      <span className="text-xs text-[#5d6878]">{chosen.why}</span>
+    </label>
+  );
 }
 
 interface Cabinet {
@@ -190,6 +229,7 @@ export function App() {
   const [error, setError] = useState('');
   const [pending, setPending] = useState(false);
   const [job, setJob] = useState('');
+  const [releaseUse, setReleaseUse] = useState('');
   const [mailNote, setMailNote] = useState('');
   const [section, setSection] = useState<Section>('home');
   const [models, setModels] = useState<ModelSettings | null>(null);
@@ -257,7 +297,9 @@ export function App() {
     setError('');
     setPending(true);
     try {
-      await api('/api/series', { method: 'POST', body: JSON.stringify({ key, action, reason }) });
+      const use = releaseUse || cabinet?.mirror?.uses[0]?.id || '';
+      const result = await api<{ text?: string }>('/api/series', { method: 'POST', body: JSON.stringify({ key, action, reason, use }) });
+      if (result.text) setJob(`${key}: ${result.text}`);
       const fresh = await api<Cabinet>('/api/cabinet');
       setCabinet(fresh);
     } catch (err) {
@@ -490,6 +532,7 @@ export function App() {
 
   const counts = cabinet?.counts;
   return (
+    <ReleaseChoice.Provider value={{ uses: cabinet?.mirror?.uses ?? [], use: releaseUse, setUse: setReleaseUse }}>
     <main className="mx-auto max-w-3xl px-4 py-8">
       <div className="mb-4 flex items-start justify-between gap-4">
         <div>
@@ -716,6 +759,7 @@ export function App() {
         </>
       ) : null}
     </main>
+    </ReleaseChoice.Provider>
   );
 }
 
@@ -764,7 +808,8 @@ function Mirror({
   return (
     <Card className="mb-4">
       <h2 className="mb-2 text-lg font-semibold">Серии встреч</h2>
-      <p className="mb-2 text-sm text-[#5d6878]">«Продлить» и «отпустить» записывают решение. Событие в календаре «Стенд» от этого не удаляется.</p>
+      <p className="mb-2 text-sm text-[#5d6878]">«Отпустить» убирает будущие встречи серии из календаря «Стенд» и ставит на их время то, что вы выберете ниже. «Продлить» возвращает встречи на место.</p>
+      <UseSelect />
       <ul className="mt-4 grid gap-3 text-sm">
         {mirror.series.map((item) => (
           <li key={item.title}>
@@ -773,8 +818,14 @@ function Mirror({
             <span className="text-[#5d6878]"> · {verdictWords(item.verdict)}</span>
             <span className="block text-[#5d6878]">
               {cleanDots(item.change)}
-              {item.action ? ` Записано: ${item.action}${item.reason ? ` — ${item.reason}` : ''}.` : ''}
+              {item.action === 'продлить' ? ` Продлена${item.reason ? `: ${item.reason}` : ''}.` : ''}
+              {item.action === 'отпустить' && !item.freed ? ' Отпущена, будущих встреч в календаре нет.' : ''}
             </span>
+            {item.action === 'отпустить' && item.freed ? (
+              <span className="block">
+                Освобождено {freedWords(item.freed.minutes)} ({item.freed.dates.join(', ')}) — {item.freed.useId === 'свободно' ? 'время свободно' : `занято: ${item.freed.use}`}.
+              </span>
+            ) : null}
             <Origin origin={origins.find((row) => row.id === `series:${item.title}`)?.origin ?? rowOrigin('k15', 'Календарь с нуля', item.title, item.change ? [item.change] : [])} onOpen={onOpen} />
             <span className="mt-1 flex gap-2">
               <Button type="button" variant="outline" disabled={pending} onClick={() => onSeries(item.title, 'продлить')}>
@@ -978,6 +1029,9 @@ function WorkCard({
         {item.kind === 'series' && item.lines.length ? (
           <details className="mt-2 text-sm">
             <summary>Список</summary>
+            <div className="mt-2">
+              <UseSelect />
+            </div>
             <ul className="mt-2 grid gap-2">
               {item.lines.map((line) => (
                 <li key={line.id} className="flex flex-wrap items-center gap-2">
@@ -1541,4 +1595,17 @@ function Stat({ label, value }: { label: string; value: number | undefined }) {
       <span className="text-sm text-[#5d6878]">{label}</span>
     </Card>
   );
+}
+
+function freedWords(minutes: number): string {
+  const word = (n: number, one: string, few: string, many: string) => {
+    const tail = n % 10;
+    const hundred = n % 100;
+    return tail === 1 && hundred !== 11 ? one : tail >= 2 && tail <= 4 && (hundred < 12 || hundred > 14) ? few : many;
+  };
+  if (minutes < 60) return `${minutes} ${word(minutes, 'минута', 'минуты', 'минут')}`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  const head = `${hours} ${word(hours, 'час', 'часа', 'часов')}`;
+  return rest ? `${head} ${rest} ${word(rest, 'минута', 'минуты', 'минут')}` : head;
 }

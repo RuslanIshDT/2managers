@@ -203,6 +203,22 @@ export const rules = pgTable('rules', {
   effect: text('effect').notNull().default(''),
 });
 
+export const freedSlots = pgTable(
+  'freed_slots',
+  {
+    leaderId: text('leader_id').notNull(),
+    meetingUid: text('meeting_uid').notNull(),
+    seriesKey: text('series_key').notNull(),
+    startsAt: text('starts_at').notNull(),
+    minutes: integer('minutes').notNull(),
+    useId: text('use_id').notNull(),
+    useTitle: text('use_title').notNull(),
+    useSummary: text('use_summary').notNull().default(''),
+    at: timestamp('at', { withTimezone: true }).notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.leaderId, t.meetingUid] })],
+);
+
 export const seriesFate = pgTable(
   'series_fate',
   {

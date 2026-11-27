@@ -96,7 +96,7 @@ export function morningLines(input: {
 }
 
 export function goalMinutes(
-  meetings: { minutes: number; summary: string }[],
+  meetings: { minutes: number; summary: string; goal?: boolean }[],
   goals: string[],
 ): { onGoal: number; total: number; percent: number } {
   const needles = goals
@@ -107,7 +107,8 @@ export function goalMinutes(
   for (const meeting of meetings) {
     total += meeting.minutes;
     const summary = meeting.summary.toLowerCase();
-    if (needles.some((word) => summary.includes(word))) onGoal += meeting.minutes;
+    // goal: блок освобождённого времени, отданный приоритету руководителя (T57).
+    if (meeting.goal || needles.some((word) => summary.includes(word))) onGoal += meeting.minutes;
   }
   return { onGoal, total, percent: total === 0 ? 0 : Math.round((100 * onGoal) / total) };
 }

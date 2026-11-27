@@ -43,6 +43,34 @@ export async function putEvent(calendarHref: string, file: string, ics: string):
   }
 }
 
+// Яндекс хранит событие под своим адресом (по UID), а не под именем файла из PUT, поэтому удаляем по UID.
+export async function eventHrefs(calendarHref: string): Promise<Map<string, string>> {
+  const response = await caldav('REPORT', calendarHref, reportBody(), 'application/xml');
+  if (!response.ok) throw new Error(`Календарь ответил ${response.status}`);
+  return hrefsByUid(await response.text());
+}
+
+export function hrefsByUid(xml: string): Map<string, string> {
+  const found = new Map<string, string>();
+  for (const part of xml.split(/<[^>]*response[ >]/i).slice(1)) {
+    const href = /<[^>]*href[^>]*>([^<]+)/i.exec(part)?.[1]?.trim() ?? '';
+    const uid = /^UID:(.*)$/m.exec(part.replace(/\r?\n[ \t]/g, ''))?.[1]?.trim() ?? '';
+    if (href && uid) found.set(uid.replace(/\\([,;\\])/g, '$1'), href);
+  }
+  return found;
+}
+
+export async function deleteByUid(hrefs: Map<string, string>, uid: string): Promise<boolean> {
+  const href = hrefs.get(uid);
+  if (!href) return false;
+  const response = await caldav('DELETE', href);
+  if (response.status !== 204 && response.status !== 200 && response.status !== 404) {
+    throw new Error(`Встреча не удалена (${response.status})`);
+  }
+  hrefs.delete(uid);
+  return true;
+}
+
 export async function listStandEvents(calendarHref: string): Promise<{ uid: string; summary: string; start: string }[]> {
   const response = await caldav('REPORT', calendarHref, reportBody(), 'application/xml');
   if (!response.ok) throw new Error(`Календарь ответил ${response.status}`);

@@ -1,7 +1,8 @@
 // Сборка утра и матрицы из базы. Три дела выбирает модель, остальное считает код.
 import { eq, isNotNull } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
-import { decisions, focusPlans, leaders, meetings, seriesKind, tasks } from '../db/schema.ts';
+import { decisions, focusPlans, freedSlots, leaders, meetings, seriesKind, tasks } from '../db/schema.ts';
+import { calendarAfter } from './free-time.ts';
 import { departmentForLeader } from './k1.ts';
 import { chooseFocus, classifySeries, renderPlan, type Candidate, type FocusPlan } from './conductor.ts';
 import { departmentMatrix, goalMinutes, morningLines, overdueLines, overdueTasks } from './focus.ts';
@@ -56,12 +57,15 @@ export async function sendFocusAll(db: Db) {
 }
 
 async function sceneFor(db: Db, leaderId: string, leaderName: string) {
-  const [department, taskRows, decisionRows, meetingRows] = await Promise.all([
+  const [department, taskRows, decisionRows, storedMeetings, freedRows] = await Promise.all([
     departmentForLeader(db, leaderId),
     db.select().from(tasks).where(eq(tasks.leaderId, leaderId)),
     db.select().from(decisions).where(eq(decisions.leaderId, leaderId)),
     db.select().from(meetings).where(eq(meetings.leaderId, leaderId)),
+    db.select().from(freedSlots).where(eq(freedSlots.leaderId, leaderId)),
   ]);
+  // Календарь после отпущенных серий: на месте встречи — блок приоритета руководителя.
+  const meetingRows = calendarAfter(storedMeetings, freedRows);
   const matrix = departmentMatrix(
     department.people.map((person) => ({
       name: person.name,
@@ -116,7 +120,7 @@ async function sceneFor(db: Db, leaderId: string, leaderName: string) {
   ];
   const yesterday = previousWorkday(today);
   const share = goalMinutes(
-    meetingRows.map((row) => ({ minutes: row.minutes, summary: row.summary })),
+    meetingRows.map((row) => ({ minutes: row.minutes, summary: row.summary, goal: row.goal })),
     department.people.flatMap((person) => [person.goal, person.leaderGoal]),
   );
   const draft = [

@@ -383,11 +383,12 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
         key: z.string().trim().min(1).max(200),
         action: z.enum(['продлить', 'отпустить']),
         reason: z.string().max(500).optional(),
+        use: z.string().max(200).optional(),
       })
       .safeParse(request.body ?? {});
     if (!body.success) return reply.code(400).send({ error: 'Непонятное действие по серии' });
     try {
-      return await setSeriesFate(deps.db, leader.id, body.data.key, body.data.action, body.data.reason ?? '');
+      return await setSeriesFate(deps.db, leader.id, body.data.key, body.data.action, body.data.reason ?? '', body.data.use ?? '');
     } catch (err) {
       const detail = err instanceof Error ? err.message : 'не удалось записать';
       return reply.code(400).send({ error: detail });
