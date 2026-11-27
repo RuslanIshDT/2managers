@@ -63,6 +63,55 @@ export async function listOurIssues(): Promise<TrackerIssue[]> {
   return found;
 }
 
+export interface QueueIssue {
+  key: string;
+  summary: string;
+  description: string;
+  deadline: string;
+  unique: string;
+  status: string;
+  open: boolean;
+}
+
+// Все задачи очереди стенда — и выложенные помощником, и поставленные руками. Закрытые и отменённые помечены open = false.
+export async function listQueueIssues(): Promise<QueueIssue[]> {
+  const cfg = trackerConfig();
+  if (!cfg) return [];
+  const found: QueueIssue[] = [];
+  for (let page = 1; page <= 5; page += 1) {
+    const response = await call(`/v2/issues/_search?perPage=100&page=${page}`, {
+      method: 'POST',
+      body: JSON.stringify({ filter: { queue: cfg.queue } }),
+    });
+    if (!response.ok) throw new Error(`Трекер ответил ${response.status}`);
+    const rows = (await response.json()) as {
+      key?: string;
+      summary?: string;
+      description?: string;
+      deadline?: string;
+      unique?: string;
+      status?: { key?: string; display?: string };
+      statusType?: { key?: string };
+    }[];
+    if (!Array.isArray(rows) || rows.length === 0) break;
+    for (const row of rows) {
+      const status = row.status?.key ?? '';
+      const type = row.statusType?.key ?? '';
+      found.push({
+        key: row.key ?? '',
+        summary: row.summary ?? '',
+        description: row.description ?? '',
+        deadline: row.deadline ?? '',
+        unique: typeof row.unique === 'string' ? row.unique : '',
+        status: row.status?.display ?? status,
+        open: !['done', 'cancelled'].includes(type) && !['closed', 'resolved', 'cancelled', 'done'].includes(status),
+      });
+    }
+    if (rows.length < 100) break;
+  }
+  return found;
+}
+
 let orgHeader: 'X-Org-ID' | 'X-Cloud-Org-ID' = 'X-Org-ID';
 
 async function call(path: string, init: { method: string; body: string }): Promise<Response> {

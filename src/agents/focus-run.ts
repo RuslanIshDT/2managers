@@ -1,4 +1,4 @@
-// Сборка утра и матрицы из базы. Три дела выбирает модель, остальное считает код.
+// Сборка утра и матрицы. Задачи и встречи — из Трекера и календаря «Стенд» (T65), остальное — из базы. Три дела выбирает модель, остальное считает код.
 import { eq, isNotNull } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
 import { decisions, focusPlans, freedSlots, leaders, meetings, seriesKind, tasks, verdicts } from '../db/schema.ts';
@@ -11,6 +11,7 @@ import { textSignals } from './k2.ts';
 import { sendMessage } from '../telegram.ts';
 import { latestProtocol } from './protocol.ts';
 import { clockFor, dateWords, moscowDay, shiftDay, waitedDays } from './scene.ts';
+import { liveSources, type LiveMeeting, type LiveTask } from './live-sources.ts';
 
 export async function focusForLeader(db: Db, leaderId: string, leaderName: string) {
   const scene = await sceneFor(db, leaderId, leaderName);
@@ -23,15 +24,17 @@ export async function sendFocus(db: Db, leaderId: string) {
   const [leader] = await db.select().from(leaders).where(eq(leaders.id, leaderId)).limit(1);
   if (!leader) throw new Error('Руководитель не найден');
   if (!leader.telegramChatId) throw new Error('Telegram-чат руководителя не привязан');
-  // Вид новых серий — до подсчёта времени на цели: оно считается по видам встреч.
-  await classifyNewSeries(db, leaderId, leader.profile);
-  const scene = await sceneFor(db, leaderId, leader.name);
+  // Задачи и встречи — из Трекера и календаря; что не ответило — из базы, с пометкой в сообщении.
+  const live = await liveSources(db, leaderId, leader.name);
+  // Вид новых серий — до подсчёта времени на цели: оно считается по видам встреч. Встреча, поставленная в календаре руками, — тоже серия.
+  await classifyNewSeries(db, leaderId, leader.profile, false, (live.meetings ?? []).filter((row) => !row.goal).map((row) => row.summary));
+  const scene = await sceneFor(db, leaderId, leader.name, live);
   const plan = await withLlmScope(
     { agent: 'k4', leaderId, operationId: `k4:${leaderId}:${Date.now()}`, title: 'Утреннее сообщение' },
     () => chooseFocus({ purpose: `k4:${leaderId}`, profile: leader.profile, candidates: scene.candidates, names: scene.names }),
   );
   const protocol = await latestProtocol(db, leaderId);
-  const text = renderMorning({ ...scene.morning, plan: plan.today, openItems: protocol?.open ?? [] });
+  const text = renderMorning({ ...scene.morning, plan: plan.today, openItems: protocol?.open ?? [], notes: live.notes });
   await db
     .insert(focusPlans)
     .values({ leaderId, plan: { text, today: plan.today, later: plan.later }, createdAt: new Date() })
@@ -48,7 +51,8 @@ export async function sendFocusAll(db: Db) {
   }
 }
 
-async function sceneFor(db: Db, leaderId: string, leaderName: string) {
+// live — задачи и встречи из Трекера и календаря; без него (кабинет) — из базы, чтобы страница не ждала внешние сервисы.
+async function sceneFor(db: Db, leaderId: string, leaderName: string, live?: { tasks: LiveTask[] | null; meetings: LiveMeeting[] | null }) {
   const [department, taskRows, decisionRows, verdictRows, storedMeetings, freedRows, kindRows] = await Promise.all([
     departmentForLeader(db, leaderId),
     db.select().from(tasks).where(eq(tasks.leaderId, leaderId)),
@@ -59,8 +63,10 @@ async function sceneFor(db: Db, leaderId: string, leaderName: string) {
     db.select().from(seriesKind).where(eq(seriesKind.leaderId, leaderId)),
   ]);
   const kindOf = new Map(kindRows.map((row) => [row.seriesKey, row.kind]));
-  // Календарь после отпущенных серий: на месте встречи — блок приоритета руководителя.
-  const meetingRows = calendarAfter(storedMeetings, freedRows);
+  // Календарь «Стенд» уже без отпущенных встреч и с блоками приоритета; в базе то же получается через calendarAfter.
+  const meetingRows: { summary: string; startsAt: string; minutes: number; goal?: boolean }[] = live?.meetings ?? calendarAfter(storedMeetings, freedRows);
+  const taskList: LiveTask[] =
+    live?.tasks ?? taskRows.map((row) => ({ id: row.externalId, title: row.title, owner: row.ownerName, dueOn: row.dueOn, status: row.status }));
   const matrix = departmentMatrix(
     department.people.map((person) => ({
       name: person.name,
@@ -70,14 +76,12 @@ async function sceneFor(db: Db, leaderId: string, leaderName: string) {
   );
   const clock = clockFor(leaderId);
   const today = clock.today;
-  const ownTasks = taskRows.filter((row) => row.ownerName === leaderName && row.status !== 'сделана' && row.status !== 'закрыта');
+  const ownTasks = taskList.filter((row) => row.owner === leaderName && row.status !== 'сделана' && row.status !== 'закрыта');
   // Задачи руководителя со сроком в ближайшую неделю идут отдельным блоком всегда, поэтому в выбор трёх дел не входят.
   const ownWeek = ownWeekTasks(ownTasks, today);
-  const weekIds = new Set(ownWeek.map((row) => row.externalId));
+  const weekIds = new Set(ownWeek.map((row) => row.id));
   const overdue = overdueTasks(
-    taskRows
-      .filter((row) => row.ownerName !== leaderName)
-      .map((row) => ({ title: row.title, owner: row.ownerName, dueOn: row.dueOn, status: row.status })),
+    taskList.filter((row) => row.owner !== leaderName).map((row) => ({ title: row.title, owner: row.owner, dueOn: row.dueOn, status: row.status })),
     today,
   );
   // Решения, которые ждут руководителя, идут в сообщение отдельным блоком, поэтому в выбор трёх дел не входят.
@@ -98,11 +102,11 @@ async function sceneFor(db: Db, leaderId: string, leaderName: string) {
     .map((row) => ({ who: row.replyName, what: row.subject || row.summary }));
   const goalOf = (name: string) => department.people.find((person) => person.name === name)?.goal ?? '';
   const candidates: Candidate[] = [
-    ...ownTasks.filter((row) => !weekIds.has(row.externalId)).map((row) => ({
-      id: `task:${row.externalId}`,
+    ...ownTasks.filter((row) => !weekIds.has(row.id)).map((row) => ({
+      id: `task:${row.id}`,
       kind: 'задача',
       title: row.title,
-      detail: `срок ${dateWords(row.dueOn)}, статус ${row.status}`,
+      detail: `${row.dueOn ? `срок ${dateWords(row.dueOn)}` : 'без срока'}, статус ${row.status}`,
       goal: '',
     })),
     ...matrix.flatMap((row) => {
@@ -130,7 +134,7 @@ async function sceneFor(db: Db, leaderId: string, leaderName: string) {
     candidates,
     names: department.people.map((person) => person.name),
     morning,
-    draft: renderMorning({ ...morning, plan: null, openItems: [] }),
+    draft: renderMorning({ ...morning, plan: null, openItems: [], notes: [] }),
     overdue: overdueLines(overdue),
   };
 }
@@ -146,11 +150,13 @@ function escapeHtml(value: string): string {
 }
 
 // all: определить вид заново у всех серий — нужно, когда меняется список видов.
-export async function classifyNewSeries(db: Db, leaderId: string, profile = '', all = false) {
-  const [known, rows] = await Promise.all([
+// extra — названия встреч из календаря «Стенд», которых может не быть в базе (поставлены руками).
+export async function classifyNewSeries(db: Db, leaderId: string, profile = '', all = false, extra: string[] = []) {
+  const [known, stored] = await Promise.all([
     db.select().from(seriesKind).where(eq(seriesKind.leaderId, leaderId)),
     db.select().from(meetings).where(eq(meetings.leaderId, leaderId)),
   ]);
+  const rows = [...stored, ...extra.map((summary) => ({ summary, attendees: [] as unknown }))];
   const seen = new Set(all ? [] : known.filter((row) => row.category).map((row) => row.seriesKey));
   const byTitle = new Map<string, string[]>();
   for (const row of rows) {
@@ -178,8 +184,16 @@ function attendeeNames(value: unknown): string[] {
     .filter(Boolean);
 }
 
+// Встречи дня по времени: «10:00 Планёрка направления».
 function titlesOn(rows: { startsAt: string; summary: string }[], day: string): string[] {
-  return [...new Set(rows.filter((row) => meetingDay(row.startsAt) === day).map((row) => row.summary))];
+  const lines = rows
+    .filter((row) => meetingDay(row.startsAt) === day)
+    .sort((a, b) => a.startsAt.localeCompare(b.startsAt))
+    .map((row) => {
+      const time = /T(\d{2}):?(\d{2})/.exec(row.startsAt);
+      return time ? `${time[1]}:${time[2]} ${row.summary}` : row.summary;
+    });
+  return [...new Set(lines)];
 }
 
 function meetingDay(startsAt: string): string {

@@ -90,6 +90,55 @@ export function readEvents(xml: string): { uid: string; summary: string; start: 
     .filter((row) => row.summary);
 }
 
+// Встречи календаря со временем: начало и длительность по Москве. Событие на весь день встречей не считается.
+// Повторяющееся событие (RRULE) берётся одной первой датой.
+export function readMeetings(xml: string): { uid: string; summary: string; startsAt: string; minutes: number }[] {
+  const text = xml
+    .replace(/&#13;/g, '')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, '&');
+  return text
+    .split(/BEGIN:VEVENT/i)
+    .slice(1)
+    .map((chunk) => chunk.split(/END:VEVENT/i)[0].replace(/\r?\n[ \t]/g, ''))
+    .flatMap((event) => {
+      const uid = unescapeIcs(/^UID:(.*)$/m.exec(event)?.[1] ?? '').trim();
+      const summary = unescapeIcs(/^SUMMARY:(.*)$/m.exec(event)?.[1] ?? '').trim();
+      const start = icsMoment(/^DTSTART([^:\r\n]*):(.*)$/m.exec(event));
+      if (!summary || !start) return [];
+      const end = icsMoment(/^DTEND([^:\r\n]*):(.*)$/m.exec(event));
+      const duration = /^DURATION:(.*)$/m.exec(event)?.[1]?.trim() ?? '';
+      const minutes = end ? Math.round((end.getTime() - start.getTime()) / 60_000) : durationMinutes(duration);
+      return [{ uid, summary, startsAt: moscowLocal(start), minutes: Math.max(0, minutes) }];
+    });
+}
+
+// DTSTART;TZID=Europe/Moscow:20261215T140000 или DTSTART:20261215T110000Z. Дата без времени — событие на весь день, не встреча.
+function icsMoment(match: RegExpExecArray | null): Date | null {
+  if (!match) return null;
+  const params = match[1] ?? '';
+  const value = (match[2] ?? '').trim();
+  const parts = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})(Z?)$/.exec(value);
+  if (!parts || /VALUE=DATE(?!-)/i.test(params)) return null;
+  const [, y, mo, d, h, mi, se, zulu] = parts;
+  const utc = Date.UTC(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(se));
+  // Без Z время местное. Календарь стенда и руководитель — по Москве (UTC+3), другой пояс не пересчитываем.
+  return new Date(zulu ? utc : utc - 3 * 3_600_000);
+}
+
+function durationMinutes(value: string): number {
+  const match = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?)?$/.exec(value);
+  if (!match) return 0;
+  return Number(match[1] ?? 0) * 1440 + Number(match[2] ?? 0) * 60 + Number(match[3] ?? 0);
+}
+
+function moscowLocal(at: Date): string {
+  return new Date(at.getTime() + 3 * 3_600_000).toISOString().slice(0, 16);
+}
+
 export function attendeeNames(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   const names: string[] = [];

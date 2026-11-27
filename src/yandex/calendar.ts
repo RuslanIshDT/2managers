@@ -1,6 +1,6 @@
 // Яндекс Календарь по CalDAV. Пароль — отдельный пароль приложения, не пароль почты.
 import { Buffer } from 'node:buffer';
-import { readEvents } from '../agents/materials.ts';
+import { readEvents, readMeetings } from '../agents/materials.ts';
 
 export interface CalendarConfig {
   user: string;
@@ -75,6 +75,12 @@ export async function listStandEvents(calendarHref: string): Promise<{ uid: stri
   const response = await caldav('REPORT', calendarHref, reportBody(), 'application/xml');
   if (!response.ok) throw new Error(`Календарь ответил ${response.status}`);
   return readEvents(await response.text());
+}
+
+export async function listStandMeetings(calendarHref: string): Promise<{ uid: string; summary: string; startsAt: string; minutes: number }[]> {
+  const response = await caldav('REPORT', calendarHref, reportBody(), 'application/xml');
+  if (!response.ok) throw new Error(`Календарь ответил ${response.status}`);
+  return readMeetings(await response.text());
 }
 
 async function propfind(href: string): Promise<{ href: string; name: string }[]> {

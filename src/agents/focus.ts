@@ -90,6 +90,7 @@ export interface MorningInput {
   todayMeetings: string[];
   openItems: string[];
   share: { onGoal: number; total: number; percent: number };
+  notes?: string[];
 }
 
 // Утреннее сообщение целиком: сначала решения, которые ждут руководителя, затем три дела и что сделано без него.
@@ -123,6 +124,8 @@ export function renderMorning(input: MorningInput): string {
   blocks.push([
     `Время встреч на ваши цели: ${input.share.percent}% (${hours(input.share.onGoal)} из ${hours(input.share.total)} ч по календарю).`,
   ]);
+  // Трекер или календарь не ответили — сказать, откуда взяты задачи и встречи.
+  if (input.notes?.length) blocks.push(input.notes);
   return blocks.map((block) => block.join('\n')).join('\n\n');
 }
 
