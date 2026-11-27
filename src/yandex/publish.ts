@@ -5,7 +5,7 @@ import { createIssue, trackerConfig } from './tracker.ts';
 
 export async function publishApproved(
   leaderId: string,
-  rows: { externalId: string; title: string; ownerName: string; dueOn: string; status: string; source: string }[],
+  rows: { externalId: string; title: string; ownerName: string; dueOn: string; status: string; source: string; description?: string }[],
   event: { uid: string; ics: string } | null,
 ): Promise<string> {
   let created = 0;
@@ -13,7 +13,7 @@ export async function publishApproved(
   if (trackerConfig()) {
     for (const task of rows) {
       const draft = issueDraft(task, []);
-      const result = await createIssue({ unique: taskUnique(leaderId, task.externalId), ...draft });
+      const result = await createIssue({ unique: taskUnique(leaderId, task.externalId), ...draft, description: task.description || draft.description });
       if (result === 'created') created += 1;
       else existed += 1;
     }

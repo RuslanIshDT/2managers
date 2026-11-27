@@ -5,13 +5,14 @@ import { decisions, focusPlans, freedSlots, leaders, meetings, seriesKind, tasks
 import { calendarAfter } from './free-time.ts';
 import { departmentForLeader } from './k1.ts';
 import { chooseFocus, classifySeries, GOAL_KINDS, type Candidate, type FocusPlan } from './conductor.ts';
-import { adviceTitle, departmentMatrix, goalMinutes, overdueLines, overdueTasks, ownWeekTasks, renderMorning } from './focus.ts';
+import { adviceTitle, departmentMatrix, goalMinutes, isLeaderTask, overdueLines, overdueTasks, ownWeekTasks, renderMorning } from './focus.ts';
 import { withLlmScope } from '../llm.ts';
 import { textSignals } from './k2.ts';
 import { sendMessage } from '../telegram.ts';
 import { morningQuestions } from './protocol-context.ts';
 import { clockFor, dateWords, moscowDay, shiftDay, waitedDays } from './scene.ts';
 import { liveSources, type LiveMeeting, type LiveTask } from './live-sources.ts';
+import { sendTaskReminders } from './reminders.ts';
 
 export async function focusForLeader(db: Db, leaderId: string, leaderName: string) {
   const scene = await sceneFor(db, leaderId, leaderName);
@@ -35,6 +36,11 @@ export async function sendFocus(db: Db, leaderId: string) {
   );
   const questions = await morningQuestions(db, leaderId, scene.meetings, scene.morning.today, shiftDay(scene.morning.today, 1));
   const text = renderMorning({ ...scene.morning, plan: plan.today, questions, notes: live.notes });
+  try {
+    await sendTaskReminders(db, leaderId, leader.name, live.tasks, clockFor(leaderId).today);
+  } catch (err) {
+    console.error('Напоминания о сроках не отправлены', err instanceof Error ? err.message : err);
+  }
   await db
     .insert(focusPlans)
     .values({ leaderId, plan: { text, today: plan.today, later: plan.later }, createdAt: new Date() })
@@ -76,12 +82,16 @@ async function sceneFor(db: Db, leaderId: string, leaderName: string, live?: { t
   );
   const clock = clockFor(leaderId);
   const today = clock.today;
-  const ownTasks = taskList.filter((row) => row.owner === leaderName && row.status !== 'сделана' && row.status !== 'закрыта');
+  const ownTasks = taskList.filter((row) => isLeaderTask(row.owner, leaderName) && row.status !== 'сделана' && row.status !== 'закрыта' && row.status !== 'отменена');
   // Задачи руководителя со сроком в ближайшую неделю идут отдельным блоком всегда, поэтому в выбор трёх дел не входят.
-  const ownWeek = ownWeekTasks(ownTasks, today);
+  // Поручение без исполнителя («не назван») видно руководителю, даже если срока нет.
+  const ownWeek = [
+    ...ownWeekTasks(ownTasks.filter((row) => row.owner === leaderName), today),
+    ...ownTasks.filter((row) => row.owner === 'не назван'),
+  ];
   const weekIds = new Set(ownWeek.map((row) => row.id));
   const overdue = overdueTasks(
-    taskList.filter((row) => row.owner !== leaderName).map((row) => ({ title: row.title, owner: row.owner, dueOn: row.dueOn, status: row.status })),
+    taskList.filter((row) => !isLeaderTask(row.owner, leaderName)).map((row) => ({ title: row.title, owner: row.owner, dueOn: row.dueOn, status: row.status })),
     today,
   );
   // Решения, которые ждут руководителя, идут в сообщение отдельным блоком, поэтому в выбор трёх дел не входят.

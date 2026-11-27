@@ -114,7 +114,7 @@ export async function listQueueIssues(): Promise<QueueIssue[]> {
 
 let orgHeader: 'X-Org-ID' | 'X-Cloud-Org-ID' = 'X-Org-ID';
 
-async function call(path: string, init: { method: string; body: string }): Promise<Response> {
+async function call(path: string, init: { method: string; body?: string }): Promise<Response> {
   const first = await send(path, init, orgHeader);
   if (first.ok || first.status === 409 || orgHeader === 'X-Cloud-Org-ID') return first;
   const text = await first.clone().text();
@@ -124,7 +124,7 @@ async function call(path: string, init: { method: string; body: string }): Promi
   return send(path, init, orgHeader);
 }
 
-async function send(path: string, init: { method: string; body: string }, header: 'X-Org-ID' | 'X-Cloud-Org-ID'): Promise<Response> {
+async function send(path: string, init: { method: string; body?: string }, header: 'X-Org-ID' | 'X-Cloud-Org-ID'): Promise<Response> {
   const cfg = trackerConfig();
   if (!cfg) throw new Error('Трекер не настроен');
   return fetch(`https://api.tracker.yandex.net${path}`, {
@@ -132,9 +132,32 @@ async function send(path: string, init: { method: string; body: string }, header
     headers: {
       Authorization: `OAuth ${cfg.token}`,
       [header]: cfg.org,
-      'Content-Type': 'application/json',
+      ...(init.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
     },
     body: init.body,
     signal: AbortSignal.timeout(20_000),
   });
+}
+
+export async function commentIssue(key: string, text: string): Promise<void> {
+  const response = await call(`/v2/issues/${encodeURIComponent(key)}/comments`, { method: 'POST', body: JSON.stringify({ text }) });
+  if (!response.ok) throw new Error(`Трекер не принял комментарий (${response.status})`);
+}
+
+// Закрыть или отменить задачу. Переход ищется по идентификатору и по статусу, куда он ведёт.
+export async function moveIssue(key: string, goal: 'close' | 'cancel'): Promise<boolean> {
+  const response = await call(`/v2/issues/${encodeURIComponent(key)}/transitions`, { method: 'GET' });
+  if (!response.ok) throw new Error(`Трекер не отдал переходы (${response.status})`);
+  const rows = (await response.json()) as { id?: string; to?: { key?: string } }[];
+  const wanted = goal === 'close' ? ['close', 'closed', 'resolve', 'resolved', 'done', 'finish'] : ['cancel', 'cancelled', 'canceled'];
+  const found = (Array.isArray(rows) ? rows : []).find((row) => wanted.includes(row.id ?? '') || wanted.includes(row.to?.key ?? ''));
+  if (!found?.id) return false;
+  // Переход «Готово» в этой очереди требует резолюцию. Отмена — нет.
+  const payload = goal === 'close' ? JSON.stringify({ resolution: 'fixed' }) : '{}';
+  const done = await call(`/v2/issues/${encodeURIComponent(key)}/transitions/${encodeURIComponent(found.id)}/_execute`, {
+    method: 'POST',
+    body: payload,
+  });
+  if (!done.ok && done.status !== 409) throw new Error(`Трекер не сменил статус (${done.status})`);
+  return true;
 }

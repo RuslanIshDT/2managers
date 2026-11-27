@@ -51,12 +51,32 @@ export function departmentMatrix(people: MatrixInput[]): MatrixRow[] {
   });
 }
 
+const CLOSED_TASK = new Set(['сделана', 'закрыта', 'отменена']);
+
+export function isLeaderTask(owner: string, leaderName: string): boolean {
+  return owner === leaderName || owner === 'не назван';
+}
+
+// Название без повтора имени: утро само ставит имя перед задачей.
+export function taskTitle(title: string, owner: string): string {
+  let text = title.trim();
+  const prefix = owner.trim();
+  if (!prefix) return text;
+  const re = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*[:\\-—]?\\s*`, 'i');
+  while (re.test(text)) text = text.replace(re, '').trim();
+  return text || title.trim();
+}
+
+export function lateWords(days: number): string {
+  return `просрочено на ${dayCount(days)}`;
+}
+
 export function overdueTasks(
   tasks: { title: string; owner: string; dueOn: string; status: string }[],
   today: string,
 ): { title: string; owner: string; dueOn: string; days: number }[] {
   return tasks
-    .filter((task) => task.status !== 'сделана' && task.status !== 'закрыта')
+    .filter((task) => !CLOSED_TASK.has(task.status))
     .flatMap((task) => {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(task.dueOn) || task.dueOn >= today) return [];
       const [year, month, day] = task.dueOn.split('-').map(Number);
@@ -64,12 +84,16 @@ export function overdueTasks(
       const days = Math.round((Date.UTC(nowYear, nowMonth - 1, nowDay) - Date.UTC(year, month - 1, day)) / 86_400_000);
       return [{ title: task.title, owner: task.owner, dueOn: task.dueOn, days }];
     })
-    .sort((a, b) => a.dueOn.localeCompare(b.dueOn) || a.title.localeCompare(b.title));
+    .sort((a, b) => b.days - a.days || a.owner.localeCompare(b.owner, 'ru') || a.title.localeCompare(b.title, 'ru'));
 }
 
 export function overdueLines(rows: { title: string; owner: string; days: number }[]): string[] {
   if (!rows.length) return ['Просроченных задач у сотрудников нет.'];
-  return ['Просрочено у сотрудников:', ...rows.map((row) => `— ${row.owner}: ${row.title}, просрочено на ${dayCount(row.days)}`)];
+  const sorted = [...rows].sort((a, b) => b.days - a.days || a.owner.localeCompare(b.owner, 'ru') || a.title.localeCompare(b.title, 'ru'));
+  const shown = sorted.slice(0, 10);
+  const lines = ['Просрочено у сотрудников:', ...shown.map((row) => `— ${row.owner}: ${taskTitle(row.title, row.owner)} — ${lateWords(row.days)}`)];
+  if (sorted.length > shown.length) lines.push(`ещё ${sorted.length - shown.length}`);
+  return lines;
 }
 
 // Совет матрицы глаголом: так строка становится делом руководителя. «Не трогать» делом не бывает.
@@ -139,7 +163,7 @@ export const OWN_WEEK_DAYS = 7;
 export function ownWeekTasks<T extends { dueOn: string; status: string }>(tasks: T[], today: string): T[] {
   const until = addDays(today, OWN_WEEK_DAYS);
   return tasks
-    .filter((task) => task.status !== 'сделана' && task.status !== 'закрыта')
+    .filter((task) => !CLOSED_TASK.has(task.status))
     .filter((task) => /^\d{4}-\d{2}-\d{2}$/.test(task.dueOn) && task.dueOn <= until)
     .sort((a, b) => a.dueOn.localeCompare(b.dueOn));
 }

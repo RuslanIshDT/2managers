@@ -77,12 +77,15 @@ export function previousOf(rows: ProtocolRow[], meeting: { title: string; starts
 // Задачи из протокола со статусом: открыта ли она в Трекере (закрытая в Трекере — сделана).
 export async function protocolTasks(db: Db, leaderId: string, protocolId: string, tracker?: Map<string, boolean> | null) {
   const rows = await db.select().from(tasks).where(eq(tasks.leaderId, leaderId));
-  const own = rows.filter((row) => row.externalId.startsWith(`protocol-${protocolId}-`));
+  const own = rows
+    .filter((row) => row.externalId.startsWith(`protocol-${protocolId}-`))
+    .sort((a, b) => a.externalId.localeCompare(b.externalId, 'en', { numeric: true }));
   const states = tracker === undefined ? await trackerStates() : tracker;
   return own.map((row) => {
     const open = states?.get(taskUnique(leaderId, row.externalId));
     // Задача есть в Трекере — статус оттуда; нет (ещё не выложена или Трекер молчит) — из базы.
-    return { title: row.title, owner: row.ownerName, dueOn: row.dueOn, done: open === undefined ? /сделан|закрыт/i.test(row.status) : !open };
+    const done = open === undefined ? /сделан|закрыт|отмен/i.test(row.status) : !open;
+    return { externalId: row.externalId, title: row.title, owner: row.ownerName, dueOn: row.dueOn, done };
   });
 }
 

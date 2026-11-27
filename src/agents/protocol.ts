@@ -13,11 +13,31 @@ import { clockFor } from './scene.ts';
 import { callJson, withLlmScope, type JsonSchema } from '../llm.ts';
 import { mailConfig, sendMail } from '../mail.ts';
 import { sendMessage } from '../telegram.ts';
-import { calendarConfig } from '../yandex/calendar.ts';
+import { calendarConfig, ensureStandCalendar, putEvent } from '../yandex/calendar.ts';
 import { publishApproved } from '../yandex/publish.ts';
 import { refreshSeries } from './stand-sync.ts';
 import { leaderProtocols, participantLetters, plainBody, previousOf, protocolTasks, whenWords } from './protocol-context.ts';
-import { trackerConfig } from '../yandex/tracker.ts';
+import { commentIssue, listQueueIssues, moveIssue, trackerConfig } from '../yandex/tracker.ts';
+import { eventFile, meetingStart, standEvent, taskUnique } from './materials.ts';
+import {
+  cleanMeetings,
+  cleanPrior,
+  cleanSteps,
+  openWithMeetings,
+  priorEffects,
+  priorLine,
+  protocolLetters,
+  protocolPlace,
+  protocolTaskDescription,
+  scheduledMeetings,
+  stepLine,
+  storedMeetings,
+  storedPrior,
+  storedSteps,
+  type AgreedMeeting,
+  type PriorItem,
+  type ProtocolStep,
+} from './protocol-steps.ts';
 
 const MAX_TRANSCRIPT = 12_000;
 
@@ -28,38 +48,66 @@ export interface ProtocolDraft {
   notes: string[];
   decisions: string[];
   next: string[];
+  steps?: ProtocolStep[];
   proposals: string[];
   open: string[];
+  prior?: PriorItem[];
+  agreed?: AgreedMeeting[];
 }
 
 const draftZod = z.object({
   theme: z.string().min(1),
   participants: z.array(z.string()),
-  previous: z.array(z.string()),
   notes: z.array(z.string()),
   decisions: z.array(z.string()),
-  next: z.array(z.string()),
+  steps: z.array(z.object({ owner: z.string(), task: z.string(), due: z.string() })),
   proposals: z.array(z.string()),
   open: z.array(z.string()),
+  prior: z.array(z.object({ n: z.coerce.number(), status: z.string(), note: z.string() })),
+  meetings: z.array(z.object({ title: z.string(), date: z.string(), time: z.string(), participants: z.array(z.string()) })),
 });
 
 function clip(items: string[], count: number): string[] {
   return items.map((item) => item.trim()).filter(Boolean).slice(0, count).map((item) => item.slice(0, 240));
 }
 
+const stepSchema: JsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['owner', 'task', 'due'],
+  properties: { owner: { type: 'string' }, task: { type: 'string' }, due: { type: 'string' } },
+};
+const priorSchema: JsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['n', 'status', 'note'],
+  properties: { n: { type: 'integer' }, status: { type: 'string' }, note: { type: 'string' } },
+};
+const meetingSchema: JsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['title', 'date', 'time', 'participants'],
+  properties: {
+    title: { type: 'string' },
+    date: { type: 'string' },
+    time: { type: 'string' },
+    participants: { type: 'array', items: { type: 'string' } },
+  },
+};
 const schema: JsonSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['theme', 'participants', 'previous', 'notes', 'decisions', 'next', 'proposals', 'open'],
+  required: ['theme', 'participants', 'notes', 'decisions', 'steps', 'proposals', 'open', 'prior', 'meetings'],
   properties: {
     theme: { type: 'string' },
     participants: { type: 'array', items: { type: 'string' } },
-    previous: { type: 'array', items: { type: 'string' } },
     notes: { type: 'array', items: { type: 'string' } },
     decisions: { type: 'array', items: { type: 'string' } },
-    next: { type: 'array', items: { type: 'string' } },
+    steps: { type: 'array', items: stepSchema },
     proposals: { type: 'array', items: { type: 'string' } },
     open: { type: 'array', items: { type: 'string' } },
+    prior: { type: 'array', items: priorSchema },
+    meetings: { type: 'array', items: meetingSchema },
   },
 };
 
@@ -81,7 +129,7 @@ export function renderProtocol(draft: ProtocolDraft): string {
     ...draft.decisions.map((item) => `— ${esc(item)}`),
     '',
     'Дальше:',
-    ...draft.next.map((item) => `— ${esc(item)}`),
+    ...((draft.steps ?? []).length ? (draft.steps ?? []).map((item) => `— ${esc(stepLine(item))}`) : draft.next.map((item) => `— ${esc(item)}`)),
     '',
     'Предложения помощника:',
     ...draft.proposals.map((item) => `— ${esc(item)}`),
@@ -202,6 +250,7 @@ export function protocolRelease(
   next: NextMeeting | null = null,
   meetingDay = '',
   leaderId = '',
+  structured: ProtocolStep[] = [],
 ): ProtocolRelease {
   const theme = body.split('\n')[0]?.trim() || 'Встреча по протоколу';
   const participants = participantNames(body);
@@ -211,11 +260,14 @@ export function protocolRelease(
   const minutes = next && next.minutes > 0 ? next.minutes : 30;
   const fallbackDue = moscowDate(when);
   const year = (meetingDay || fallbackDue).slice(0, 4);
-  const tasks = steps.map((title) => ({
-    title: title.slice(0, 240),
-    owner: ownerOf(title, participants, known),
-    dueOn: dueOf(title, meetingDay, year) ?? fallbackDue,
-  }));
+  // Новые протоколы — из структуры. Старые, где шаги ещё строками текста, читаются по-прежнему.
+  const tasks = structured.length
+    ? structured.map((step) => ({ title: step.task, owner: step.owner, dueOn: step.due }))
+    : steps.map((title) => ({
+        title: title.slice(0, 240),
+        owner: ownerOf(title, participants, known),
+        dueOn: dueOf(title, meetingDay, year) ?? fallbackDue,
+      }));
   const named = participants.map((name) => {
     const person = known.find((row) => row.name.toLowerCase() === name.toLowerCase() && row.email.trim());
     return person ? `${name} <${person.email}>` : name;
@@ -251,14 +303,14 @@ export function protocolRelease(
   };
 }
 
-export async function releaseFor(db: Db, leaderId: string, row: { id: string; body: string; source: string; createdAt: Date }) {
+export async function releaseFor(db: Db, leaderId: string, row: { id: string; body: string; source: string; createdAt: Date; steps?: unknown }) {
   const [known, meetingRows] = await Promise.all([
     db.select({ name: people.name, email: people.email }).from(people).where(eq(people.leaderId, leaderId)),
     db.select().from(meetings).where(eq(meetings.leaderId, leaderId)),
   ]);
   const meeting = meetingOfSource(row.source);
   const next = nextOfSeries(meeting, meetingRows.map((item) => ({ uid: item.uid, startsAt: item.startsAt, minutes: item.minutes, summary: item.summary })));
-  return protocolRelease(row.body, known, clockFor(leaderId, row.createdAt).now, row.id, next, meeting?.startsAt.slice(0, 10) ?? '', leaderId);
+  return protocolRelease(row.body, known, clockFor(leaderId, row.createdAt).now, row.id, next, meeting?.startsAt.slice(0, 10) ?? '', leaderId, storedSteps(row.steps));
 }
 
 export async function approveProtocol(db: Db, id: string, chatId: string): Promise<string> {
@@ -270,49 +322,38 @@ export async function approveProtocol(db: Db, id: string, chatId: string): Promi
   const mailbox = mailConfig();
   if (!mailbox) return 'Яндекс Почта не настроена';
   const release = await releaseFor(db, leader.id, row);
-  for (const [index, task] of release.tasks.entries()) {
+  const meeting = meetingOfSource(row.source);
+  const taskRows = release.tasks.map((task, index) => ({
+    externalId: `protocol-${row.id}-${index + 1}`,
+    title: task.title,
+    ownerName: task.owner,
+    dueOn: task.dueOn,
+    status: 'в работе',
+    source: 'протокол',
+    description: protocolTaskDescription(task.owner, meeting),
+  }));
+  for (const task of taskRows) {
     await db
       .insert(tasks)
-      .values({
-        leaderId: leader.id,
-        externalId: `protocol-${row.id}-${index + 1}`,
-        title: task.title,
-        ownerName: task.owner,
-        dueOn: task.dueOn,
-        status: 'в работе',
-        source: 'протокол',
-      })
+      .values({ leaderId: leader.id, externalId: task.externalId, title: task.title, ownerName: task.ownerName, dueOn: task.dueOn, status: task.status, source: task.source })
       .onConflictDoNothing();
   }
   // Задачи — в Трекер до календаря: в описании встреч темы статус задач берётся из Трекера.
   let trackerNote = '';
   if (trackerConfig()) {
     try {
-      const note = await publishApproved(
-        leader.id,
-        release.tasks.map((task, index) => ({
-          externalId: `protocol-${row.id}-${index + 1}`,
-          title: task.title,
-          ownerName: task.owner,
-          dueOn: task.dueOn,
-          status: 'в работе',
-          source: 'протокол',
-        })),
-        null,
-      );
-      trackerNote = ` ${note}`;
+      trackerNote = ` ${await publishApproved(leader.id, taskRows, null)}`;
     } catch {
       trackerNote = ' Трекер задачи не принял.';
     }
   }
-  let text = release.text;
+  const priorNote = await applyPrior(db, leader.id, row);
   // Статус — до календаря: описание встреч темы строится из утверждённых протоколов.
   await db.update(protocols).set({ status: 'утверждён', awaitingEdit: false }).where(eq(protocols.id, row.id));
   let placed = false;
   if (calendarConfig()) {
     try {
-      const title = meetingOfSource(row.source)?.title;
-      if (title) await refreshSeries(db, leader.id, title);
+      if (meeting) await refreshSeries(db, leader.id, meeting.title);
       else
         await publishApproved(leader.id, [], {
           uid: `${leader.id}:protocol-${row.id}`,
@@ -324,17 +365,106 @@ export async function approveProtocol(db: Db, id: string, chatId: string): Promi
       placed = false;
     }
   }
-  if (placed) {
-    text = text.replace(
-      'Календарь не подключён: приглашение на встречу во вложении.',
-      'Протокол записан в описание встречи в календаре «Стенд». В описании следующей встречи темы — вопросы по этому протоколу. Приглашение во вложении.',
-    );
+  const createdMeetings = await placeAgreed(leader.id, row.id, storedMeetings(row.agreed));
+  const known = await db.select({ name: people.name, email: people.email }).from(people).where(eq(people.leaderId, leader.id));
+  const letters = protocolLetters({
+    theme: plainBody(row.body).split('\n')[0]?.trim() || 'Встреча',
+    body: row.body,
+    tasks: release.tasks,
+    participants: participantNames(plainBody(row.body)),
+    known,
+    leaderName: leader.name,
+    place: protocolPlace(meeting),
+  });
+  let sent = 0;
+  for (const letter of letters) {
+    try {
+      await sendMail(mailbox.user, letter.subject, letter.text, [
+        { filename: 'vstrecha.ics', content: release.ics, contentType: 'text/calendar; charset=utf-8; method=REQUEST' },
+      ]);
+      sent += 1;
+    } catch (err) {
+      console.error('Письмо протокола не ушло', err instanceof Error ? err.message : err);
+    }
   }
-  await sendMail(mailbox.user, release.subject, text, [
-    { filename: 'vstrecha.ics', content: release.ics, contentType: 'text/calendar; charset=utf-8; method=REQUEST' },
-  ]);
-  const count = release.tasks.length;
-  return `Протокол утверждён. ${placed ? 'Он в описании встречи в календаре. ' : ''}Письмо ушло в тестовый ящик, задач записано: ${count}.${trackerNote}`;
+  const parts = [
+    'Протокол утверждён.',
+    placed ? 'Он в описании встречи в календаре.' : '',
+    `Писем в тестовый ящик: ${sent}.`,
+    `Задач записано: ${taskRows.length}.`,
+    priorNote.closed ? `Закрыто прежних задач: ${priorNote.closed}.` : '',
+    priorNote.commented ? `Комментариев о просрочке: ${priorNote.commented}.` : '',
+    createdMeetings ? `Новых встреч в календаре: ${createdMeetings}.` : '',
+  ];
+  return `${parts.filter(Boolean).join(' ')}${trackerNote}`;
+}
+
+// «Сделано» закрывает задачу прошлого протокола, «просрочено» оставляет комментарий. До утверждения Трекер не меняется.
+async function applyPrior(db: Db, leaderId: string, row: { source: string; prior: unknown }): Promise<{ closed: number; commented: number }> {
+  const meeting = meetingOfSource(row.source);
+  const items = storedPrior(row.prior);
+  if (!meeting || !items.length) return { closed: 0, commented: 0 };
+  const previous = previousOf(await leaderProtocols(db, leaderId), meeting);
+  if (!previous) return { closed: 0, commented: 0 };
+  const effects = priorEffects(await protocolTasks(db, leaderId, previous.id), items, meeting.startsAt.slice(0, 10));
+  let issues: { key: string; unique: string }[] = [];
+  if (trackerConfig() && (effects.closeIds.length || effects.comments.length)) {
+    try {
+      issues = await listQueueIssues();
+    } catch (err) {
+      console.error('Трекер не отдал задачи', err instanceof Error ? err.message : err);
+    }
+  }
+  const byUnique = new Map(issues.map((issue) => [issue.unique, issue]));
+  let closed = 0;
+  let commented = 0;
+  for (const externalId of effects.closeIds) {
+    await db.update(tasks).set({ status: 'закрыта' }).where(and(eq(tasks.leaderId, leaderId), eq(tasks.externalId, externalId)));
+    const issue = byUnique.get(taskUnique(leaderId, externalId));
+    if (!issue?.key) continue;
+    try {
+      if (await moveIssue(issue.key, 'close')) closed += 1;
+    } catch (err) {
+      console.error('Задача не закрыта', err instanceof Error ? err.message : err);
+    }
+  }
+  for (const comment of effects.comments) {
+    const issue = byUnique.get(taskUnique(leaderId, comment.externalId));
+    if (!issue?.key) continue;
+    try {
+      await commentIssue(issue.key, comment.text);
+      commented += 1;
+    } catch (err) {
+      console.error('Комментарий не записан', err instanceof Error ? err.message : err);
+    }
+  }
+  return { closed, commented };
+}
+
+async function placeAgreed(leaderId: string, protocolId: string, meetings: AgreedMeeting[]): Promise<number> {
+  const planned = scheduledMeetings(leaderId, protocolId, meetings);
+  if (!planned.length || !calendarConfig()) return 0;
+  let created = 0;
+  try {
+    const href = await ensureStandCalendar();
+    for (const meeting of planned) {
+      const description = [
+        meeting.participants.length ? `Участники: ${meeting.participants.join(', ')}.` : '',
+        'Встреча из протокола. Поставлена ИИ-помощником после утверждения.',
+      ]
+        .filter(Boolean)
+        .join('\n');
+      await putEvent(
+        href,
+        eventFile(meeting.uid),
+        standEvent({ uid: meeting.uid, start: meetingStart(`${meeting.date}T${meeting.time}`), minutes: 30, summary: meeting.title, description }),
+      );
+      created += 1;
+    }
+  } catch (err) {
+    console.error('Новая встреча не записана', err instanceof Error ? err.message : err);
+  }
+  return created;
 }
 
 export async function rejectProtocol(db: Db, id: string, chatId: string): Promise<string> {
@@ -371,6 +501,12 @@ export async function saveProtocolEdit(db: Db, chatId: string, text: string): Pr
     .limit(1);
   if (!row) return null;
   const staff = await db.select({ name: people.name, position: people.position }).from(people).where(eq(people.leaderId, leader.id));
+  const meeting = meetingOfSource(row.source);
+  const earlier = previousOf(
+    (await leaderProtocols(db, leader.id)).filter((item) => item.id !== row.id),
+    meeting,
+  );
+  const priorTasks = earlier ? await protocolTasks(db, leader.id, earlier.id) : [];
   const result = await withLlmScope(
     { agent: 'protocol', leaderId: leader.id, operationId: `protocol-edit:${row.id}:${Date.now()}`, title: 'Правка протокола' },
     () =>
@@ -378,35 +514,68 @@ export async function saveProtocolEdit(db: Db, chatId: string, text: string): Pr
         purpose: `protocol-edit:${leader.id}`,
         system: [
           'Ты правишь протокол встречи по указанию руководителя.',
-          'Внеси правку точно и ничего больше не меняй. Структура та же: тема, участники, что с прошлыми решениями, заметки, решения, дальнейшие шаги, предложения помощника, открытые вопросы.',
-          'Каждый дальнейший шаг начинай с полного имени ответственного, срок — датой: «до 14 декабря». Каждый пункт короче 250 знаков.',
+          'Внеси правку и не меняй остальное.',
+          'steps — отдельные поручения: одно поручение — один элемент, даже если их несколько у одного человека. owner — полное имя из списка людей или пустая строка. task — поручение без имени, не длиннее 120 знаков. due — дата ГГГГ-ММ-ДД или пустая строка.',
+          'prior — статус каждой задачи прошлого протокола по её номеру: status строго «сделано», «не сделано», «просрочено» или «не обсуждали». Прошлых задач нет — prior пустой.',
+          'meetings — встречи, о которых договорились: date ГГГГ-ММ-ДД или пусто, time ЧЧ:ММ или пусто. Не выдумывай время.',
+          'Каждый пункт заметок, решений и открытых вопросов короче 250 знаков.',
         ].join(' '),
-        user: [`Люди руководителя: ${staff.map((item) => `${item.name} (${item.position})`).join('; ')}.`, '', 'Протокол:', plainBody(row.body), '', `Правка руководителя: ${instead}`].join('\n'),
+        user: [
+          `Люди руководителя: ${staff.map((item) => `${item.name} (${item.position})`).join('; ')}.`,
+          '',
+          priorTasks.length ? `Задачи прошлого протокола:\n${numberedTasks(priorTasks)}` : 'Задач прошлого протокола нет.',
+          '',
+          'Протокол:',
+          plainBody(row.body),
+          '',
+          `Правка руководителя: ${instead}`,
+        ].join('\n'),
         schemaName: 'protocol',
         schema,
       }),
   );
   const parsed = draftZod.safeParse(result.data);
   if (!parsed.success) return 'Правку не удалось внести: ответ модели не прошёл проверку. Протокол прежний.';
-  const draft = cleanDraft(parsed.data);
+  const draft = cleanDraft(parsed.data, staff, priorTasks);
   const body = renderProtocol(draft);
-  await db.update(protocols).set({ body, openItems: draft.open, awaitingEdit: false }).where(eq(protocols.id, row.id));
+  await db
+    .update(protocols)
+    .set({ body, openItems: draft.open, steps: draft.steps, prior: draft.prior, agreed: draft.agreed, awaitingEdit: false })
+    .where(eq(protocols.id, row.id));
   await db.insert(revisions).values({ id: randomUUID(), leaderId: leader.id, category: 'протокол', instead, createdAt: new Date() });
   await sendProtocol(body, chatId, row.id);
   return 'Протокол поправлен, новая версия выше. Правка записана: следующие протоколы её учтут.';
 }
 
-function cleanDraft(data: z.infer<typeof draftZod>): ProtocolDraft {
+function cleanDraft(
+  data: z.infer<typeof draftZod>,
+  known: { name: string }[],
+  priorTasks: { title: string; owner: string }[],
+): ProtocolDraft {
+  const steps = cleanSteps(data.steps, known);
+  const prior = cleanPrior(data.prior, priorTasks.length);
+  const agreed = cleanMeetings(data.meetings);
+  const open = openWithMeetings(clip(data.open, 5), agreed);
   return {
     theme: data.theme.trim().slice(0, 180),
     participants: clip(data.participants, 12),
-    previous: clip(data.previous, 8),
+    previous: prior.flatMap((item) => {
+      const task = priorTasks[item.n - 1];
+      return task ? [priorLine(task, item)] : [];
+    }),
     notes: clip(data.notes, 5),
     decisions: clip(data.decisions, 6),
-    next: clip(data.next, 12),
+    next: [],
+    steps,
     proposals: clip(data.proposals, 3),
-    open: clip(data.open, 5),
+    open,
+    prior,
+    agreed,
   };
+}
+
+function numberedTasks(rows: { title: string; owner: string; dueOn: string; done: boolean }[]): string {
+  return rows.map((task, index) => `${index + 1}. ${task.title} — ${task.owner}${task.dueOn ? `, срок ${task.dueOn}` : ''}, ${task.done ? 'закрыта' : 'открыта'}`).join('\n');
 }
 
 function participantNames(body: string): string[] {
@@ -564,7 +733,7 @@ export async function writeProtocol(db: Db, leaderId: string, dir = `data/${lead
   const edits = (await db.select().from(revisions).where(and(eq(revisions.leaderId, leaderId), eq(revisions.category, 'протокол')))).map((row) => row.instead);
   const context = [
     prior && priorAt ? `Прошлый протокол этой темы (${whenWords(priorAt.startsAt)}, ${prior.status}):\n${plainBody(prior.body).slice(0, 2500)}` : 'Прошлого протокола этой темы нет.',
-    priorTasks.length ? `Задачи из прошлого протокола:\n${priorTasks.map((task) => `— ${task.title} (${task.owner}, срок ${task.dueOn}) — ${task.done ? 'закрыта' : 'открыта'}`).join('\n')}` : '',
+    priorTasks.length ? `Задачи прошлого протокола (номер нужен для статуса):\n${numberedTasks(priorTasks)}` : '',
     letters.length ? `Письма участников за неделю до встречи:\n${letters.map((row) => `— ${row.received.slice(0, 10)} ${row.from}: ${row.subject}. ${row.body}`).join('\n')}` : '',
     edits.length ? `Правки руководителя к прошлым протоколам — учитывай:\n${edits.slice(-8).map((item) => `— ${item}`).join('\n')}` : '',
   ]
@@ -577,9 +746,11 @@ export async function writeProtocol(db: Db, leaderId: string, dir = `data/${lead
     system: [
       'Ты пишешь протокол встречи по расшифровке.',
       'Тема, участники, короткие заметки, решения, дальнейшие шаги, предложения помощника и открытые вопросы.',
-      'Не выдумывай людей и решений, которых нет в тексте. Каждый пункт короче 250 знаков.',
-      'Участников называй полным именем из списка людей руководителя. Каждый дальнейший шаг начинай с полного имени ответственного, срок пиши датой: «до 14 декабря»; «сегодня» — это день встречи. Шагов не больше 12: у каждого, кому на встрече дали поручение, есть свой шаг, мелкие поручения одному человеку объединяй.',
-      'previous — что с прошлыми решениями: если есть прошлый протокол этой темы, по каждому его решению и шагу одной короткой строкой — что с ним по расшифровке, задачам и письмам: «сделано», «не сделано», «просрочено» или «на встрече не обсуждали», и у кого. Не больше 8 строк, похожие объединяй. Прошлого протокола нет — previous пустой.',
+      'Не выдумывай людей, решений и времени, которых нет в тексте. Пункт заметок, решений и открытых вопросов короче 250 знаков.',
+      'Участников называй полным именем из списка людей руководителя.',
+      'steps — отдельные поручения. Одно поручение — один элемент, даже если их несколько у одного человека: не объединяй. owner — полное имя из списка или пустая строка, если человека нет в списке. task — поручение без имени, не длиннее 120 знаков. due — дата ГГГГ-ММ-ДД или пустая строка. «сегодня» и «завтра» считай от дня встречи.',
+      'prior — по каждой задаче прошлого протокола: n как в списке, status строго «сделано», «не сделано», «просрочено» или «не обсуждали», note — коротко, что выяснилось. Прошлых задач нет — prior пустой. Номера, которых нет в списке, не добавляй.',
+      'meetings — новые встречи, о которых договорились на этой встрече, не сама эта серия. date — ГГГГ-ММ-ДД или пусто, time — ЧЧ:ММ или пусто, participants — полные имена. Нет даты или времени — оставь пустым, не выдумывай.',
     ].join(' '),
     user: [
       meeting ? `Встреча: ${meeting.title}, ${meeting.startsAt.replace('T', ' ')} по Москве.` : '',
@@ -599,7 +770,7 @@ export async function writeProtocol(db: Db, leaderId: string, dir = `data/${lead
     const detail = parsed.error.issues.map((issue) => `${issue.path.join('.')}:${issue.code}`).join('; ');
     throw new Error(`Ответ модели не совпал со схемой протокола: ${detail}`.slice(0, 200));
   }
-  const draft = cleanDraft(parsed.data);
+  const draft = cleanDraft(parsed.data, staff, priorTasks);
   const id = randomUUID().replace(/-/g, '').slice(0, 8);
   const body = renderProtocol(draft);
   await db.insert(protocols).values({
@@ -608,6 +779,9 @@ export async function writeProtocol(db: Db, leaderId: string, dir = `data/${lead
     source: source.name,
     body,
     openItems: draft.open,
+    steps: draft.steps,
+    prior: draft.prior,
+    agreed: draft.agreed,
     status: 'ждёт',
     transcriptAt: arrived,
     createdAt: new Date(),

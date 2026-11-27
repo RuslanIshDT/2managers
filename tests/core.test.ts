@@ -473,7 +473,17 @@ describe('утро и матрица', () => {
       '2026-11-27',
     );
     expect(late).toEqual([{ title: 'Сдать линию', owner: 'Пётр', dueOn: '2026-11-20', days: 7 }]);
-    expect(overdueLines(late).join('\n')).toContain('Пётр: Сдать линию, просрочено на 7 дней');
+    expect(overdueLines(late).join('\n')).toContain('— Пётр: Сдать линию — просрочено на 7 дней');
+    expect(overdueTasks([{ title: 'Позже', owner: 'Пётр', dueOn: '2026-12-01', status: 'в работе' }], '2026-11-27')).toEqual([]);
+    expect(overdueTasks([{ title: 'Снята', owner: 'Пётр', dueOn: '2026-11-01', status: 'отменена' }], '2026-11-27')).toEqual([]);
+    const repeated = overdueLines([{ title: 'Пётр: Пётр: сдать отчёт', owner: 'Пётр', days: 2 }]);
+    expect(repeated.join('\n')).toContain('— Пётр: сдать отчёт — просрочено на 2 дня');
+    expect(repeated.join('\n')).not.toContain('Пётр: Пётр');
+    const many = Array.from({ length: 12 }, (_, index) => ({ title: `Дело ${index}`, owner: 'Пётр', days: index + 1 }));
+    const capped = overdueLines(many);
+    expect(capped.filter((line) => line.startsWith('— '))).toHaveLength(10);
+    expect(capped.at(-1)).toBe('ещё 2');
+    expect(capped[1]).toContain('просрочено на 12 дней');
     const file = await readFile('data/synthetic/tasks.csv', 'utf8');
     const fromFile = file
       .trim()

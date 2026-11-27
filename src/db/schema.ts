@@ -259,7 +259,20 @@ export const protocols = pgTable('protocols', {
   sentAt: timestamp('sent_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
   awaitingEdit: boolean('awaiting_edit').notNull().default(false),
+  steps: jsonb('steps').notNull().default([]),
+  prior: jsonb('prior').notNull().default([]),
+  agreed: jsonb('agreed').notNull().default([]),
 });
+
+export const taskReminders = pgTable(
+  'task_reminders',
+  {
+    leaderId: text('leader_id').notNull(),
+    taskKey: text('task_key').notNull(),
+    day: text('day').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.leaderId, t.taskKey, t.day] })],
+);
 
 export const noteSent = pgTable(
   'note_sent',
