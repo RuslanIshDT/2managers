@@ -12,6 +12,7 @@ export interface LlmScope {
   leaderId: string;
   operationId: string;
   title: string;
+  traceId?: string;
 }
 
 const scopes = new AsyncLocalStorage<LlmScope>();
@@ -26,6 +27,9 @@ export interface LlmCall {
   user: string;
   schemaName: string;
   schema: JsonSchema;
+  // Продолжение разговора агента: вместо system и user, инструменты только для истории.
+  messages?: ChatMessage[];
+  tools?: ToolSpec[];
 }
 
 export interface LlmResult<T> {
@@ -81,7 +85,31 @@ export function llmConfig() {
   };
 }
 
-export async function callJson<T>(call: LlmCall, attempt = 1): Promise<LlmResult<T>> {
+export interface ToolCall {
+  id: string;
+  type: 'function';
+  function: { name: string; arguments: string };
+}
+
+export type ChatMessage =
+  | { role: 'system' | 'user'; content: string }
+  | { role: 'assistant'; content: string | null; tool_calls?: ToolCall[] }
+  | { role: 'tool'; tool_call_id: string; content: string };
+
+export interface ToolSpec {
+  name: string;
+  description: string;
+  parameters: JsonSchema;
+}
+
+interface ChatReply {
+  content: string;
+  toolCalls: ToolCall[];
+  result: Omit<LlmResult<unknown>, 'data'>;
+}
+
+// Один запрос к провайдеру: повтор при 429 и 5xx, журнал, Langfuse. Все шаги одной операции — в одном следе.
+async function chat(purpose: string, messages: ChatMessage[], extra: Record<string, unknown>, attempt = 1): Promise<ChatReply> {
   const cfg = llmConfig();
   const scope = scopes.getStore();
   const model = await chosenModel(scope, cfg.model);
@@ -89,18 +117,7 @@ export async function callJson<T>(call: LlmCall, attempt = 1): Promise<LlmResult
   const res = await fetch(`${cfg.baseUrl}/chat/completions`, {
     method: 'POST',
     headers: providerHeaders(cfg.apiKey),
-    body: JSON.stringify({
-      model,
-      temperature: 0,
-      messages: [
-        { role: 'system', content: call.system },
-        { role: 'user', content: call.user },
-      ],
-      response_format: {
-        type: 'json_schema',
-        json_schema: { name: call.schemaName, strict: true, schema: call.schema },
-      },
-    }),
+    body: JSON.stringify({ model, temperature: 0, messages, ...extra }),
     signal: AbortSignal.timeout(120_000),
   });
   const ms = Date.now() - started;
@@ -108,17 +125,19 @@ export async function callJson<T>(call: LlmCall, attempt = 1): Promise<LlmResult
     const text = (await res.text()).slice(0, 300);
     if (attempt < 3 && (res.status === 429 || res.status >= 500)) {
       await new Promise((r) => setTimeout(r, 2000 * attempt));
-      return callJson<T>(call, attempt + 1);
+      return chat(purpose, messages, extra, attempt + 1);
     }
     throw new Error(`Модель ответила ${res.status}: ${text}`);
   }
   const body = (await res.json()) as {
     model?: string;
-    choices?: { message?: { content?: string } }[];
+    choices?: { message?: { content?: string | null; tool_calls?: ToolCall[] } }[];
     usage?: { prompt_tokens?: number; completion_tokens?: number; cost?: number };
   };
   const usage = body.usage ?? {};
-  const content = body.choices?.[0]?.message?.content ?? '';
+  const message = body.choices?.[0]?.message ?? {};
+  const content = message.content ?? '';
+  const toolCalls = (message.tool_calls ?? []).filter((call) => call?.function?.name);
   const result = {
     model: body.model ?? model,
     ms,
@@ -126,33 +145,75 @@ export async function callJson<T>(call: LlmCall, attempt = 1): Promise<LlmResult
     tokensOut: usage.completion_tokens ?? 0,
     costUsd: costFromUsage(usage),
   };
-  const traceId = await sendTrace({
+  const output = toolCalls.length
+    ? [content, ...toolCalls.map((call) => `→ ${call.function.name}(${call.function.arguments})`)].filter(Boolean).join('\n')
+    : content;
+  const traceId = await sendTrace(
+    {
+      agent: scope?.agent ?? '',
+      leaderId: scope?.leaderId ?? '',
+      operationId: scope?.operationId ?? purpose,
+      title: scope?.title ?? purpose,
+      model: result.model,
+      tokensIn: result.tokensIn,
+      tokensOut: result.tokensOut,
+      costUsd: result.costUsd,
+      ms,
+      input: messages.map(messageText).join('\n\n'),
+      output,
+    },
+    fetch,
+    scope?.traceId,
+  );
+  if (scope && traceId && !scope.traceId) scope.traceId = traceId;
+  await log(cfg.logPath, purpose, result, {
     agent: scope?.agent ?? '',
     leaderId: scope?.leaderId ?? '',
-    operationId: scope?.operationId ?? call.purpose,
-    title: scope?.title ?? call.purpose,
-    model: result.model,
-    tokensIn: result.tokensIn,
-    tokensOut: result.tokensOut,
-    costUsd: result.costUsd,
-    ms,
-    input: `${call.system}\n\n${call.user}`,
-    output: content,
-  });
-  await log(cfg.logPath, call.purpose, result, {
-    agent: scope?.agent ?? '',
-    leaderId: scope?.leaderId ?? '',
-    operationId: scope?.operationId ?? call.purpose,
-    title: scope?.title ?? call.purpose,
-    traceId,
+    operationId: scope?.operationId ?? purpose,
+    title: scope?.title ?? purpose,
+    traceId: scope?.traceId || traceId,
     priced: result.costUsd !== null,
   });
+  return { content, toolCalls, result };
+}
+
+function messageText(message: ChatMessage): string {
+  if (message.role === 'tool') return `[инструмент] ${message.content}`;
+  if (message.role === 'assistant') {
+    const calls = (message.tool_calls ?? []).map((call) => `→ ${call.function.name}(${call.function.arguments})`);
+    return [`[модель] ${message.content ?? ''}`, ...calls].join('\n');
+  }
+  return `[${message.role}] ${message.content}`;
+}
+
+export async function callJson<T>(call: LlmCall, attempt = 1): Promise<LlmResult<T>> {
+  const messages: ChatMessage[] = call.messages ?? [
+    { role: 'system', content: call.system },
+    { role: 'user', content: call.user },
+  ];
+  const reply = await chat(call.purpose, messages, {
+    ...(call.tools?.length ? { tools: call.tools.map(toolBody), tool_choice: 'none' } : {}),
+    response_format: {
+      type: 'json_schema',
+      json_schema: { name: call.schemaName, strict: true, schema: call.schema },
+    },
+  });
   try {
-    return { ...result, data: JSON.parse(stripFence(content)) as T };
+    return { ...reply.result, data: JSON.parse(stripFence(reply.content)) as T };
   } catch {
     if (attempt < 3) return callJson<T>(call, attempt + 1);
-    throw new Error(`Ответ модели — не JSON: ${content.slice(0, 200)}`);
+    throw new Error(`Ответ модели — не JSON: ${reply.content.slice(0, 200)}`);
   }
+}
+
+// Шаг агента с инструментами: модель либо просит инструменты, либо отвечает текстом.
+export async function callTools(purpose: string, messages: ChatMessage[], tools: ToolSpec[]): Promise<{ content: string; toolCalls: ToolCall[] }> {
+  const reply = await chat(purpose, messages, { tools: tools.map(toolBody), tool_choice: 'auto' });
+  return { content: reply.content, toolCalls: reply.toolCalls };
+}
+
+function toolBody(tool: ToolSpec) {
+  return { type: 'function', function: { name: tool.name, description: tool.description, parameters: tool.parameters } };
 }
 
 function stripFence(s: string): string {

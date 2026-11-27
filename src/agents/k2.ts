@@ -1,6 +1,6 @@
 // K2: вердикт по просьбе подчинённого. Модель предлагает, код не пускает категории N1 без руководителя.
 import { z } from 'zod';
-import { callJson, type JsonSchema } from '../llm.ts';
+import { callJson, type ChatMessage, type JsonSchema, type ToolSpec } from '../llm.ts';
 
 const FINISH = 'Доделайте просьбу: какое решение предлагаете, какой срок и что нужно от руководителя. Пока возвращаю вам.';
 
@@ -255,15 +255,22 @@ export function cardText(input: {
   return lines.join('\n');
 }
 
-export async function judgeLetter(input: { purpose: string; prompt: string }): Promise<ModelVerdict> {
+// messages — разговор агента с инструментами; без них — один запрос с готовой карточкой (prompt).
+export async function judgeLetter(input: { purpose: string; prompt: string; messages?: ChatMessage[]; tools?: ToolSpec[] }): Promise<ModelVerdict> {
   let detail = '';
   for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const retry = `Прошлый ответ не прошёл проверку (${detail}). Заполни все поля по схеме.`;
+    const messages: ChatMessage[] | undefined = input.messages
+      ? [{ role: 'system', content: SYSTEM }, ...input.messages.filter((m) => m.role !== 'system'), ...(attempt === 1 ? [] : [{ role: 'user' as const, content: retry }])]
+      : undefined;
     const result = await callJson<unknown>({
       purpose: input.purpose,
       system: SYSTEM,
-      user: attempt === 1 ? input.prompt : `${input.prompt}\n\nПрошлый ответ не прошёл проверку (${detail}). Заполни все поля по схеме.`,
+      user: attempt === 1 ? input.prompt : `${input.prompt}\n\n${retry}`,
       schemaName: 'k2_verdict',
       schema,
+      messages,
+      tools: input.tools,
     });
     const parsed = modelZod.safeParse(result.data);
     if (parsed.success) return parsed.data;

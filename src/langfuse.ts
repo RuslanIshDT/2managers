@@ -23,10 +23,11 @@ export function langfuseConfig() {
   return { host, publicKey, secretKey, project };
 }
 
-export async function sendTrace(input: TraceInput, post: typeof fetch = fetch): Promise<string> {
+// existingTrace — следующий шаг той же операции: поколение дописывается в её след.
+export async function sendTrace(input: TraceInput, post: typeof fetch = fetch, existingTrace = ''): Promise<string> {
   const cfg = langfuseConfig();
   if (!cfg) return '';
-  const traceId = crypto.randomUUID();
+  const traceId = existingTrace || crypto.randomUUID();
   const now = new Date();
   const started = new Date(now.getTime() - input.ms).toISOString();
   const body = {

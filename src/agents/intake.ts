@@ -10,6 +10,8 @@ import { kpiStatus, personAddresses } from './k1.ts';
 import { forceMailAction, judgeMail } from './accuracy.ts';
 import { cardText, chainKey, discountLimit, enforce, failedRuling, judgeLetter, letterPrompt, textSignals, type ModelVerdict, type Ruled } from './k2.ts';
 import { withLlmScope } from '../llm.ts';
+import { judgeWithTools, stepsWords, type K2Context } from './k2-tools.ts';
+import { readHistory } from './dependence.ts';
 import { letterHits } from './replay.ts';
 import { applyRevision, revisionPrompt } from './revisions.ts';
 import { listFlowRules } from './week.ts';
@@ -89,6 +91,13 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
   const authority = await listFlowRules(db, leaderId);
   const revisionRows = await db.select().from(revisions).where(eq(revisions.leaderId, leaderId)).orderBy(asc(revisions.createdAt));
   const edits = revisionRows.map((row) => ({ category: row.category, instead: row.instead }));
+  const history = await readHistory(`data/${leaderId}`).catch(() => []);
+  const pastMail = await db
+    .select({ fromEmail: mailIn.fromEmail, subject: mailIn.subject, received: mailIn.received, kind: verdicts.kind })
+    .from(mailIn)
+    .leftJoin(verdicts, and(eq(verdicts.leaderId, mailIn.leaderId), eq(verdicts.messageId, mailIn.messageId)))
+    .where(eq(mailIn.leaderId, leaderId))
+    .orderBy(asc(mailIn.received));
   const lines: string[] = [];
   let calls = 0;
   let deferred = 0;
@@ -191,20 +200,41 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
       } else {
         const ownKpi = kpiRows.filter((row) => row.personId === person.externalId);
         const ownTasks = taskRows.filter((row) => row.ownerName === person.name);
+        const ctx: K2Context = {
+          person,
+          authorities: ownAuth,
+          kpi: ownKpi,
+          tasks: ownTasks,
+          history: history.filter((row) => row.personId === person.externalId),
+          thread: pastMail
+            .filter((row) => personAddresses(person).includes(row.fromEmail.toLowerCase()))
+            .map((row) => ({ subject: row.subject, received: row.received, verdict: row.kind ?? '' })),
+          revisions: edits,
+        };
+        let steps = '';
         const judged = await withLlmScope(
           { agent: 'k2', leaderId, operationId: `k2:${letter.id}`, title: letter.subject.slice(0, 180) || 'Разбор письма' },
-          () => judgeLetter({
-          purpose: `k2:${letter.id}`,
-          prompt: letterPrompt({
-            profile: leaderRow.profile,
-            person: personBlock(person, ownAuth, ownKpi),
-            tasks: ownTasks.map((row) => `${row.title}, срок ${row.dueOn}, ${row.status}`).join('\n'),
-            subject: letter.subject,
-            body: letter.body,
-            limit,
-            revisions: revisionPrompt(edits),
-          }),
-        }),
+          () => judgeWithTools({ purpose: `k2:${letter.id}`, profile: leaderRow.profile, subject: letter.subject, body: letter.body, ctx })
+            .then((run) => {
+              steps = stepsWords(run.steps);
+              return run.verdict;
+            })
+            .catch((err: unknown) => {
+              // Инструменты не сработали — прежний разбор одним запросом с готовой карточкой.
+              console.error('K2 с инструментами не сработал', letter.id, err instanceof Error ? err.message : err);
+              return judgeLetter({
+                purpose: `k2:${letter.id}`,
+                prompt: letterPrompt({
+                  profile: leaderRow.profile,
+                  person: personBlock(person, ownAuth, ownKpi),
+                  tasks: ownTasks.map((row) => `${row.title}, срок ${row.dueOn}, ${row.status}`).join('\n'),
+                  subject: letter.subject,
+                  body: letter.body,
+                  limit,
+                  revisions: revisionPrompt(edits),
+                }),
+              });
+            }),
         ).then(
           (model) => ({ model, error: '' }),
           (err: unknown) => ({ model: null, error: err instanceof Error ? err.message : String(err) }),
@@ -212,6 +242,7 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
         calls += 1;
         const letterText = `${letter.subject}\n${letter.body}`;
         ruled = judged.model ? enforce(judged.model, letterText, limit, null, boss) : failedRuling(letterText, judged.error, boss);
+        if (steps) ruled = { ...ruled, context: [ruled.context, steps].filter(Boolean).join('\n') };
       }
       ruled = { ...ruled, draft: applyRevision(ruled.draft, ruled.category, edits) };
 
