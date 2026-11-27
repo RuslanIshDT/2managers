@@ -55,6 +55,25 @@ export interface Ruled {
   send: boolean;
 }
 
+// Модель не дала разбор: письмо уходит руководителю, повторного вызова нет.
+export function failedRuling(letterText: string, reason: string, boss: boolean): Ruled {
+  const category: RequestCategory = boss ? 'руководство' : textSignals(letterText).category ?? 'иное';
+  return {
+    kind: 'нужен_руководитель',
+    category,
+    summary: 'Разбор не удался, письмо ждёт вас',
+    draft: '',
+    basis: `Модель не дала ответ по схеме (${reason.slice(0, 160)}). Повторного разбора не будет`,
+    context: '',
+    recommendation: 'Прочитайте письмо и решите сами',
+    risks: '',
+    ifNot: 'Письмо останется без ответа',
+    authorityOffer: '',
+    ask: true,
+    send: false,
+  };
+}
+
 export interface PriorDecision {
   id: string;
   status: string;

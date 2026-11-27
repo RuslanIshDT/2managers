@@ -1,6 +1,7 @@
 // Яндекс Почта: IMAP для чтения, SMTP для отправки.
 // Без YANDEX_MAIL_USER и YANDEX_MAIL_PASSWORD модуль сообщает «не настроено» и ничего не шлёт.
 import { Buffer } from 'node:buffer';
+import { createHash } from 'node:crypto';
 import nodemailer from 'nodemailer';
 
 export interface MailConfig {
@@ -132,7 +133,7 @@ export function parseMailboxSource(source: string): MailboxLetter | null {
   if (!email.includes('@')) return null;
   const messageId = headerValue(headers, 'message-id') || `local-${email}-${subject}`;
   return {
-    id: messageId.replace(/[<>]/g, '').slice(0, 80),
+    id: liveLetterId(messageId),
     messageId,
     fromName: (from?.[1] ?? '').replace(/^"|"$/g, '').trim() || email,
     fromEmail: email,
@@ -141,6 +142,11 @@ export function parseMailboxSource(source: string): MailboxLetter | null {
     received,
     marked: false,
   };
+}
+
+// Номер живого письма: короткий и только из символов, которые принимает кнопка Telegram.
+export function liveLetterId(messageId: string): string {
+  return `m-${createHash('sha256').update(messageId).digest('hex').slice(0, 24)}`;
 }
 
 export async function appendSynthetic(letters: SyntheticLetter[]): Promise<number> {
