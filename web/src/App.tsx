@@ -539,6 +539,7 @@ export function App() {
   return (
     <ReleaseChoice.Provider value={{ uses: cabinet?.mirror?.uses ?? [], use: releaseUse, setUse: setReleaseUse }}>
     <main className="mx-auto max-w-3xl px-4 py-8">
+      <SourceOpen />
       <div className="mb-4 flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold">{cabinet?.name ?? user.name}</h1>
@@ -773,6 +774,35 @@ export function App() {
       ) : null}
     </main>
     </ReleaseChoice.Provider>
+  );
+}
+
+function SourceOpen() {
+  const [item, setItem] = useState<{ title: string; text: string } | null>(null);
+  useEffect(() => {
+    const load = () => {
+      const hash = decodeURIComponent(window.location.hash.replace(/^#/, ''));
+      const match = /^(protocol|letter)-(.+)$/.exec(hash);
+      if (!match) {
+        setItem(null);
+        return;
+      }
+      const kind = match[1];
+      const id = match[2];
+      api<{ title: string; text: string }>(`/api/source?kind=${kind}&id=${encodeURIComponent(id)}`)
+        .then(setItem)
+        .catch(() => setItem({ title: 'Источник не найден', text: '' }));
+    };
+    load();
+    window.addEventListener('hashchange', load);
+    return () => window.removeEventListener('hashchange', load);
+  }, []);
+  if (!item) return null;
+  return (
+    <Card className="mb-4">
+      <h2 className="mb-2 text-lg font-semibold">{item.title}</h2>
+      <p className="whitespace-pre-wrap text-sm leading-relaxed">{item.text}</p>
+    </Card>
   );
 }
 

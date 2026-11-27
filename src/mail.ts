@@ -228,6 +228,45 @@ export async function readSyntheticInbox(): Promise<MailboxLetter[]> {
   }
 }
 
+// Исходящие руководителя. Папка «Отправленные»; если почта не ответила — пусто, утро из-за этого не останавливается.
+export async function readOutgoing(limit = 40): Promise<MailboxLetter[]> {
+  const cfg = mailConfig();
+  if (!cfg) return [];
+  const { ImapFlow } = await import('imapflow');
+  const client = new ImapFlow({
+    host: 'imap.yandex.com',
+    port: 993,
+    secure: true,
+    auth: { user: cfg.user, pass: cfg.password },
+    logger: false,
+  });
+  client.on('error', (err: unknown) => console.error('IMAP', err instanceof Error ? err.message : err));
+  await client.connect();
+  try {
+    const boxes = await client.list();
+    const sent = boxes.find((box) => box.specialUse === '\\Sent' || /sent|отправлен/i.test(box.path));
+    if (!sent) return [];
+    const lock = await client.getMailboxLock(sent.path);
+    try {
+      const status = await client.status(sent.path, { messages: true });
+      const total = status.messages ?? 0;
+      if (!total) return [];
+      const from = Math.max(1, total - limit + 1);
+      const found: MailboxLetter[] = [];
+      for await (const message of client.fetch(`${from}:*`, { source: true })) {
+        if (!message.source) continue;
+        const parsed = parseMailboxSource(message.source.toString('utf8'));
+        if (parsed) found.push(parsed);
+      }
+      return found;
+    } finally {
+      lock.release();
+    }
+  } finally {
+    await client.logout().catch(() => undefined);
+  }
+}
+
 async function readSynthetic(client: {
   getMailboxLock: (path: string) => Promise<{ release: () => void }>;
   status: (path: string, query: { messages: true }) => Promise<{ messages?: number }>;

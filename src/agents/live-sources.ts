@@ -26,6 +26,7 @@ export interface LiveMeeting {
 
 export interface LiveSources {
   tasks: LiveTask[] | null;
+  briefTasks: LiveTask[] | null;
   meetings: LiveMeeting[] | null;
   notes: string[];
 }
@@ -38,15 +39,15 @@ export async function standOwner(db: Db): Promise<string | undefined> {
 
 // Задача помощника несёт свой ключ с id руководителя и строку «Исполнитель: …».
 // Задача, поставленная руками (без ключа помощника), — задача владельца стенда, исполнитель — он сам, если не указан другой.
-export function tasksFromIssues(issues: QueueIssue[], leaderId: string, leaderName: string, isOwner: boolean): LiveTask[] {
+export function tasksFromIssues(issues: QueueIssue[], leaderId: string, leaderName: string, isOwner: boolean, includeClosed = false): LiveTask[] {
   const prefix = taskUnique(leaderId, '');
   return issues.flatMap((issue) => {
-    if (!issue.open) return [];
+    if (!issue.open && !includeClosed) return [];
     const ours = issue.unique.startsWith('ecompras-');
     if (ours && !issue.unique.startsWith(prefix)) return [];
     if (!ours && !isOwner) return [];
     const named = /Исполнитель:\s*([^.\n]+)/.exec(issue.description)?.[1]?.trim();
-    return [{ id: issue.key, title: issue.summary, owner: named || leaderName, dueOn: issue.deadline, status: issue.status }];
+    return [{ id: issue.key, title: issue.summary, owner: named || leaderName, dueOn: issue.deadline, status: issue.open ? issue.status : 'закрыта' }];
   });
 }
 
@@ -69,10 +70,13 @@ export async function liveSources(db: Db, leaderId: string, leaderName: string):
   const isOwner = owner === leaderId;
   const notes: string[] = [];
   let tasks: LiveTask[] | null = null;
+  let briefTasks: LiveTask[] | null = null;
   if (!trackerConfig()) notes.push('Трекер не подключён — задачи взяты из базы системы.');
   else {
     try {
-      tasks = tasksFromIssues(await listQueueIssues(), leaderId, leaderName, isOwner);
+      const issues = await listQueueIssues();
+      tasks = tasksFromIssues(issues, leaderId, leaderName, isOwner);
+      briefTasks = tasksFromIssues(issues, leaderId, leaderName, isOwner, true);
     } catch (error) {
       notes.push(`Трекер не ответил (${error instanceof Error ? error.message : 'ошибка'}) — задачи взяты из базы системы.`);
     }
@@ -87,5 +91,5 @@ export async function liveSources(db: Db, leaderId: string, leaderName: string):
       notes.push(`Календарь не ответил (${error instanceof Error ? error.message : 'ошибка'}) — встречи взяты из базы системы.`);
     }
   }
-  return { tasks, meetings, notes };
+  return { tasks, briefTasks, meetings, notes };
 }

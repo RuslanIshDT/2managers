@@ -113,7 +113,7 @@ export interface MorningInput {
   returned: { who: string; what: string }[];
   overdue: { title: string; owner: string; days: number }[];
   todayMeetings: string[];
-  oneOnOne?: { name: string; lines: { text: string; sources: string[] }[] }[];
+  oneOnOne?: { name: string; lines: { text: string; sources: { label: string; href: string }[] }[] }[];
   questions: { title: string; items: string[] }[];
   share: { onGoal: number; total: number; percent: number };
   notes?: string[];
@@ -172,7 +172,10 @@ function meetingsBlock(input: MorningInput): string {
   const briefs = (input.oneOnOne ?? []).filter((block) => block.lines.length);
   if (!briefs.length) return line;
   const blocks = briefs.map((block) => {
-    const lines = block.lines.flatMap((item) => [`— ${item.text}`, ...item.sources.map((source) => `  ${source}`)]);
+    const lines = block.lines.flatMap((item) => [
+      `— ${item.text}`,
+      ...item.sources.map((source) => (source.href ? `  ${source.label} ${source.href}` : `  ${source.label}`)),
+    ]);
     return [`Что ${block.name} ждёт от вас:`, ...lines].join('\n');
   });
   return [line, ...blocks].join('\n\n');
@@ -231,4 +234,9 @@ export function goalMinutes(
     if (meeting.goal || (meeting.kind && goalKinds.has(meeting.kind))) onGoal += meeting.minutes;
   }
   return { onGoal, total, percent: total === 0 ? 0 : Math.round((100 * onGoal) / total) };
+}
+
+export function morningHtml(text: string): string {
+  const escaped = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return escaped.replace(/^([ \t]*)(\S[^\n]*?)[ \t]+(https:\/\/\S+)$/gm, (_, indent: string, label: string, url: string) => `${indent}<a href="${url}">${label}</a>`);
 }

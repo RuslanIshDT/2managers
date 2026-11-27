@@ -11,7 +11,7 @@ import type pg from 'pg';
 import { z } from 'zod';
 import { hashToken, newSessionToken, verifyPassword } from '../auth.ts';
 import type { Db } from '../db/client.ts';
-import { agentModels, agentRuns, emails, flowReports, leaderActs, leaders, meetings, operations, people, protocols, revisions, sessions, tasks, telegramClicks } from '../db/schema.ts';
+import { agentModels, agentRuns, emails, flowReports, leaderActs, leaders, mailIn, meetings, operations, people, protocols, revisions, sessions, tasks, telegramClicks } from '../db/schema.ts';
 import { departmentForLeader } from '../agents/k1.ts';
 import { accuracyView } from '../agents/accuracy.ts';
 import { controlOf, withLeader } from '../agents/control.ts';
@@ -116,6 +116,32 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     } catch {
       return reply.code(503).send({ ok: false });
     }
+  });
+
+  app.get('/api/source', async (request, reply) => {
+    const leader = await currentLeader(request);
+    if (!leader) return reply.code(401).send({ error: 'Нужен вход' });
+    const query = z
+      .object({ kind: z.enum(['protocol', 'letter']), id: z.string().min(1).max(200) })
+      .safeParse(request.query);
+    if (!query.success) return reply.code(400).send({ error: 'Некорректный запрос' });
+    if (query.data.kind === 'protocol') {
+      const [row] = await deps.db.select().from(protocols).where(eq(protocols.id, query.data.id)).limit(1);
+      if (!row || row.leaderId !== leader.id) return reply.code(404).send({ error: 'Не найдено' });
+      const steps = Array.isArray(row.steps)
+        ? row.steps.flatMap((item) => (item && typeof item === 'object' && 'task' in item && typeof item.task === 'string' ? [item.task] : []))
+        : [];
+      return { title: 'Протокол', text: [row.body, steps.length ? `Поручения:\n${steps.map((step) => `— ${step}`).join('\n')}` : ''].filter(Boolean).join('\n\n') };
+    }
+    const letter = (await deps.db.select().from(mailIn).where(eq(mailIn.leaderId, leader.id))).find(
+      (row) => row.syntheticId === query.data.id || row.messageId === query.data.id,
+    );
+    const catalog = letter
+      ? null
+      : (await deps.db.select().from(emails).where(eq(emails.leaderId, leader.id))).find((row) => row.externalId === query.data.id);
+    const found = letter ?? catalog;
+    if (!found) return reply.code(404).send({ error: 'Не найдено' });
+    return { title: found.subject, text: `${found.fromName}, ${found.received}\n\n${found.body}` };
   });
 
   app.post('/api/login', async (request, reply) => {

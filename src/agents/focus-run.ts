@@ -5,7 +5,7 @@ import { decisions, focusPlans, freedSlots, leaders, meetings, revisions, series
 import { calendarAfter } from './free-time.ts';
 import { departmentForLeader } from './k1.ts';
 import { chooseFocus, classifySeries, GOAL_KINDS, type Candidate, type FocusPlan } from './conductor.ts';
-import { adviceTitle, departmentMatrix, goalMinutes, isLeaderTask, overdueLines, overdueTasks, ownWeekTasks, renderMorning } from './focus.ts';
+import { adviceTitle, departmentMatrix, goalMinutes, isLeaderTask, morningHtml, overdueLines, overdueTasks, ownWeekTasks, renderMorning } from './focus.ts';
 import { withLlmScope } from '../llm.ts';
 import { textSignals } from './k2.ts';
 import { sendMessage } from '../telegram.ts';
@@ -38,9 +38,9 @@ export async function sendFocus(db: Db, leaderId: string) {
     () => chooseFocus({ purpose: `k4:${leaderId}`, profile: leader.profile, candidates: scene.candidates, names: scene.names }),
   );
   const questions = await morningQuestions(db, leaderId, scene.meetings, scene.morning.today, shiftDay(scene.morning.today, 1));
-  let oneOnOne: { name: string; lines: { text: string; sources: string[] }[] }[] = [];
+  let oneOnOne: { name: string; lines: { text: string; sources: { label: string; href: string }[] }[] }[] = [];
   try {
-    oneOnOne = await oneOnOneForDay(db, leaderId, leader.name, scene.morning.today, live.meetings ?? scene.meetings, live.tasks);
+    oneOnOne = await oneOnOneForDay(db, leaderId, leader.name, scene.morning.today, live.meetings ?? scene.meetings, live.briefTasks ?? live.tasks);
   } catch (err) {
     console.error('Сводка к встрече один на один не собралась', err instanceof Error ? err.message : err);
   }
@@ -54,7 +54,7 @@ export async function sendFocus(db: Db, leaderId: string) {
     .insert(focusPlans)
     .values({ leaderId, plan: { text, today: plan.today, later: plan.later }, createdAt: new Date() })
     .onConflictDoUpdate({ target: focusPlans.leaderId, set: { plan: { text, today: plan.today, later: plan.later }, createdAt: new Date() } });
-  await sendMessage(escapeHtml(text), leader.telegramChatId);
+  await sendMessage(morningHtml(text), leader.telegramChatId);
   return { matrix: scene.matrix, share: scene.share, text };
 }
 
@@ -170,10 +170,6 @@ async function sceneFor(db: Db, leaderId: string, leaderName: string, live?: { t
 function weekStart(day: string): string {
   const weekday = new Date(`${day}T00:00:00Z`).getUTCDay();
   return shiftDay(day, -((weekday + 6) % 7));
-}
-
-function escapeHtml(value: string): string {
-  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 // all: определить вид заново у всех серий — нужно, когда меняется список видов.
