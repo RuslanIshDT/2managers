@@ -162,6 +162,9 @@ export const verdicts = pgTable('verdicts', {
   authorityOffer: text('authority_offer').notNull(),
   risks: text('risks').notNull().default(''),
   ifNot: text('if_not').notNull().default(''),
+  authorityArea: text('authority_area').notNull().default(''),
+  authorityValue: text('authority_value').notNull().default(''),
+  authorityUnit: text('authority_unit').notNull().default(''),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
 });
 

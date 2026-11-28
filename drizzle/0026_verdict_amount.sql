@@ -1,0 +1,3 @@
+ALTER TABLE verdicts ADD COLUMN IF NOT EXISTS authority_area text NOT NULL DEFAULT '';
+ALTER TABLE verdicts ADD COLUMN IF NOT EXISTS authority_value text NOT NULL DEFAULT '';
+ALTER TABLE verdicts ADD COLUMN IF NOT EXISTS authority_unit text NOT NULL DEFAULT '';

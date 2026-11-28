@@ -1,9 +1,9 @@
 {
   "model": "anthropic/claude-haiku-4.5",
-  "at": "28.11.2026, 06:55:44 МСК",
-  "costUsd": 1.4922478000000017,
+  "at": "28.11.2026, 07:29:54 МСК",
+  "costUsd": 1.5658176000000004,
   "calls": 242,
-  "minutes": 2.9,
+  "minutes": 3.3,
   "score": {
     "total": 80,
     "correct": 77,
@@ -106,7 +106,7 @@
     "toolCalls": {
       "thread": 43,
       "people": 23,
-      "leader_edits": 25,
+      "leader_edits": 24,
       "person_card": 60,
       "kpi": 17,
       "authorities": 31,
@@ -188,8 +188,8 @@
       "toLeader": true,
       "tools": [
         "thread",
-        "people",
-        "leader_edits"
+        "leader_edits",
+        "people"
       ],
       "error": ""
     },
@@ -1118,8 +1118,7 @@
       "action": "игнорировать",
       "toLeader": false,
       "tools": [
-        "thread",
-        "leader_edits"
+        "thread"
       ],
       "error": ""
     },

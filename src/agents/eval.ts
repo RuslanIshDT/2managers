@@ -8,7 +8,7 @@ import { withLlmScope } from '../llm.ts';
 import { readHistory } from './dependence.ts';
 import { personAddresses } from './k1.ts';
 import { loadAudiences, refreshAudiences } from './audience.ts';
-import { confirmationPoints, leaderMustConfirm, limitBreaches } from './confirm.ts';
+import { breachesFromAnswer, confirmationPoints, leaderMustConfirm } from './confirm.ts';
 import { enforce, failedRuling, type Ruled } from './k2.ts';
 import { externalContext, judgeWithTools, k2Context } from './k2-tools.ts';
 import { mailRevisions } from './memory.ts';
@@ -140,7 +140,7 @@ export async function runEval(
         ? k2Context(person, { authorities: authRows, kpi: kpiRows, tasks: taskRows, history, mail: earlier, revisions: edits, people: peopleList })
         : externalContext({ name: letter.fromName, email: letter.fromEmail }, { mail: earlier, revisions: edits, people: peopleList });
     const text = `${letter.subject}\n${letter.body}`;
-    const breaches = limitBreaches(text, ctx.authorities.map((item) => ({ area: item.area, limit: item.limitValue, unit: item.unit })));
+    const limits = ctx.authorities.map((item) => ({ area: item.area, limit: item.limitValue, unit: item.unit }));
     const agent = inside ? 'k2' : 'mail_ext';
     let ruled: Ruled;
     let tools: string[] = [];
@@ -151,6 +151,10 @@ export async function runEval(
         () => judgeWithTools({ purpose: `eval:${agent}:${letter.externalId}`, profile: leader.profile, subject: letter.subject, body: letter.body, ctx }),
       );
       tools = run.steps.map((step) => step.tool);
+      const breaches = breachesFromAnswer(
+        { area: run.verdict.область ?? 'нет', value: run.verdict.число ?? 0, unit: run.verdict.единица ?? '' },
+        limits,
+      );
       ruled = enforce(run.verdict, text, points, breaches, null, [], staff, letter.fromEmail, audiences, letter.fromName);
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);

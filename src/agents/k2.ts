@@ -25,6 +25,9 @@ export interface ModelVerdict {
   риски: string;
   если_не_решить: string;
   уверенность: number;
+  область?: string;
+  число?: number;
+  единица?: string;
 }
 
 // kind в базе: нужен_руководитель — ждёт руководителя; вернуть — помощник ответил сам; делегировать — передал сотруднику;
@@ -71,10 +74,15 @@ export function failedRuling(_letterText: string, reason: string): Ruled {
   };
 }
 
-function verdictContract(points: string[]) {
+function verdictContract(points: string[], areas: string[]) {
   const choices = categoryChoices(points) as [string, ...string[]];
+  const areaChoices = [...new Set([...areas.map((area) => area.trim()).filter(Boolean), 'нет'])] as [string, ...string[]];
+  const units = ['%', 'ч', '₽', ''] as [string, ...string[]];
   const zod = z.object({
     действие: z.enum(ACTIONS),
+    область: z.enum(areaChoices),
+    число: z.number(),
+    единица: z.enum(units),
     кому_передать: z.string().max(200),
     в_полномочиях: z.enum(['да', 'нет', 'неясно']),
     есть_предложение: z.enum(['да', 'нет']),
@@ -109,9 +117,15 @@ function verdictContract(points: string[]) {
       'риски',
       'если_не_решить',
       'уверенность',
+      'область',
+      'число',
+      'единица',
     ],
     properties: {
       действие: { type: 'string', enum: [...ACTIONS] },
+      область: { type: 'string', enum: areaChoices },
+      число: { type: 'number' },
+      единица: { type: 'string', enum: units },
       кому_передать: { type: 'string' },
       в_полномочиях: { type: 'string', enum: ['да', 'нет', 'неясно'] },
       есть_предложение: { type: 'string', enum: ['да', 'нет'] },
@@ -147,6 +161,7 @@ export function mailSystem(points: string[]): string {
 предложение_полномочия — если такие письма можно больше не носить руководителю: какое право дать и кому. Иначе пусто.
 суть — одна фраза, о чём письмо. основание — одна фраза: какое правило, полномочие, данные или прошлое решение привели к действию.
 ${list}
+Если отправитель просит число в одной из своих областей с пределом, в область впиши эту область, в число — запрошенное число, в единица — %, ч или ₽. «8 тыс.» — это 8000, «0,25 млн» — 250000, «р.» и «руб.» — рубли. Если такого числа нет, область «нет», число 0, единица пустая. Код сам сравнит число с пределом.
 Каждое текстовое поле короче 400 знаков. Эталонных меток писем у тебя нет.`;
 }
 
@@ -299,8 +314,9 @@ export async function judgeLetter(input: {
   messages?: ChatMessage[];
   tools?: ToolSpec[];
   points: string[];
+  areas?: string[];
 }): Promise<ModelVerdict> {
-  const { zod, schema } = verdictContract(input.points);
+  const { zod, schema } = verdictContract(input.points, input.areas ?? []);
   const system = mailSystem(input.points);
   let detail = '';
   for (let attempt = 1; attempt <= 2; attempt += 1) {

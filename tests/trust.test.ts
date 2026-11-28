@@ -23,6 +23,10 @@ function pressed(ids: string[], action = 'утвердил') {
   return ids.map((refId) => ({ refId, auto: false, action }));
 }
 
+function amounts(ids: string[]) {
+  return ids.map((id) => ({ id: `v-${id}`, area: 'скидка', value: '8', unit: '%' }));
+}
+
 describe('журнал доверия', () => {
   it('утверждение без правки, с правкой и отказ различаются, отложенное не считается', () => {
     expect(decisionOutcome('исполнено', 'Текст', 'Текст')).toBe('утверждено');
@@ -35,7 +39,7 @@ describe('журнал доверия', () => {
   it('пять утверждений без истории дают предложение, одно с правкой — нет', () => {
     const letters = [{ fromEmail: 'anya@example.test', subject: 'Скидка клиенту', body: 'Прошу скидку 8%' }];
     const rows = ['2026-12-02', '2026-12-03', '2026-12-04', '2026-12-05', '2026-12-06'].map((day, index) => approval(`d${index}`, `${day}T10:00:00Z`));
-    const history = standTrustRows({ decisions: rows, acts: pressed(rows.map((row) => row.id)), letters, people: [person], authorities: [power] });
+    const history = standTrustRows({ decisions: rows, acts: pressed(rows.map((row) => row.id)), verdicts: amounts(rows.map((row) => row.id)), letters, people: [person], authorities: [power] });
     expect(history).toHaveLength(5);
     expect(history.every((row) => row.outcome === 'утверждено' && row.area === 'скидка')).toBe(true);
     expect(history[0]?.subject).toContain('8%');
@@ -44,6 +48,7 @@ describe('журнал доверия', () => {
     const edited = standTrustRows({
       decisions: editedRows,
       acts: pressed(editedRows.map((row) => row.id)),
+      verdicts: amounts(editedRows.map((row) => row.id)),
       letters,
       people: [person],
       authorities: [power],
@@ -56,6 +61,7 @@ describe('журнал доверия', () => {
     const known = standTrustRows({
       decisions: [approval('d1', '2026-12-02T10:00:00Z')],
       acts: pressed(['d1']),
+      verdicts: amounts(['d1']),
       letters: [letter],
       people: [person],
       authorities: [power],
@@ -77,7 +83,7 @@ describe('журнал доверия', () => {
       authorities: [power],
     });
     expect(otherArea).toEqual([]);
-    expect(trustSubject('Скидка клиенту', 'скидка 9%', 'скидка', '%')).toContain('9%');
+    expect(trustSubject('Скидка клиенту', 9, '%')).toContain('9%');
   });
 
   it('два утверждения и три ответа помощника предложения не дают, пять утверждений — дают', () => {
@@ -87,6 +93,7 @@ describe('журнал доверия', () => {
     const mixed = standTrustRows({
       decisions: [...leader, ...assistant],
       acts: [...pressed(leader.map((row) => row.id)), ...assistant.map((row) => ({ refId: row.id, auto: true, action: 'ответил сам' }))],
+      verdicts: amounts([...leader, ...assistant].map((row) => row.id)),
       letters,
       people: [person],
       authorities: [power],
@@ -97,6 +104,7 @@ describe('журнал доверия', () => {
     const history = standTrustRows({
       decisions: five,
       acts: pressed(five.map((row) => row.id)),
+      verdicts: amounts(five.map((row) => row.id)),
       letters,
       people: [person],
       authorities: [power],

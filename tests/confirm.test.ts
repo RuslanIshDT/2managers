@@ -3,8 +3,11 @@ import {
   canonicalCategory,
   confirmationPoints,
   leaderMustConfirm,
+  amountBlocksRule,
+  breachesFromAnswer,
   limitBreaches,
   nearestAmount,
+  withinLimit,
 } from '../src/agents/confirm.ts';
 
 const profile = `# Профиль
@@ -44,5 +47,12 @@ describe('правила подтверждения из профиля', () => 
     expect(limitBreaches('Прошу компенсацию клиенту 8 000 ₽', [{ area: 'компенсация клиенту', limit: '5000', unit: '₽' }])[0]?.asked).toBe(8000);
     expect(limitBreaches('Бюджет кампании 250 000 руб.', [{ area: 'бюджет кампании', limit: '200000', unit: '₽' }])[0]?.asked).toBe(250000);
     expect(limitBreaches('Отпуск с 20 декабря', [{ area: 'отпуск', limit: '5', unit: '%' }])).toEqual([]);
+    const power = [{ area: 'компенсация клиенту', limit: '5000', unit: '₽' }];
+    expect(breachesFromAnswer({ area: 'компенсация клиенту', value: 8000, unit: '₽' }, power)[0]?.asked).toBe(8000);
+    expect(breachesFromAnswer({ area: 'компенсация клиенту', value: 4000, unit: '₽' }, power)).toEqual([]);
+    expect(breachesFromAnswer({ area: 'нет', value: 8000, unit: '₽' }, power)).toEqual([]);
+    expect(amountBlocksRule('компенсация 8000 руб. и ещё 1000 руб.', power)).toBe(true);
+    expect(withinLimit('компенсация 4000 руб.', 'компенсация клиенту', 5000, '₽')).toBe(true);
+    expect(withinLimit('компенсация 4000 руб. и 1000 руб.', 'компенсация клиенту', 5000, '₽')).toBe(false);
   });
 });

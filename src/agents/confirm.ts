@@ -147,9 +147,40 @@ export function breachBasis(rows: LimitBreach[]): string {
     .join('; ');
 }
 
+export function soleAmount(text: string, unit: string): number | null {
+  const nums = amounts(text, unit);
+  return nums.length === 1 ? nums[0]?.value ?? null : null;
+}
+
 export function withinLimit(text: string, area: string, limit: number, unit: string): boolean {
-  const asked = nearestAmount(text, area, unit);
-  return asked !== null && asked <= limit;
+  const asked = soleAmount(text, unit);
+  return asked !== null && asked <= limit && area.trim().length > 0;
+}
+
+// До модели: правило не забирает письмо, если чисел этой единицы не одно или единственное выше предела.
+export function amountBlocksRule(text: string, rows: LimitRow[]): boolean {
+  for (const row of rows) {
+    const limit = Number(String(row.limit).replace(/\s/g, '').replace(',', '.'));
+    const unit = normalizeUnit(row.unit);
+    if (!Number.isFinite(limit) || !unit) continue;
+    const nums = amounts(text, unit);
+    if (nums.length === 0) continue;
+    if (nums.length !== 1 || (nums[0]?.value ?? 0) > limit) return true;
+  }
+  return false;
+}
+
+export function breachesFromAnswer(answer: { area: string; value: number; unit: string }, rows: LimitRow[]): LimitBreach[] {
+  const area = answer.area.trim();
+  if (!area || area === 'нет') return [];
+  const row = rows.find((item) => item.area.trim().toLowerCase() === area.toLowerCase());
+  if (!row) return [];
+  const unit = normalizeUnit(answer.unit);
+  const limitUnit = normalizeUnit(row.unit);
+  const limit = Number(String(row.limit).replace(/\s/g, '').replace(',', '.'));
+  if (!unit || unit !== limitUnit || !Number.isFinite(limit) || !Number.isFinite(answer.value)) return [];
+  if (answer.value <= limit) return [];
+  return [{ area: row.area, asked: answer.value, limit, unit }];
 }
 
 export function unitInText(text: string): string {

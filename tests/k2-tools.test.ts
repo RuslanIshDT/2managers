@@ -35,6 +35,9 @@ const verdict = {
   риски: '',
   если_не_решить: '',
   уверенность: 0.9,
+  область: 'нет',
+  число: 0,
+  единица: '',
 };
 
 function reply(message: Record<string, unknown>) {
