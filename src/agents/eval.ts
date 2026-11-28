@@ -9,9 +9,9 @@ import { readHistory } from './dependence.ts';
 import { personAddresses } from './k1.ts';
 import { loadAudienceState, refreshAudiences } from './audience.ts';
 import { breachesFromAnswer, confirmationPoints, leaderMustConfirm } from './confirm.ts';
-import { enforce, failedRuling, type Ruled } from './k2.ts';
-import { externalContext, judgeWithTools, k2Context } from './k2-tools.ts';
-import { mailRevisions } from './memory.ts';
+import { applyCheckResult, askDraftCheck, enforce, failedRuling, holdsDraft, keepForLeader, letterForCheck, type Ruled } from './k2.ts';
+import { externalContext, gatheredFacts, judgeWithTools, k2Context } from './k2-tools.ts';
+import { finishDraft, mailRevisions } from './memory.ts';
 
 export const LEADER_ACTION = 'спросить_руководителя';
 
@@ -33,6 +33,7 @@ export interface EvalRow {
   toLeader: boolean;
   tools: string[];
   error: string;
+  heldByCheck: boolean;
 }
 
 export interface EvalScore {
@@ -52,6 +53,7 @@ export interface EvalScore {
   mailExact: { total: number; correct: number };
   errors: number;
   toolCalls: Record<string, number>;
+  heldByCheck: number;
 }
 
 const ratio = (a: number, b: number) => (b ? a / b : 1);
@@ -84,6 +86,7 @@ export function evalScore(rows: EvalRow[], points: string[] = []): EvalScore {
     mailExact: { total: rows.length, correct: rows.filter((row) => row.action === row.expected).length },
     errors: rows.filter((row) => row.error).length,
     toolCalls,
+    heldByCheck: rows.filter((row) => row.heldByCheck).length,
   };
 }
 
@@ -146,12 +149,14 @@ export async function runEval(
     let ruled: Ruled;
     let tools: string[] = [];
     let error = '';
+    let facts = leader.profile;
     try {
       const run = await withLlmScope(
         { agent, leaderId, operationId: `eval:${agent}:${letter.externalId}:${Date.now()}`, title: `Замер: ${letter.subject}`.slice(0, 180) },
         () => judgeWithTools({ purpose: `eval:${agent}:${letter.externalId}`, profile: leader.profile, subject: letter.subject, body: letter.body, ctx }),
       );
       tools = run.steps.map((step) => step.tool);
+      facts = gatheredFacts(ctx, run.steps, leader.profile);
       const breaches = breachesFromAnswer(
         { area: run.verdict.область ?? 'нет', value: run.verdict.число ?? 0, unit: run.verdict.единица ?? '' },
         limits,
@@ -161,7 +166,25 @@ export async function runEval(
       error = err instanceof Error ? err.message : String(err);
       ruled = failedRuling(text, error);
     }
-    const row: EvalRow = { ...base, route: inside ? 'k2' : 'mail', action: etalonAction(ruled.kind), toLeader: ruled.ask, tools, error };
+    ruled = { ...ruled, draft: finishDraft(ruled.draft) };
+    let heldByCheck = false;
+    if (ruled.draft.trim()) {
+      const wasReply = ruled.send && !ruled.ask;
+      try {
+        const data = await withLlmScope(
+          { agent: 'draft-check', leaderId, operationId: `eval:draft-check:${letter.externalId}:${Date.now()}`, title: 'Сверка черновика' },
+          () => askDraftCheck(letterForCheck(letter, person ? { position: person.position, role: person.role } : null), facts, ruled.draft),
+        );
+        const check = applyCheckResult(ruled.draft, data);
+        ruled = keepForLeader({ ...ruled, draft: check.draft }, check);
+        heldByCheck = wasReply && holdsDraft(check);
+      } catch {
+        const check = applyCheckResult(ruled.draft, null);
+        ruled = keepForLeader(ruled, check);
+        heldByCheck = wasReply && holdsDraft(check);
+      }
+    }
+    const row: EvalRow = { ...base, route: inside ? 'k2' : 'mail', action: etalonAction(ruled.kind), toLeader: ruled.ask, tools, error, heldByCheck };
     options.onRow?.(row);
     return row;
   });
@@ -174,7 +197,7 @@ export function evalReport(score: EvalScore, meta: { model: string; at: string; 
     `# Замер разбора почты на эталоне`,
     '',
     `Когда: ${meta.at}. Модель: ${meta.model}. Писем: ${score.total}, каждое отдельным разбором. Вызовов модели: ${meta.calls}, цена $${meta.costUsd.toFixed(4)}, время ${meta.minutes} мин.`,
-    'Путь как на стенде: письма из организации (подчинённые, коллеги, начальник) — разбор почты (внутр.), остальные — разбор почты (внеш.); оба с инструментами и проверками кода (N1, лимиты). Эталон в запрос не входит. Без принятых правил потока и без прошлых решений по переписке: каждое письмо как первое.',
+    'Путь как на стенде: письма из организации (подчинённые, коллеги, начальник) — разбор почты (внутр.), остальные — разбор почты (внеш.); оба с инструментами, проверками кода (N1, лимиты) и сверкой черновика. Эталон в запрос не входит. Без принятых правил потока и без прошлых решений по переписке: каждое письмо как первое.',
     '',
     '## Главное: дошло ли письмо до руководителя, когда должно',
     '',
@@ -186,6 +209,7 @@ export function evalReport(score: EvalScore, meta: { model: string; at: string; 
     `| Лишние письма руководителю | ${score.falseAlarms}, точность ${pct(score.precision)} |`,
     `| Точное действие из пяти (ответить, передать, в сводку, без ответа, руководителю) | ${score.mailExact.correct} из ${score.mailExact.total} |`,
     `| Сбои разбора | ${score.errors} |`,
+    `| Ответы помощника, которые сверка сделала карточками | ${score.heldByCheck} |`,
     '',
     '## По отправителям',
     '',

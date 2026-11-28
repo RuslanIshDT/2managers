@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyCheckResult, approvalBlock, cardText, draftGap, holdsDraft, keepForLeader } from '../src/agents/k2.ts';
+import { applyCheckResult, approvalBlock, cardText, draftGap, gapsWithoutClaims, holdsDraft, keepForLeader, letterForCheck } from '../src/agents/k2.ts';
 import { buildDesk, type DeskInput } from '../src/agents/desk.ts';
 
 const card = {
@@ -69,8 +69,16 @@ describe('пропуск в черновике', () => {
     expect(holdsDraft(replaced)).toBe(true);
     const clean = applyCheckResult('Ответ по письму.', { claims: [], draft: 'Ответ по письму.' });
     expect(holdsDraft(clean)).toBe(false);
+    const repeated = applyCheckResult('Согласовали условия пилота.', {
+      claims: ['Согласовали условия пилота'],
+      draft: 'Встреча прошла. [допишите: условия пилота]',
+    });
+    expect(repeated.draft.toLowerCase()).not.toContain('пилот');
+    expect(draftGap(repeated.draft)).toContain('допишите');
+    expect(gapsWithoutClaims('Решите до пятницы.', ['Согласовали условия пилота'])).toBe('Решите до пятницы.');
     const sent = keepForLeader({ ask: false, send: true, kind: 'вернуть' }, failed);
     expect(sent).toEqual({ ask: true, send: false, kind: 'нужен_руководитель' });
+    expect(letterForCheck({ fromName: 'Анна Босс', subject: 'Тема', body: 'Текст' }, { position: 'бухгалтер', role: 'подчинённый' })).toContain('Анна Босс, бухгалтер, подчинённый');
   });
 
   it('карточка показывает пометку сверки', () => {

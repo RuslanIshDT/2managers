@@ -1,7 +1,7 @@
 // npm run eval — замер разбора почты на эталоне (T54). Пишет reports/eval-mail.md и .json.
 // Провал (код выхода 1): дошло меньше всех писем N1 или совпадение ниже порога --min (по умолчанию 0.85).
 import { writeFile } from 'node:fs/promises';
-import { and, eq, gte, like } from 'drizzle-orm';
+import { and, eq, gte, like, or } from 'drizzle-orm';
 import { confirmationPoints } from '../agents/confirm.ts';
 import { evalReport, evalScore, runEval } from '../agents/eval.ts';
 import { createDb, createPool, migrate } from '../db/client.ts';
@@ -41,7 +41,7 @@ const rows = await runEval(db, leaderId, {
 const calls = await db
   .select({ cost: llmCalls.costUsd })
   .from(llmCalls)
-  .where(and(gte(llmCalls.at, started), like(llmCalls.purpose, 'eval:%')));
+  .where(and(gte(llmCalls.at, started), or(like(llmCalls.purpose, 'eval:%'), eq(llmCalls.agent, 'draft-check'), like(llmCalls.purpose, 'draft-check'))));
 const costUsd = calls.reduce((sum, row) => sum + Number(row.cost ?? 0), 0);
 const [leaderRow] = await db.select({ profile: leaders.profile }).from(leaders).where(eq(leaders.id, leaderId)).limit(1);
 const score = evalScore(rows, confirmationPoints(leaderRow?.profile ?? ''));

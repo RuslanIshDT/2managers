@@ -1,22 +1,56 @@
 {
   "model": "anthropic/claude-haiku-4.5",
-  "at": "28.11.2026, 09:00:00 МСК",
-  "costUsd": 1.5407408999999996,
-  "calls": 242,
-  "minutes": 3.5,
+  "at": "28.11.2026, 09:41:37 МСК",
+  "costUsd": 1.8677049999999995,
+  "calls": 297,
+  "minutes": 4.1,
   "score": {
     "total": 80,
-    "correct": 78,
-    "accuracy": 0.975,
+    "correct": 74,
+    "accuracy": 0.925,
     "needLeader": 40,
     "caught": 40,
     "recall": 1,
-    "falseAlarms": 2,
-    "precision": 0.9523809523809523,
+    "falseAlarms": 6,
+    "precision": 0.8695652173913043,
     "n1": 36,
     "n1Caught": 36,
     "missed": [],
     "alarms": [
+      {
+        "id": "m002",
+        "subject": "Запрос коммерческого предложения",
+        "senderRole": "клиент",
+        "category": "продажи",
+        "expected": "делегировать",
+        "route": "mail",
+        "action": "спросить_руководителя",
+        "toLeader": true,
+        "tools": [
+          "thread",
+          "people",
+          "leader_edits"
+        ],
+        "error": "",
+        "heldByCheck": true
+      },
+      {
+        "id": "m006",
+        "subject": "Запрос коммерческого предложения",
+        "senderRole": "клиент",
+        "category": "продажи",
+        "expected": "делегировать",
+        "route": "mail",
+        "action": "спросить_руководителя",
+        "toLeader": true,
+        "tools": [
+          "thread",
+          "people",
+          "leader_edits"
+        ],
+        "error": "",
+        "heldByCheck": true
+      },
       {
         "id": "m044",
         "subject": "Жалоба клиента на сроки ответа",
@@ -31,7 +65,25 @@
           "people",
           "past_decisions"
         ],
-        "error": ""
+        "error": "",
+        "heldByCheck": false
+      },
+      {
+        "id": "m059",
+        "subject": "Запрос коммерческого предложения",
+        "senderRole": "клиент",
+        "category": "продажи",
+        "expected": "делегировать",
+        "route": "mail",
+        "action": "спросить_руководителя",
+        "toLeader": true,
+        "tools": [
+          "thread",
+          "people",
+          "leader_edits"
+        ],
+        "error": "",
+        "heldByCheck": true
       },
       {
         "id": "m066",
@@ -47,14 +99,32 @@
           "people",
           "past_decisions"
         ],
-        "error": ""
+        "error": "",
+        "heldByCheck": false
+      },
+      {
+        "id": "m071",
+        "subject": "Запрос коммерческого предложения",
+        "senderRole": "клиент",
+        "category": "продажи",
+        "expected": "делегировать",
+        "route": "mail",
+        "action": "спросить_руководителя",
+        "toLeader": true,
+        "tools": [
+          "thread",
+          "people",
+          "leader_edits"
+        ],
+        "error": "",
+        "heldByCheck": true
       }
     ],
     "byRole": [
       {
         "role": "клиент",
         "total": 8,
-        "correct": 8
+        "correct": 4
       },
       {
         "role": "коллега",
@@ -84,19 +154,20 @@
     ],
     "mailExact": {
       "total": 80,
-      "correct": 75
+      "correct": 71
     },
     "errors": 0,
     "toolCalls": {
       "thread": 37,
       "people": 29,
-      "leader_edits": 24,
+      "leader_edits": 25,
       "person_card": 60,
       "kpi": 11,
       "open_tasks": 5,
       "authorities": 31,
       "past_decisions": 20
-    }
+    },
+    "heldByCheck": 4
   },
   "rows": [
     {
@@ -113,7 +184,8 @@
         "people",
         "leader_edits"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m002",
@@ -122,14 +194,15 @@
       "category": "продажи",
       "expected": "делегировать",
       "route": "mail",
-      "action": "делегировать",
-      "toLeader": false,
+      "action": "спросить_руководителя",
+      "toLeader": true,
       "tools": [
         "thread",
         "people",
         "leader_edits"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": true
     },
     {
       "id": "m003",
@@ -144,7 +217,8 @@
         "thread",
         "leader_edits"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m004",
@@ -159,7 +233,8 @@
         "thread",
         "leader_edits"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m005",
@@ -175,7 +250,8 @@
         "leader_edits",
         "people"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m006",
@@ -184,14 +260,15 @@
       "category": "продажи",
       "expected": "делегировать",
       "route": "mail",
-      "action": "делегировать",
-      "toLeader": false,
+      "action": "спросить_руководителя",
+      "toLeader": true,
       "tools": [
         "thread",
         "people",
         "leader_edits"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": true
     },
     {
       "id": "m007",
@@ -208,7 +285,8 @@
         "open_tasks",
         "thread"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m008",
@@ -223,7 +301,8 @@
         "person_card",
         "leader_edits"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m009",
@@ -238,7 +317,8 @@
         "person_card",
         "people"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m010",
@@ -253,7 +333,8 @@
         "person_card",
         "people"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m011",
@@ -270,7 +351,8 @@
         "open_tasks",
         "thread"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m012",
@@ -285,7 +367,8 @@
         "person_card",
         "authorities"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m013",
@@ -301,7 +384,8 @@
         "authorities",
         "past_decisions"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m014",
@@ -316,7 +400,8 @@
         "person_card",
         "authorities"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m015",
@@ -332,7 +417,8 @@
         "authorities",
         "past_decisions"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m016",
@@ -348,7 +434,8 @@
         "authorities",
         "past_decisions"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m017",
@@ -364,7 +451,8 @@
         "thread",
         "past_decisions"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m018",
@@ -380,7 +468,8 @@
         "authorities",
         "past_decisions"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m019",
@@ -396,7 +485,8 @@
         "thread",
         "past_decisions"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m020",
@@ -412,7 +502,8 @@
         "people",
         "kpi"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m021",
@@ -428,7 +519,8 @@
         "leader_edits",
         "people"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m022",
@@ -445,7 +537,8 @@
         "thread",
         "past_decisions"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m023",
@@ -461,7 +554,8 @@
         "people",
         "leader_edits"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m024",
@@ -477,7 +571,8 @@
         "people",
         "kpi"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m025",
@@ -493,7 +588,8 @@
         "authorities",
         "people"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m026",
@@ -508,7 +604,8 @@
         "person_card",
         "authorities"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m027",
@@ -523,7 +620,8 @@
         "person_card",
         "people"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m028",
@@ -539,7 +637,8 @@
         "people",
         "kpi"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m029",
@@ -554,7 +653,8 @@
         "person_card",
         "authorities"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m030",
@@ -569,7 +669,8 @@
         "person_card",
         "people"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m031",
@@ -584,7 +685,8 @@
         "person_card",
         "authorities"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m032",
@@ -601,7 +703,8 @@
         "thread",
         "past_decisions"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m033",
@@ -617,7 +720,8 @@
         "leader_edits",
         "people"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m034",
@@ -633,7 +737,8 @@
         "authorities",
         "people"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m035",
@@ -650,7 +755,8 @@
         "thread",
         "past_decisions"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m036",
@@ -665,7 +771,8 @@
         "person_card",
         "authorities"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m037",
@@ -680,7 +787,8 @@
         "person_card",
         "authorities"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m038",
@@ -697,7 +805,8 @@
         "thread",
         "past_decisions"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m039",
@@ -714,7 +823,8 @@
         "thread",
         "past_decisions"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m040",
@@ -730,7 +840,8 @@
         "authorities",
         "past_decisions"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m041",
@@ -745,7 +856,8 @@
         "person_card",
         "leader_edits"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m042",
@@ -761,7 +873,8 @@
         "thread",
         "past_decisions"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m043",
@@ -777,7 +890,8 @@
         "authorities",
         "people"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m044",
@@ -793,7 +907,8 @@
         "people",
         "past_decisions"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m045",
@@ -808,7 +923,8 @@
         "person_card",
         "authorities"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m046",
@@ -823,7 +939,8 @@
         "person_card",
         "leader_edits"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m047",
@@ -839,7 +956,8 @@
         "people",
         "kpi"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m048",
@@ -854,7 +972,8 @@
         "person_card",
         "authorities"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m049",
@@ -869,7 +988,8 @@
         "person_card",
         "authorities"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m050",
@@ -885,7 +1005,8 @@
         "people",
         "kpi"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m051",
@@ -900,7 +1021,8 @@
         "person_card",
         "authorities"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m052",
@@ -915,7 +1037,8 @@
         "person_card",
         "leader_edits"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m053",
@@ -931,7 +1054,8 @@
         "authorities",
         "past_decisions"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m054",
@@ -943,9 +1067,11 @@
       "action": "игнорировать",
       "toLeader": false,
       "tools": [
-        "thread"
+        "thread",
+        "leader_edits"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m055",
@@ -962,7 +1088,8 @@
         "open_tasks",
         "thread"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m056",
@@ -979,7 +1106,8 @@
         "open_tasks",
         "thread"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m057",
@@ -994,7 +1122,8 @@
         "thread",
         "leader_edits"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m058",
@@ -1010,7 +1139,8 @@
         "leader_edits",
         "people"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m059",
@@ -1019,14 +1149,15 @@
       "category": "продажи",
       "expected": "делегировать",
       "route": "mail",
-      "action": "делегировать",
-      "toLeader": false,
+      "action": "спросить_руководителя",
+      "toLeader": true,
       "tools": [
         "thread",
         "people",
         "leader_edits"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": true
     },
     {
       "id": "m060",
@@ -1043,7 +1174,8 @@
         "thread",
         "past_decisions"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m061",
@@ -1058,7 +1190,8 @@
         "person_card",
         "authorities"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m062",
@@ -1073,7 +1206,8 @@
         "person_card",
         "authorities"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m063",
@@ -1088,7 +1222,8 @@
         "person_card",
         "people"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m064",
@@ -1103,7 +1238,8 @@
         "thread",
         "leader_edits"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m065",
@@ -1119,7 +1255,8 @@
         "people",
         "kpi"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m066",
@@ -1135,7 +1272,8 @@
         "people",
         "past_decisions"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m067",
@@ -1150,7 +1288,8 @@
         "thread",
         "leader_edits"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m068",
@@ -1166,7 +1305,8 @@
         "people",
         "leader_edits"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m069",
@@ -1181,7 +1321,8 @@
         "person_card",
         "leader_edits"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m070",
@@ -1197,7 +1338,8 @@
         "thread",
         "past_decisions"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m071",
@@ -1206,14 +1348,15 @@
       "category": "продажи",
       "expected": "делегировать",
       "route": "mail",
-      "action": "делегировать",
-      "toLeader": false,
+      "action": "спросить_руководителя",
+      "toLeader": true,
       "tools": [
         "thread",
         "people",
         "leader_edits"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": true
     },
     {
       "id": "m072",
@@ -1229,7 +1372,8 @@
         "thread",
         "past_decisions"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m073",
@@ -1246,7 +1390,8 @@
         "open_tasks",
         "thread"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m074",
@@ -1261,7 +1406,8 @@
         "thread",
         "leader_edits"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m075",
@@ -1276,7 +1422,8 @@
         "thread",
         "leader_edits"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m076",
@@ -1291,7 +1438,8 @@
         "person_card",
         "authorities"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m077",
@@ -1307,7 +1455,8 @@
         "people",
         "leader_edits"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m078",
@@ -1322,7 +1471,8 @@
         "person_card",
         "people"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m079",
@@ -1337,7 +1487,8 @@
         "person_card",
         "authorities"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     },
     {
       "id": "m080",
@@ -1354,7 +1505,8 @@
         "thread",
         "past_decisions"
       ],
-      "error": ""
+      "error": "",
+      "heldByCheck": false
     }
   ]
 }

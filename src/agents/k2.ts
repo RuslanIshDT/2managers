@@ -321,9 +321,51 @@ export interface DraftCheck {
   note: string;
 }
 
+function claimPieces(claim: string): string[] {
+  const words = claim
+    .toLowerCase()
+    .replace(/ё/g, 'е')
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((word) => word.length >= 4);
+  const pieces = [claim.trim().toLowerCase().replace(/ё/g, 'е')];
+  for (let size = words.length; size >= 2; size -= 1) {
+    for (let start = 0; start + size <= words.length; start += 1) pieces.push(words.slice(start, start + size).join(' '));
+  }
+  return [...new Set(pieces.filter((piece) => piece.length >= 8))].sort((a, b) => b.length - a.length);
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// Заменённый факт в пропуске не повторяется: из скобок убирается сам текст и его куски.
+export function gapsWithoutClaims(draft: string, claims: string[]): string {
+  const pieces = claims.flatMap(claimPieces);
+  if (!pieces.length) return draft;
+  return draft.replace(/\[[^\]\n]+\]/gu, (gap) => {
+    const inner = gap.slice(1, -1);
+    let text = inner.toLowerCase().replace(/ё/g, 'е');
+    let hit = false;
+    for (const piece of pieces) {
+      if (!text.includes(piece)) continue;
+      hit = true;
+      text = text.replace(new RegExp(escapeRegExp(piece), 'giu'), ' ');
+    }
+    if (!hit) return gap;
+    text = text
+      .replace(/\s+/g, ' ')
+      .replace(/(?:^|[\s,;:])(?:и|или|на|по|с|со|в|во|к|о|об|от|до|для|что|это|а)(?=[\s,;:]|$)/giu, ' ')
+      .replace(/\s+/g, ' ')
+      .replace(/^[\s,;:.\-—]+|[\s,;:.\-—]+$/g, '')
+      .trim();
+    const named = text.replace(/^допишите:?\s*/iu, '').trim();
+    return named.length >= 3 ? `[допишите: ${named}]` : '[допишите: недостающий факт]';
+  });
+}
+
 export function applyCheckResult(draft: string, data: { claims: string[]; draft: string } | null): DraftCheck {
   if (!data) return { checked: false, draft, unconfirmed: [], note: 'Черновик не сверен' };
-  const next = data.draft.trim() || draft;
+  const next = gapsWithoutClaims(data.draft.trim() || draft, data.claims);
   const outside = textOutsideBrackets(next).toLowerCase();
   const left = data.claims.map((claim) => claim.trim()).filter((claim) => claim && outside.includes(claim.toLowerCase()));
   return { checked: true, draft: next, unconfirmed: left, note: left.length ? `Не подтверждено данными: ${left.join('; ')}` : '' };
@@ -356,6 +398,15 @@ const checkSchema: JsonSchema = {
   },
 };
 
+export function letterForCheck(
+  letter: { fromName: string; subject: string; body: string },
+  person: { position: string; role: string } | null,
+): string {
+  const position = person?.position.trim() || 'должность не указана';
+  const role = person?.role.trim() || 'в оргструктуре нет';
+  return `От: ${letter.fromName}, ${position}, ${role}\nТема: ${letter.subject}\n${letter.body}`;
+}
+
 export async function askDraftCheck(letter: string, facts: string, draft: string): Promise<{ claims: string[]; draft: string }> {
   const parsed = z.object({
     неподтверждённые: z.array(z.string()),
@@ -364,11 +415,13 @@ export async function askDraftCheck(letter: string, facts: string, draft: string
   const result = await callJson<unknown>({
     purpose: 'draft-check',
     system: [
-      'Тебе даны письмо, данные, которые получил разбор, и черновик ответа.',
-      'Найди утверждения черновика, которых нет ни в письме, ни в данных.',
-      'Верни эти утверждения и черновик, где каждое такое утверждение заменено пропуском [допишите: название недостающего факта].',
-      'В пропуске назови, какого факта не хватает. Сам факт не пиши.',
-      'Что есть в письме или данных — оставь. Новых фактов не добавляй.',
+      'Тебе даны письмо (первая строка — отправитель: имя, должность, роль), данные разбора и черновик ответа.',
+      'Раздели фразы черновика на предложение и факты.',
+      'Предложение — то, что руководитель утверждает этой кнопкой: его решение, оценка и вывод, поручение, просьба и срок. Его не проверяй и не меняй, даже если данные не подтверждают, что оценка верна или что решение уже принято.',
+      'Факт — только сообщение о том, что уже было или уже есть: прошедшее событие, его итог, уже достигнутая договорённость, цифра, дата, уже существующий статус, кто что уже сделал.',
+      'Замени пропуском только факт, которого нет ни в письме, ни у отправителя, ни в данных. Пропуск: [допишите: какого факта не хватает]. В нём назови, чего не хватает, и не повторяй слова заменённого факта.',
+      'Цифры, даты, имена и статусы, которые уже есть в письме, у отправителя или в данных, оставь. Новых фактов не добавляй. Остальной текст, включая всё предложение, оставь дословно.',
+      'Если таких фактов нет — верни черновик без единой правки и пустой список.',
     ].join(' '),
     user: `Письмо:\n${letter}\n\nДанные разбора:\n${facts || 'дополнительных данных нет'}\n\nЧерновик:\n${draft}`,
     schemaName: 'draft_check',

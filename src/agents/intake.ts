@@ -9,7 +9,7 @@ import { staffFromVerdict } from './dependence.ts';
 import { kpiStatus, personAddresses } from './k1.ts';
 import { loadAudienceState, personInAudience } from './audience.ts';
 import { amountBlocksRule, breachesFromAnswer, confirmationPoints, normalizeUnit, unitInText } from './confirm.ts';
-import { applyCheckResult, approvalBlock, askDraftCheck, cardText, chainKey, draftGap, enforce, failedRuling, keepForLeader, judgeLetter, letterPrompt, rightRuling, type DraftCheck, type ModelVerdict, type Ruled } from './k2.ts';
+import { applyCheckResult, approvalBlock, askDraftCheck, cardText, chainKey, draftGap, enforce, failedRuling, keepForLeader, judgeLetter, letterForCheck, letterPrompt, rightRuling, type DraftCheck, type ModelVerdict, type Ruled } from './k2.ts';
 import { callJson, withLlmScope, type JsonSchema } from '../llm.ts';
 import { externalContext, gatheredFacts, judgeWithTools, k2Context, stepsWords } from './k2-tools.ts';
 import { readHistory } from './dependence.ts';
@@ -295,7 +295,7 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
       ruled = { ...ruled, draft: finishDraft(applyRevision(ruled.draft, ruled.category, edits), letterText, edits, inside) };
       const check = byRight
         ? { checked: true, draft: ruled.draft, unconfirmed: [] as string[], note: '' }
-        : await reviewDraft(leaderId, letter.id, letterText, facts, ruled.draft);
+        : await reviewDraft(leaderId, letter.id, letterForCheck(letter, person ? { position: person.position, role: person.role } : null), facts, ruled.draft);
       ruled = { ...ruled, draft: check.draft };
       ruled = keepForLeader(ruled, check);
 
@@ -512,7 +512,7 @@ export async function rejudgeWaiting(db: Db, leaderId: string, only: string[] = 
       ruled = failedRuling(letterText, error instanceof Error ? error.message : String(error));
     }
     ruled = { ...ruled, draft: finishDraft(applyRevision(ruled.draft, ruled.category, edits), letterText, edits, inside) };
-    const check = await reviewDraft(leaderId, decision.id, letterText, facts, ruled.draft);
+    const check = await reviewDraft(leaderId, decision.id, letterForCheck(letter, person ? { position: person.position, role: person.role } : null), facts, ruled.draft);
     ruled = { ...ruled, draft: check.draft };
     ruled = keepForLeader(ruled, check);
     if (ruled.ask) {

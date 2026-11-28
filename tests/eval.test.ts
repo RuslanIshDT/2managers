@@ -12,6 +12,7 @@ const row = (over: Partial<EvalRow>): EvalRow => ({
   toLeader: false,
   tools: [],
   error: '',
+  heldByCheck: false,
   ...over,
 });
 
@@ -39,7 +40,9 @@ describe('T54: счёт замера', () => {
     expect(score.mailExact).toEqual({ total: 6, correct: 3 });
     expect(score.toolCalls).toEqual({ authorities: 2, kpi: 1 });
     const text = evalReport(score, { model: 'm', at: 'сейчас', costUsd: 0.5, calls: 10, minutes: 2 });
+    expect(score.heldByCheck).toBe(0);
     expect(text).toContain('| Письма пунктов подтверждения из профиля: дошли | 1 из 2 |');
+    expect(text).toContain('| Ответы помощника, которые сверка сделала карточками | 0 |');
     expect(text).toContain('- b «Тема»');
   });
 });
