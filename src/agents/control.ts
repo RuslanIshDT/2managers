@@ -10,7 +10,13 @@ export interface PersonGoal {
   goal: string;
   leaderGoal: string;
   emails: number;
-  kpis: { name: string; unit: string; better: string; weeks: { fact: string; status: string }[] }[];
+  kpis: {
+    name: string;
+    unit: string;
+    better: string;
+    weeks: { fact: string; status: string }[];
+    quarter?: { plan: string; fact: string; status: string } | null;
+  }[];
 }
 
 export interface TaskRow {
@@ -29,7 +35,7 @@ export interface CascadeGoal {
 }
 
 export interface Hole {
-  kind: 'цель без владельца' | 'человек без цели' | 'KPI без цели' | 'задача без цели';
+  kind: 'цель без владельца' | 'человек без цели' | 'KPI без цели' | 'KPI нет' | 'задача без цели';
   text: string;
 }
 
@@ -78,6 +84,21 @@ function goalsOf(person: PersonGoal, goals: GoalRef[]): GoalRef[] {
   return goals.filter((goal) => person.leaderGoal === goal.n || overlap(person.goal, goal.text));
 }
 
+function profileBundle(person: PersonGoal, goals: GoalRef[]): boolean {
+  const bundle = goals.map((goal) => goal.text).join('. ');
+  return person.leaderGoal === '' && bundle !== '' && person.goal === bundle;
+}
+
+export function goalKpiLine(kpi: PersonGoal['kpis'][number]): string | null {
+  const quarter = kpi.quarter;
+  if (!quarter) return null;
+  const plan = quarter.plan.replace('.', ',');
+  const fact = quarter.fact.replace('.', ',');
+  const numbers = kpi.unit === '%' ? `${plan}% → ${fact}%` : `${plan} → ${fact}${kpi.unit ? ` ${kpi.unit}` : ''}`;
+  const mark = quarter.status === 'отстаёт' ? 'отстаёт' : 'не отстаёт';
+  return `${kpi.name}: ${numbers}, ${mark}`;
+}
+
 function assigneeGoal(person: PersonGoal | undefined, goals: GoalRef[], off: boolean): { text: string; profile: boolean } {
   if (!person || off || person.goal.trim() === '') return { text: '', profile: false };
   return { text: person.goal, profile: goalsOf(person, goals).length > 0 };
@@ -86,13 +107,13 @@ function assigneeGoal(person: PersonGoal | undefined, goals: GoalRef[], off: boo
 export function goalCascade(input: { goals: GoalRef[]; people: PersonGoal[]; tasks: TaskRow[]; offGoal?: string[] }): { goals: CascadeGoal[]; holes: Hole[] } {
   const off = new Set(input.offGoal ?? []);
   const goals = input.goals.map((goal) => {
-    const owners = input.people.filter((person) => person.leaderGoal === goal.n || overlap(person.goal, goal.text));
+    const owners = input.people.filter((person) => !profileBundle(person, input.goals) && (person.leaderGoal === goal.n || overlap(person.goal, goal.text)));
     const covered = new Set(owners.map((person) => person.name));
     return {
       n: goal.n,
       text: goal.text,
       owners: owners.map((person) => person.name),
-      kpis: owners.flatMap((person) => person.kpis.map((kpi) => kpi.name)),
+      kpis: owners.flatMap((person) => person.kpis.map((kpi) => goalKpiLine(kpi)).filter((line): line is string => line !== null)),
       tasks: input.tasks
         .filter((task) => {
           if (!covered.has(task.owner)) return false;
@@ -105,6 +126,7 @@ export function goalCascade(input: { goals: GoalRef[]; people: PersonGoal[]; tas
   const holes: Hole[] = [];
   for (const goal of goals) {
     if (goal.owners.length === 0) holes.push({ kind: 'цель без владельца', text: goal.text });
+    else if (goal.kpis.length === 0) holes.push({ kind: 'KPI нет', text: goal.text });
   }
   for (const person of input.people) {
     if (person.goal.trim() === '') holes.push({ kind: 'человек без цели', text: person.name });

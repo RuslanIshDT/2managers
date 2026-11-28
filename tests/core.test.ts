@@ -815,6 +815,12 @@ describe('цели, задачи и KPI', () => {
     const synthetic = await scene('data/synthetic');
     expect(synthetic.goals.length).toBeGreaterThan(0);
     expect(synthetic.goals.every((goal) => goal.owners.length > 0)).toBe(true);
+    expect(synthetic.goals.map((goal) => goal.kpis.join(' · '))).toEqual([
+      'Выполнение плана продаж SMB: 100% → 94%, отстаёт',
+      'Подключённые партнёры «Облако Плюс»: 24 → 9 шт, отстаёт',
+      'Время ответа сервиса: 4 → 3,9 ч, не отстаёт',
+    ]);
+    expect(synthetic.holes.some((hole) => hole.kind === 'KPI нет')).toBe(false);
     expect(synthetic.tasks).toHaveLength(12);
     expect(synthetic.tasks.every((task) => task.goal.length > 0)).toBe(true);
     expect(synthetic.holes.some((hole) => hole.kind === 'задача без цели')).toBe(false);
@@ -826,6 +832,10 @@ describe('цели, задачи и KPI', () => {
 
     const second = await scene('data/leader2');
     expect(second.goals.length).toBe(3);
+    expect(second.goals[1]?.owners).toEqual([]);
+    expect(second.holes.some((hole) => hole.kind === 'цель без владельца')).toBe(true);
+    expect(second.goals[0]?.kpis.join(' · ')).toContain('Брак узла: 2% → 2,1%');
+    expect(second.goals[2]?.kpis.join(' · ')).toContain('Обученные на линии: 16 → 17 чел');
     expect(second.signals.length).toBeGreaterThan(0);
     const firstNames = new Set(synthetic.goals.flatMap((goal) => goal.owners));
     expect(second.goals.some((goal) => goal.owners.some((name) => firstNames.has(name)))).toBe(false);
@@ -1156,6 +1166,7 @@ async function scene(dir: string) {
       unit: kpi.unit,
       better: kpi.better,
       weeks: kpi.weeks.map((week) => ({ fact: week.fact, status: week.status })),
+      quarter: kpi.quarter,
     })),
   }));
   const tasks = data.tasks.map((task) => ({ title: task.task, owner: task.owner, due: task.due, status: task.status }));

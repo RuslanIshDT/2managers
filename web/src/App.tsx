@@ -1568,7 +1568,12 @@ function Goals({ control, onOpen }: { control: Cabinet['control'] | undefined; o
         {control.goals.map((goal) => (
           <li key={goal.n}>
             <b>{goal.n}. {goal.text}</b>
-            <span className="block text-[#5d6878]">{goal.owners.length ? goal.owners.join(', ') : 'владельца нет'}{goal.kpis.length ? ` · ${goal.kpis.join(', ')}` : ''}</span>
+            <span className="block text-[#5d6878]">{goal.owners.length ? goal.owners.join(', ') : 'владельца нет'}</span>
+            {goal.kpis.length ? (
+              <span className="block text-[#5d6878]">{goal.kpis.join(' · ')}</span>
+            ) : goal.owners.length ? (
+              <span className="block text-[#5d6878]">KPI нет</span>
+            ) : null}
             <Origin origin={rowOrigin('k6', 'Цели', `${goal.text}. ${goal.owners.join(', ') || 'владельца нет'}`, goal.kpis)} onOpen={onOpen} />
           </li>
         ))}

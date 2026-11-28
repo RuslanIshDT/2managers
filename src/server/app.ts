@@ -297,6 +297,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
           unit: kpi.unit,
           better: kpi.better,
           weeks: kpi.weeks.map((week) => ({ fact: week.fact, status: week.status })),
+          quarter: kpi.quarter,
         })),
       }))), taskRows),
       revisions: await revisionRows(deps.db, leader.id),
