@@ -14,6 +14,7 @@ export interface LiveTask {
   owner: string;
   dueOn: string;
   status: string;
+  closedAt?: string;
 }
 
 export interface LiveMeeting {
@@ -47,7 +48,14 @@ export function tasksFromIssues(issues: QueueIssue[], leaderId: string, leaderNa
     if (ours && !issue.unique.startsWith(prefix)) return [];
     if (!ours && !isOwner) return [];
     const named = /Исполнитель:\s*([^.\n]+)/.exec(issue.description)?.[1]?.trim();
-    return [{ id: issue.key, title: issue.summary, owner: named || leaderName, dueOn: issue.deadline, status: issue.open ? issue.status : 'закрыта' }];
+    return [{
+      id: issue.key,
+      title: issue.summary,
+      owner: named || leaderName,
+      dueOn: issue.deadline,
+      status: issue.open ? issue.status : 'закрыта',
+      closedAt: issue.resolvedAt,
+    }];
   });
 }
 

@@ -147,6 +147,7 @@ export interface QueueIssue {
   unique: string;
   status: string;
   open: boolean;
+  resolvedAt: string;
 }
 
 // Все задачи очереди стенда — и выложенные помощником, и поставленные руками. Закрытые и отменённые помечены open = false.
@@ -168,11 +169,15 @@ export async function listQueueIssues(): Promise<QueueIssue[]> {
       unique?: string;
       status?: { key?: string; display?: string };
       statusType?: { key?: string };
+      resolvedAt?: string;
+      resolved?: string;
+      statusStartTime?: string;
     }[];
     if (!Array.isArray(rows) || rows.length === 0) break;
     for (const row of rows) {
       const status = row.status?.key ?? '';
       const type = row.statusType?.key ?? '';
+      const open = !['done', 'cancelled'].includes(type) && !['closed', 'resolved', 'cancelled', 'done'].includes(status);
       found.push({
         key: row.key ?? '',
         summary: row.summary ?? '',
@@ -180,7 +185,8 @@ export async function listQueueIssues(): Promise<QueueIssue[]> {
         deadline: row.deadline ?? '',
         unique: typeof row.unique === 'string' ? row.unique : '',
         status: row.status?.display ?? status,
-        open: !['done', 'cancelled'].includes(type) && !['closed', 'resolved', 'cancelled', 'done'].includes(status),
+        open,
+        resolvedAt: open ? '' : row.resolvedAt || row.resolved || row.statusStartTime || '',
       });
     }
     if (rows.length < 100) break;

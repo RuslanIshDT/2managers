@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { and, eq } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
 import { emails, mailIn, people, protocols, seriesKind, tasks as taskTable } from '../db/schema.ts';
-import { callJson, type JsonSchema } from '../llm.ts';
+import { callJson, withLlmScope, type JsonSchema } from '../llm.ts';
 import type { LiveTask } from './live-sources.ts';
 import { meetingOfFile } from './protocol-context.ts';
 import { dateWords } from './scene.ts';
@@ -52,6 +52,7 @@ export interface BriefTask {
   title: string;
   owner: string;
   status: string;
+  closedAt?: string;
 }
 
 export interface BriefMeeting {
@@ -74,8 +75,15 @@ export interface BriefInput {
   tasks: BriefTask[];
 }
 
+export type SourceRole = 'письмо_сотрудника' | 'письмо_руководителя' | 'протокол' | 'задача' | 'задача_закрыта';
+
+export const CLOSE_REASONS = ['сотрудник ещё не передал свою часть', 'руководитель решил', 'задача закрыта'] as const;
+export type CloseReason = (typeof CLOSE_REASONS)[number] | '';
+
 export interface PacketSource {
   id: string;
+  at: string;
+  role: SourceRole;
   label: string;
   href: string;
   text: string;
@@ -83,6 +91,7 @@ export interface PacketSource {
 
 export interface MeetingPacket {
   name: string;
+  leaderName: string;
   summary: string;
   sources: PacketSource[];
 }
@@ -91,24 +100,29 @@ export interface TurnVerdict {
   waiting: boolean;
   action: string;
   sourceIds: string[];
+  reason: CloseReason;
 }
 
 const CLOSED = new Set(['сделана', 'закрыта', 'отменена', 'готово']);
 const LETTER_CAP = 12;
 
+const reasonChoices = ['', ...CLOSE_REASONS] as [CloseReason, ...CloseReason[]];
+
 const verdictZod = z.object({
   ждёт: z.boolean(),
   действие: z.string().max(300),
+  почему: z.enum(reasonChoices),
   источники: z.array(z.string().max(120)).max(8),
 });
 
 const verdictSchema: JsonSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['ждёт', 'действие', 'источники'],
+  required: ['ждёт', 'действие', 'почему', 'источники'],
   properties: {
     ждёт: { type: 'boolean' },
     действие: { type: 'string' },
+    почему: { type: 'string', enum: reasonChoices },
     источники: { type: 'array', items: { type: 'string' } },
   },
 };
@@ -123,7 +137,12 @@ export function briefPackets(input: BriefInput): MeetingPacket[] {
     const named = (meeting.attendees ?? []).map((name) => people.find((row) => sameName(row.name, name))).find((row) => row);
     const person = named ?? people.find((row) => personOfTitle(meeting.summary, [row]) === row.name);
     if (!person || packets.some((packet) => sameName(packet.name, person.name))) continue;
-    packets.push({ name: person.name, summary: meeting.summary, sources: sourcesFor(person, input, until) });
+    packets.push({
+      name: person.name,
+      leaderName: input.leaderName,
+      summary: meeting.summary,
+      sources: sourcesFor(person, input, until),
+    });
   }
   return packets;
 }
@@ -131,9 +150,10 @@ export function briefPackets(input: BriefInput): MeetingPacket[] {
 export function blocksFromVerdicts(packets: MeetingPacket[], verdicts: TurnVerdict[]): OneOnOneBlock[] {
   return packets.flatMap((packet, index) => {
     const verdict = verdicts[index];
-    if (!verdict?.waiting || !verdict.action.trim()) return [];
+    if (!verdict?.action.trim()) return [];
+    if (!verdict.waiting && closureHolds(packet, verdict)) return [];
     const sources = verdict.sourceIds.flatMap((id) => {
-      const source = packet.sources.find((row) => row.id === id);
+      const source = sourceById(packet, id);
       return source ? [{ label: source.label, href: source.href }] : [];
     });
     if (!sources.length) return [];
@@ -141,24 +161,56 @@ export function blocksFromVerdicts(packets: MeetingPacket[], verdicts: TurnVerdi
   });
 }
 
+// Строка снимается, только если названный источник есть и он подтверждает причину.
+// Иначе модель могла закрыть вопрос ответом без решения — строка остаётся.
+function sourceById(packet: MeetingPacket, id: string): PacketSource | undefined {
+  const exact = packet.sources.find((source) => source.id === id);
+  if (exact) return exact;
+  const matches = packet.sources.filter((source) => source.id.endsWith(`:${id}`));
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+function closureHolds(packet: MeetingPacket, verdict: TurnVerdict): boolean {
+  const sources = verdict.sourceIds.flatMap((id) => {
+    const source = sourceById(packet, id);
+    return source ? [source] : [];
+  });
+  if (!sources.length) return false;
+  if (verdict.reason === 'сотрудник ещё не передал свою часть') return true;
+  if (verdict.reason === 'руководитель решил') return sources.some((source) => source.role === 'письмо_руководителя' || source.role === 'протокол');
+  if (verdict.reason === 'задача закрыта') return sources.some((source) => source.role === 'задача_закрыта');
+  return false;
+}
+
 export async function judgeTurn(leaderId: string, packet: MeetingPacket): Promise<TurnVerdict> {
-  const list = packet.sources.map((source) => `${source.id} | ${source.label} | ${clip(source.text)}`).join('\n');
+  const list = packet.sources.map((source) => `${source.id} | ${source.at} | ${source.label} | ${clip(source.text)}`).join('\n');
   const result = await callJson<unknown>({
     purpose: `one-on-one:${leaderId}:${packet.name}`,
     system: [
-      'Ты решаешь по источникам, ждёт ли сотрудник к этой встрече один на один действия руководителя.',
+      'Ты решаешь по источникам, ждёт ли сотрудник к встрече один на один действия руководителя.',
+      'Руководитель и сотрудник названы во входе. Не путай их.',
       'Ждёт, если свою часть сотрудник уже передал и ход за руководителем.',
-      'Не ждёт, если сотрудник ещё не передал свою часть или руководитель уже закрыл вопрос.',
-      'действие — одно короткое предложение, чего ждут. Пустая строка, если не ждёт.',
-      'источники — id записей, на которых основан ответ. Только id из списка, без новых.',
+      'Своя часть передана, когда в письме сотрудника уже есть варианты, материалы, файл или ссылка. Обещание прислать позже — ещё не передано. Назначенный созвон в том же письме передачу не отменяет.',
+      'Вопрос закрыт, только если руководитель решил по существу: выбрал, утвердил или отказал, — или задача закрыта и после её закрытия сотрудник ничего нового не прислал.',
+      'Ответ без решения вопрос не закрывает: благодарность и обещание посмотреть — не выбор и не отказ.',
+      'Протокол закрывает вопрос, только если в нём записан выбор, утверждение или отказ. Поручение разобраться вопрос не закрывает.',
+      'Не ждёт, если сотрудник ещё не передал свою часть, руководитель решил или задача закрыта и нового письма после закрытия нет.',
+      'действие — одно короткое предложение, какого действия ждут от руководителя. Заполни и когда ждёт, и когда не ждёт.',
+      'почему — пусто, если ждёт. Иначе одна из трёх причин.',
+      'источники — id записей, на которых основан ответ. Только id из списка.',
     ].join(' '),
-    user: `Встреча: ${packet.summary}. Сотрудник: ${packet.name}.\n${list || 'Источников нет.'}`,
+    user: `Руководитель: ${packet.leaderName}. Сотрудник: ${packet.name}. Встреча: ${packet.summary}.\n${list || 'Источников нет.'}`,
     schemaName: 'one_on_one',
     schema: verdictSchema,
   });
   const parsed = verdictZod.safeParse(result.data);
-  if (!parsed.success) return { waiting: false, action: '', sourceIds: [] };
-  return { waiting: parsed.data.ждёт, action: parsed.data.действие.trim(), sourceIds: parsed.data.источники };
+  if (!parsed.success) return { waiting: false, action: '', sourceIds: [], reason: '' };
+  return {
+    waiting: parsed.data.ждёт,
+    action: parsed.data.действие.trim(),
+    sourceIds: parsed.data.источники,
+    reason: parsed.data.ждёт ? '' : parsed.data.почему,
+  };
 }
 
 export async function oneOnOneBrief(
@@ -172,7 +224,7 @@ export async function oneOnOneBrief(
       verdicts.push(await judge(packet));
     } catch (error) {
       console.error('Сводка к встрече не собрана', error instanceof Error ? error.message : error);
-      verdicts.push({ waiting: false, action: '', sourceIds: [] });
+      verdicts.push({ waiting: false, action: '', sourceIds: [], reason: '' });
     }
   }
   return blocksFromVerdicts(packets, verdicts);
@@ -236,15 +288,16 @@ export async function oneOnOneForDay(
     if (!steps.length) return [];
     return [{ id: row.id, at: meeting?.startsAt ?? row.createdAt.toISOString(), title: meeting?.title ?? '', steps }];
   });
-  const storedTasks =
-    tasks ??
-    (await db.select().from(taskTable).where(eq(taskTable.leaderId, leaderId))).map((row) => ({
-      id: row.externalId,
-      title: row.title,
-      owner: row.ownerName,
-      dueOn: row.dueOn,
-      status: row.status,
-    }));
+  const storedTasks = tasks
+    ? tasks.map((task) => ({ ...task, closedAt: task.closedAt ?? '' }))
+    : (await db.select().from(taskTable).where(eq(taskTable.leaderId, leaderId))).map((row) => ({
+        id: row.externalId,
+        title: row.title,
+        owner: row.ownerName,
+        dueOn: row.dueOn,
+        status: row.status,
+        closedAt: '',
+      }));
   return oneOnOneBrief(
     {
       leaderName,
@@ -256,9 +309,13 @@ export async function oneOnOneForDay(
       meetings: meetings.map((meeting) => ({ ...meeting, kind: kindOf.get(meeting.summary) })),
       letters,
       protocols: briefProtocols,
-      tasks: storedTasks.map((task) => ({ key: task.id, title: task.title, owner: task.owner, status: task.status })),
+      tasks: storedTasks.map((task) => ({ key: task.id, title: task.title, owner: task.owner, status: task.status, closedAt: task.closedAt })),
     },
-    (packet) => judgeTurn(leaderId, packet),
+    (packet) =>
+      withLlmScope(
+        { agent: 'one-on-one', leaderId, operationId: `one-on-one:${leaderId}:${day}:${packet.name}`, title: `К встрече: ${packet.name}` },
+        () => judgeTurn(leaderId, packet),
+      ),
   );
 }
 
@@ -271,6 +328,8 @@ function sourcesFor(person: { name: string; email: string }, input: BriefInput, 
     const text = protocol.steps.map((step) => `${step.owner}: ${step.task}`).join('\n');
     sources.push({
       id: `p:${protocol.id}`,
+      at: stamp(protocol.at),
+      role: 'протокол',
       label: `Протокол ${dateWords(protocol.at)}`,
       href: href(input.origin, 'protocol', protocol.id),
       text,
@@ -282,25 +341,44 @@ function sourcesFor(person: { name: string; email: string }, input: BriefInput, 
     .slice(0, LETTER_CAP)
     .reverse();
   for (const letter of letters) {
+    const leader = fromLeader(letter, input);
     sources.push({
       id: `m:${letter.id}`,
+      at: stamp(letter.at),
+      role: leader ? 'письмо_руководителя' : 'письмо_сотрудника',
       label: `Письмо ${dateWords(letter.at)} «${letter.subject}»`,
       href: href(input.origin, 'letter', letter.id),
-      text: `${letter.fromName}: ${letter.subject}. ${letter.body}`,
+      text: `От: ${letter.fromName}. Кому: ${letter.toEmail || 'не указано'}. ${letter.subject}. ${letter.body}`,
     });
   }
+  const floor = earliest(sources.map((source) => source.at));
   for (const task of input.tasks) {
-    if (CLOSED.has(task.status)) continue;
     const about = sameName(task.owner, person.name) || mentioned(person.name, task.title);
     if (!about) continue;
+    const closed = CLOSED.has(task.status.trim().toLowerCase());
+    const at = stamp(task.closedAt ?? '');
+    if (closed && floor && at && at < floor) continue;
     sources.push({
       id: `t:${task.key}`,
+      at,
+      role: closed ? 'задача_закрыта' : 'задача',
       label: `Задача${task.key ? ` ${task.key}` : ''} «${task.title}»`,
       href: /^[A-Za-z][A-Za-z0-9]*-\d+$/.test(task.key) ? `https://tracker.yandex.ru/${task.key}` : '',
-      text: `${task.owner}: ${task.title}`,
+      text: `Исполнитель: ${task.owner}. Статус: ${task.status}. Закрыта: ${task.closedAt ? dateWords(task.closedAt) : 'даты нет'}. ${task.title}`,
     });
   }
   return sources;
+}
+
+function fromLeader(letter: BriefLetter, input: BriefInput): boolean {
+  const email = letter.fromEmail.trim().toLowerCase();
+  if (input.leaderEmail && email === input.leaderEmail.trim().toLowerCase()) return true;
+  if (input.leaderMailbox && email === input.leaderMailbox.trim().toLowerCase()) return true;
+  return sameName(letter.fromName, input.leaderName);
+}
+
+function earliest(dates: string[]): string {
+  return dates.filter(Boolean).sort()[0] ?? '';
 }
 
 function aboutLetter(letter: BriefLetter, person: { name: string; email: string }): boolean {

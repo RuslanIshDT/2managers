@@ -11,6 +11,7 @@ const issue = (over: Partial<Parameters<typeof tasksFromIssues>[0][number]>) => 
   unique: '',
   status: 'Открыт',
   open: true,
+  resolvedAt: '',
   ...over,
 });
 
