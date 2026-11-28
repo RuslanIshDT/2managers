@@ -6,7 +6,7 @@ import { calendarAfter } from './free-time.ts';
 import { departmentForLeader } from './k1.ts';
 import { chooseFocus, classifySeries, GOAL_KINDS, type Candidate, type FocusPlan } from './conductor.ts';
 import { adviceTitle, departmentMatrix, goalMinutes, isLeaderTask, morningHtml, overdueLines, overdueTasks, ownWeekTasks, renderMorning } from './focus.ts';
-import { parseMorningStored, type MorningShape } from './morning.ts';
+import { combineMorning, parseMorningStored, type MorningShape } from './morning.ts';
 import { withLlmScope } from '../llm.ts';
 import { canonicalCategory, confirmationPoints } from './confirm.ts';
 import { sendMessage } from '../telegram.ts';
@@ -70,11 +70,11 @@ export async function sendFocusAll(db: Db) {
 // live — задачи и встречи из Трекера и календаря; без него (кабинет) — из базы, чтобы страница не ждала внешние сервисы.
 async function morningShape(db: Db, leaderId: string): Promise<MorningShape | null> {
   const rows = await db.select().from(revisions).where(and(eq(revisions.leaderId, leaderId), eq(revisions.area, 'утро')));
-  for (const row of [...rows].reverse()) {
+  const rules = rows.flatMap((row) => {
     const shape = parseMorningStored(row.understood);
-    if (shape) return shape;
-  }
-  return null;
+    return shape ? [{ id: row.id, at: row.createdAt.toISOString(), text: row.instead, shape }] : [];
+  });
+  return combineMorning(rules).shape;
 }
 
 async function sceneFor(db: Db, leaderId: string, leaderName: string, live?: { tasks: LiveTask[] | null; meetings: LiveMeeting[] | null }, morningRule: MorningShape | null = null) {

@@ -20,7 +20,7 @@ import { costView, type OperationRow } from '../agents/cost.ts';
 import { loadAudiences } from '../agents/audience.ts';
 import { confirmationPoints } from '../agents/confirm.ts';
 import { deskForLeader } from '../agents/desk.ts';
-import { interpretMorning, parseMorningStored, shapeWords, storeMorning } from '../agents/morning.ts';
+import { combineMorning, interpretMorning, parseMorningStored, shapeWords, storeMorning } from '../agents/morning.ts';
 import { standView } from '../agents/stand-sync.ts';
 import { catalog, isAgentId, MODEL_AGENTS, priceWords } from '../agents/models.ts';
 import { applyClick, applyLeaderAction, hideMailbox, pullInbox, requestFeed, saveEditText, saveLeaderEdit } from '../agents/intake.ts';
@@ -76,9 +76,20 @@ function confirmationNote(profile: string): string {
   return 'Правила подтверждения не заданы: обязательного подтверждения нет, руководителю уходит только то, что разбор письма сам отнёс к его решению.';
 }
 
-function revisionNote(understood: string): string {
+function revisionNote(understood: string, override = ''): string {
   const shape = parseMorningStored(understood);
-  return shape ? shapeWords(shape) : '';
+  const base = shape ? shapeWords(shape) : '';
+  return [base, override].filter(Boolean).join('. ');
+}
+
+async function revisionRows(db: Db, leaderId: string) {
+  const rows = await db.select().from(revisions).where(eq(revisions.leaderId, leaderId)).orderBy(asc(revisions.createdAt));
+  const morning = rows.flatMap((row) => {
+    const shape = parseMorningStored(row.understood);
+    return shape ? [{ id: row.id, at: row.createdAt.toISOString(), text: row.instead, shape }] : [];
+  });
+  const notes = combineMorning(morning).notes;
+  return rows.map((row) => ({ ...row, note: revisionNote(row.understood, notes[row.id] ?? '') }));
 }
 
 async function morningUnderstood(leaderId: string, text: string): Promise<{ stored: string; note: string }> {
@@ -286,10 +297,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
           weeks: kpi.weeks.map((week) => ({ fact: week.fact, status: week.status })),
         })),
       }))), taskRows),
-      revisions: (await deps.db.select().from(revisions).where(eq(revisions.leaderId, leader.id)).orderBy(asc(revisions.createdAt))).map((row) => ({
-        ...row,
-        note: revisionNote(row.understood),
-      })),
+      revisions: await revisionRows(deps.db, leader.id),
       acts: (await deps.db.select().from(leaderActs).where(eq(leaderActs.leaderId, leader.id)).orderBy(desc(leaderActs.at)).limit(30)).map((row) => ({
         id: row.id,
         subject: row.subject,

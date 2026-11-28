@@ -118,6 +118,64 @@ export function storeMorning(result: { shape: MorningShape | null; note: string 
   return JSON.stringify(result.shape);
 }
 
+export interface MorningRuleInput {
+  id: string;
+  at: string;
+  text: string;
+  shape: MorningShape;
+}
+
+// Все разобранные правила по времени создания. Порядок строк в базе не важен.
+// Более позднее перекрывает противоречие раннему; у раннего остаётся пометка.
+export function combineMorning(rules: MorningRuleInput[]): { shape: MorningShape | null; notes: Record<string, string> } {
+  const sorted = [...rules].sort((a, b) => a.at.localeCompare(b.at) || a.id.localeCompare(b.id));
+  const shape: MorningShape = { order: [], hide: [], limit: [], focus: '' };
+  let orderOwner = '';
+  const hideOwner = new Map<MorningBlockId, string>();
+  const limitOwner = new Map<MorningBlockId, string>();
+  let focusOwner = '';
+  const lost = new Map<string, string>();
+  const mark = (id: string, later: string) => {
+    if (id && id !== later) lost.set(id, later);
+  };
+  for (const rule of sorted) {
+    if (rule.shape.order.length) {
+      mark(orderOwner, rule.text);
+      orderOwner = rule.id;
+      shape.order = [...rule.shape.order];
+      for (const block of rule.shape.order) {
+        const hider = hideOwner.get(block);
+        if (!hider) continue;
+        mark(hider, rule.text);
+        hideOwner.delete(block);
+        shape.hide = shape.hide.filter((id) => id !== block);
+      }
+    }
+    for (const block of rule.shape.hide) {
+      if (shape.order.includes(block)) {
+        mark(orderOwner, rule.text);
+        shape.order = shape.order.filter((id) => id !== block);
+      }
+      if (!shape.hide.includes(block)) shape.hide.push(block);
+      hideOwner.set(block, rule.id);
+    }
+    for (const row of rule.shape.limit) {
+      mark(limitOwner.get(row.block) ?? '', rule.text);
+      limitOwner.set(row.block, rule.id);
+      shape.limit = [...shape.limit.filter((item) => item.block !== row.block), row];
+    }
+    if (rule.shape.focus) {
+      mark(focusOwner, rule.text);
+      focusOwner = rule.id;
+      shape.focus = rule.shape.focus;
+    }
+  }
+  if (!sorted.length) return { shape: null, notes: {} };
+  const notes: Record<string, string> = {};
+  for (const [id, text] of lost) notes[id] = `Перекрыто правилом «${text}»`;
+  return { shape, notes };
+}
+
 export function applyMorning(shape: MorningShape | null | undefined): MorningBlockId[] {
   const order = shape?.order.length ? shape.order : DEFAULT_MORNING_ORDER;
   const rest = DEFAULT_MORNING_ORDER.filter((id) => !order.includes(id));
