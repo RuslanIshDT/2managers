@@ -1,7 +1,7 @@
 // Журнал доверия: история из файла плюс решения руководителя на стенде, по времени.
 import { and, eq, inArray } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
-import { authorities, decisions, emails, mailIn, people } from '../db/schema.ts';
+import { authorities, decisions, emails, leaderActs, mailIn, people } from '../db/schema.ts';
 import { formatAmount, nearestAmount, normalizeUnit } from './confirm.ts';
 import { readHistory, type HistoryRow } from './dependence.ts';
 import { personAddresses } from './k1.ts';
@@ -27,14 +27,21 @@ export function trustSubject(subject: string, text: string, area: string, unit: 
   return `${subject} ${formatAmount(value)}${mark}`.trim();
 }
 
+const LEADER_BUTTONS = new Set(['утвердил', 'отклонил']);
+
 export function standTrustRows(input: {
-  decisions: { status: string; subject: string; summary: string; draft: string; originalDraft: string; replyName: string; replyTo: string; createdAt: Date }[];
+  decisions: { id: string; status: string; subject: string; summary: string; draft: string; originalDraft: string; replyName: string; replyTo: string; createdAt: Date }[];
+  acts: { refId: string; auto: boolean; action: string }[];
   letters: { fromEmail: string; subject: string; body: string }[];
   people: { id: string; name: string; email: string; extraEmail?: string }[];
   authorities: { personId: string; area: string; unit: string }[];
 }): HistoryRow[] {
+  const pressed = new Set(
+    input.acts.filter((act) => !act.auto && LEADER_BUTTONS.has(act.action)).map((act) => act.refId),
+  );
   const rows: HistoryRow[] = [];
   for (const decision of input.decisions) {
+    if (!pressed.has(decision.id)) continue;
     const outcome = decisionOutcome(decision.status, decision.originalDraft, decision.draft);
     if (!outcome) continue;
     const person = input.people.find(
@@ -68,8 +75,9 @@ export async function historyForLeader(db: Db, leaderId: string): Promise<Histor
   } catch {
     file = [];
   }
-  const [decisionRows, personRows, authRows, catalog, inbox] = await Promise.all([
+  const [decisionRows, actRows, personRows, authRows, catalog, inbox] = await Promise.all([
     db.select().from(decisions).where(and(eq(decisions.leaderId, leaderId), inArray(decisions.status, ['исполнено', 'отклонено']))),
+    db.select({ refId: leaderActs.refId, auto: leaderActs.auto, action: leaderActs.action }).from(leaderActs).where(eq(leaderActs.leaderId, leaderId)),
     db.select().from(people).where(eq(people.leaderId, leaderId)),
     db.select().from(authorities).where(eq(authorities.leaderId, leaderId)),
     db.select({ fromEmail: emails.fromEmail, subject: emails.subject, body: emails.body }).from(emails).where(eq(emails.leaderId, leaderId)),
@@ -77,6 +85,7 @@ export async function historyForLeader(db: Db, leaderId: string): Promise<Histor
   ]);
   const stand = standTrustRows({
     decisions: decisionRows,
+    acts: actRows,
     letters: [...catalog, ...inbox],
     people: personRows.map((row) => ({ id: row.externalId, name: row.name, email: row.email, extraEmail: row.extraEmail })),
     authorities: authRows.map((row) => ({ personId: row.personId, area: row.area, unit: row.unit })),
