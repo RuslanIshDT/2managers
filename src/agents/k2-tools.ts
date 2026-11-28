@@ -165,6 +165,21 @@ const TOOL_WORDS: Record<string, string> = {
   people: 'людей отдела',
 };
 
+export function gatheredFacts(ctx: K2Context, steps: K2Run['steps'], profile: string): string {
+  const parts = [profile.trim()];
+  for (const step of steps) {
+    let args: Record<string, unknown> = {};
+    try {
+      const value = JSON.parse(step.args || '{}') as unknown;
+      if (value && typeof value === 'object') args = value as Record<string, unknown>;
+    } catch {
+      args = {};
+    }
+    parts.push(runTool(step.tool, args, ctx));
+  }
+  return parts.filter(Boolean).join('\n\n');
+}
+
 export function stepsWords(steps: K2Run['steps']): string {
   if (!steps.length) return 'Помощник решил по письму и профилю, данные не запрашивал';
   const names = steps.map((step) => {

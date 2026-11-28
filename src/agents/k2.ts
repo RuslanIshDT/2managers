@@ -181,7 +181,7 @@ export function mailSystem(points: string[]): string {
 передать — письмо по зоне сотрудника руководителя: в кому_передать впиши его имя и фамилию из списка людей, в черновик_ответа — короткую записку ему, что сделать и к какому сроку.
 в_сводку — ответа не нужно: статус, отчёт, информация, уведомление, напоминание о том, что уже в работе. Руководитель прочтёт это в сводке.
 без_ответа — рассылка, реклама, автоуведомление: ни ответ, ни сводка не нужны.
-Черновик ответа пишется от имени ИИ-помощника руководителя и содержит только факты из письма и данных, которые ты получил: письма, протоколы, задачи, KPI, полномочия. Чего в этих данных нет — пропуск для руководителя вида [допишите: чего не хватает]. Не выдумывай факты. Для в_сводку и без_ответа черновик пустой.
+Черновик ответа пишется от имени ИИ-помощника руководителя и содержит только факты из письма и данных, которые ты получил. Чего в этих данных нет — пропуск [допишите: название недостающего факта]: назови, чего не хватает, сам факт не пиши. Для в_сводку и без_ответа черновик пустой.
 Для «руководителю» заполни контекст (что известно из данных), рекомендацию (один вариант и основание), риски и если_не_решить; черновик — ответ, который уйдёт после согласия руководителя.
 предложение_полномочия — если такие письма можно больше не носить руководителю: какое право дать и кому. Иначе пусто.
 суть — одна фраза, о чём письмо. основание — одна фраза: какое правило, полномочие, данные или прошлое решение привели к действию.
@@ -300,16 +300,83 @@ export function findPerson(name: string, staff: { name: string; email: string }[
   return hits.length === 1 ? hits[0] : null;
 }
 
-const DRAFT_GAP = /\[допишите:[^\]]*\]/iu;
+const BRACKETS = /\[[^\]\n]+\]/gu;
 
-export function draftGap(text: string): string {
-  return DRAFT_GAP.exec(text)?.[0] ?? '';
+export function draftGaps(text: string): string[] {
+  return text.match(BRACKETS) ?? [];
 }
 
-export function approvalBlock(draft: string): string {
+export function draftGap(text: string): string {
+  return draftGaps(text)[0] ?? '';
+}
+
+export function textOutsideBrackets(text: string): string {
+  return text.replace(BRACKETS, ' ');
+}
+
+export interface DraftCheck {
+  checked: boolean;
+  draft: string;
+  unconfirmed: string[];
+  note: string;
+}
+
+export function applyCheckResult(draft: string, data: { claims: string[]; draft: string } | null): DraftCheck {
+  if (!data) return { checked: false, draft, unconfirmed: [], note: 'Черновик не сверен' };
+  const next = data.draft.trim() || draft;
+  const outside = textOutsideBrackets(next).toLowerCase();
+  const left = data.claims.map((claim) => claim.trim()).filter((claim) => claim && outside.includes(claim.toLowerCase()));
+  return { checked: true, draft: next, unconfirmed: left, note: left.length ? `Не подтверждено данными: ${left.join('; ')}` : '' };
+}
+
+export function holdsDraft(check: DraftCheck): boolean {
+  return !check.checked || check.unconfirmed.length > 0 || draftGaps(check.draft).length > 0;
+}
+
+export function keepForLeader<T extends { ask: boolean; send: boolean; kind: string }>(ruled: T, check: DraftCheck): T {
+  if (!holdsDraft(check)) return ruled;
+  return { ...ruled, ask: true, send: false, kind: 'нужен_руководитель' };
+}
+
+export function approvalBlock(draft: string, note = ''): string {
+  if (note.toLowerCase().includes('не сверен')) return 'Черновик не сверен. Допишите его и утвердите снова.';
+  if (note.startsWith('Не подтверждено данными:')) return `${note}. Допишите и утвердите снова.`;
   const gap = draftGap(draft);
   if (!gap) return '';
   return `В черновике пропуск ${gap}. Допишите его и утвердите снова.`;
+}
+
+const checkSchema: JsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['неподтверждённые', 'черновик'],
+  properties: {
+    неподтверждённые: { type: 'array', items: { type: 'string' } },
+    черновик: { type: 'string' },
+  },
+};
+
+export async function askDraftCheck(letter: string, facts: string, draft: string): Promise<{ claims: string[]; draft: string }> {
+  const parsed = z.object({
+    неподтверждённые: z.array(z.string()),
+    черновик: z.string(),
+  });
+  const result = await callJson<unknown>({
+    purpose: 'draft-check',
+    system: [
+      'Тебе даны письмо, данные, которые получил разбор, и черновик ответа.',
+      'Найди утверждения черновика, которых нет ни в письме, ни в данных.',
+      'Верни эти утверждения и черновик, где каждое такое утверждение заменено пропуском [допишите: название недостающего факта].',
+      'В пропуске назови, какого факта не хватает. Сам факт не пиши.',
+      'Что есть в письме или данных — оставь. Новых фактов не добавляй.',
+    ].join(' '),
+    user: `Письмо:\n${letter}\n\nДанные разбора:\n${facts || 'дополнительных данных нет'}\n\nЧерновик:\n${draft}`,
+    schemaName: 'draft_check',
+    schema: checkSchema,
+  });
+  const safe = parsed.safeParse(result.data);
+  if (!safe.success) throw new Error('Ответ сверки не совпал со схемой');
+  return { claims: safe.data.неподтверждённые, draft: safe.data.черновик };
 }
 
 export function cardText(input: {
@@ -321,6 +388,7 @@ export function cardText(input: {
   если_не_решить: string;
   контекст: string;
   draft: string;
+  note?: string;
 }): string {
   const lines = [
     '<b>ИИ-помощник</b>',
@@ -345,6 +413,7 @@ export function cardText(input: {
     '<b>Контекст</b>',
     escapeHtml(input.контекст),
     '',
+    ...(input.note ? ['<b>Сверка</b>', escapeHtml(input.note), ''] : []),
     ...(draftGap(input.draft) ? ['<b>Пропуск</b>', 'В черновике пропуск. Допишите его перед утверждением.', ''] : []),
     '<b>Черновик ответа</b>',
     escapeHtml(input.draft || '—'),

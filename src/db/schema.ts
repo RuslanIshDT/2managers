@@ -186,6 +186,7 @@ export const decisions = pgTable('decisions', {
   awaitingEdit: boolean('awaiting_edit').notNull().default(false),
   originalDraft: text('original_draft').notNull().default(''),
   pendingRule: text('pending_rule').notNull().default(''),
+  draftNote: text('draft_note').notNull().default(''),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
 });
 

@@ -9,11 +9,25 @@ import { staffFromVerdict } from './dependence.ts';
 import { kpiStatus, personAddresses } from './k1.ts';
 import { loadAudienceState, personInAudience } from './audience.ts';
 import { amountBlocksRule, breachesFromAnswer, confirmationPoints, normalizeUnit, unitInText } from './confirm.ts';
-import { approvalBlock, cardText, chainKey, draftGap, enforce, failedRuling, judgeLetter, letterPrompt, rightRuling, type ModelVerdict, type Ruled } from './k2.ts';
+import { applyCheckResult, approvalBlock, askDraftCheck, cardText, chainKey, draftGap, enforce, failedRuling, keepForLeader, judgeLetter, letterPrompt, rightRuling, type DraftCheck, type ModelVerdict, type Ruled } from './k2.ts';
 import { callJson, withLlmScope, type JsonSchema } from '../llm.ts';
-import { externalContext, judgeWithTools, k2Context, stepsWords } from './k2-tools.ts';
+import { externalContext, gatheredFacts, judgeWithTools, k2Context, stepsWords } from './k2-tools.ts';
 import { readHistory } from './dependence.ts';
 import { letterHits, type FlowRule } from './replay.ts';
+
+async function reviewDraft(leaderId: string, id: string, letter: string, facts: string, draft: string): Promise<DraftCheck> {
+  if (!draft.trim()) return { checked: true, draft, unconfirmed: [], note: '' };
+  try {
+    const data = await withLlmScope(
+      { agent: 'draft-check', leaderId, operationId: `draft-check:${leaderId}:${id}:${Date.now()}`, title: 'Сверка черновика' },
+      () => askDraftCheck(letter, facts, draft),
+    );
+    return applyCheckResult(draft, data);
+  } catch (error) {
+    console.error('Сверка черновика не удалась', id, error instanceof Error ? error.message : error);
+    return applyCheckResult(draft, null);
+  }
+}
 
 function rightsHint(rules: FlowRule[], email: string): string {
   const lines = rules
@@ -158,6 +172,7 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
       const prior = latestDecision(decisionRows, key, letter.id);
       let ruled: Ruled;
       let named = { area: '', value: '', unit: '', others: '' };
+      let facts = leaderRow.profile;
       const covered = letterHits(letter, authority);
       const fromAudience = personInAudience(audiences, { name: letter.fromName, email: letter.fromEmail });
       const copyOnly = (letter.to?.length ?? 0) > 0 && !letter.to!.some((address) => leaderAddresses.has(address));
@@ -209,6 +224,7 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
             })
               .then((run) => {
                 steps = stepsWords(run.steps);
+                facts = gatheredFacts(ctx, run.steps, leaderRow.profile);
                 return run.verdict;
               })
               .catch((err: unknown) => {
@@ -262,6 +278,9 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
         }
       }
       ruled = { ...ruled, draft: finishDraft(applyRevision(ruled.draft, ruled.category, edits), letterText, edits, inside) };
+      const check = await reviewDraft(leaderId, letter.id, letterText, facts, ruled.draft);
+      ruled = { ...ruled, draft: check.draft };
+      ruled = keepForLeader(ruled, check);
 
       if (ruled.ask) {
         await db.insert(decisions).values({
@@ -277,6 +296,7 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
           awaitingEdit: false,
           originalDraft: '',
           pendingRule: '',
+          draftNote: check.note,
           createdAt: moment,
         });
         if (options.notify !== false) try {
@@ -295,6 +315,7 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
               who: `${letter.fromName}: ${letter.subject}`,
               ...card,
               draft: ruled.draft,
+              note: check.note,
             }),
             letter.id,
             leaderRow.telegramChatId,
@@ -316,6 +337,7 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
           awaitingEdit: false,
           originalDraft: '',
           pendingRule: '',
+          draftNote: check.note,
           createdAt: moment,
         });
       } else if (ruled.send) {
@@ -336,6 +358,7 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
           awaitingEdit: false,
           originalDraft: '',
           pendingRule: '',
+          draftNote: '',
           createdAt: moment,
         };
         await db.insert(decisions).values(row);
@@ -401,10 +424,10 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
 }
 
 // Заново разбирает только ждущие письма. Решённые не меняет, ответ не отправляет, карточку в Telegram не шлёт.
-export async function rejudgeWaiting(db: Db, leaderId: string): Promise<{ id: string; kind: string; ask: boolean; gap: string; area: string; draft: string }[]> {
+export async function rejudgeWaiting(db: Db, leaderId: string, only: string[] = []): Promise<{ id: string; kind: string; ask: boolean; gap: string; area: string; draft: string; note: string }[]> {
   const [leaderRow] = await db.select().from(leaders).where(eq(leaders.id, leaderId)).limit(1);
   if (!leaderRow) throw new Error('Руководитель не найден');
-  const waiting = await db.select().from(decisions).where(and(eq(decisions.leaderId, leaderId), eq(decisions.status, 'ждёт')));
+  const waiting = (await db.select().from(decisions).where(and(eq(decisions.leaderId, leaderId), eq(decisions.status, 'ждёт')))).filter((row) => only.length === 0 || only.includes(row.id));
   const persons = await db.select().from(people).where(eq(people.leaderId, leaderId));
   const kpiRows = await db.select().from(kpis).where(eq(kpis.leaderId, leaderId));
   const authRows = await db.select().from(authorities).where(eq(authorities.leaderId, leaderId));
@@ -420,11 +443,11 @@ export async function rejudgeWaiting(db: Db, leaderId: string): Promise<{ id: st
   const staff = persons.filter((row) => row.role === 'подчинённый').map((row) => ({ name: row.name, email: row.email }));
   const peopleList = persons.filter((row) => row.role === 'подчинённый').map((row) => ({ name: row.name, position: row.position, zone: row.zone }));
   const pastMail = inbox.map((row) => ({ fromEmail: row.fromEmail, subject: row.subject, received: row.received, kind: null as string | null }));
-  const out: { id: string; kind: string; ask: boolean; gap: string; area: string; draft: string }[] = [];
+  const out: { id: string; kind: string; ask: boolean; gap: string; area: string; draft: string; note: string }[] = [];
   for (const decision of waiting) {
     const letter = catalog.find((row) => row.externalId === decision.id) ?? inbox.find((row) => row.syntheticId === decision.id || row.messageId === decision.id);
     if (!letter) {
-      out.push({ id: decision.id, kind: 'нет письма', ask: true, gap: '', area: '', draft: '' });
+      out.push({ id: decision.id, kind: 'нет письма', ask: true, gap: '', area: '', draft: '', note: '' });
       continue;
     }
     const person = persons.find((row) => personAddresses(row).includes(letter.fromEmail.toLowerCase()));
@@ -442,6 +465,7 @@ export async function rejudgeWaiting(db: Db, leaderId: string): Promise<{ id: st
       : externalContext({ name: letter.fromName, email: letter.fromEmail }, { mail: pastMail, revisions: edits, people: peopleList });
     const agent = inside ? 'k2' : 'mail_ext';
     let named = { area: '', value: '', unit: '', others: '' };
+    let facts = leaderRow.profile;
     let ruled: Ruled;
     try {
       const judged = await withLlmScope(
@@ -470,13 +494,19 @@ export async function rejudgeWaiting(db: Db, leaderId: string): Promise<{ id: st
         others: named.others !== 'нет',
       });
       if (granted?.kind === 'полномочие') ruled = rightRuling(granted);
-      if (judged.steps.length) ruled = { ...ruled, context: [ruled.context, stepsWords(judged.steps)].filter(Boolean).join('\n') };
+      if (judged.steps.length) {
+        facts = gatheredFacts(ctx, judged.steps, leaderRow.profile);
+        ruled = { ...ruled, context: [ruled.context, stepsWords(judged.steps)].filter(Boolean).join('\n') };
+      }
     } catch (error) {
       ruled = failedRuling(letterText, error instanceof Error ? error.message : String(error));
     }
     ruled = { ...ruled, draft: finishDraft(applyRevision(ruled.draft, ruled.category, edits), letterText, edits, inside) };
+    const check = await reviewDraft(leaderId, decision.id, letterText, facts, ruled.draft);
+    ruled = { ...ruled, draft: check.draft };
+    ruled = keepForLeader(ruled, check);
     if (ruled.ask) {
-      await db.update(decisions).set({ summary: ruled.summary, draft: ruled.draft }).where(and(eq(decisions.id, decision.id), eq(decisions.leaderId, leaderId), eq(decisions.status, 'ждёт')));
+      await db.update(decisions).set({ summary: ruled.summary, draft: ruled.draft, draftNote: check.note }).where(and(eq(decisions.id, decision.id), eq(decisions.leaderId, leaderId), eq(decisions.status, 'ждёт')));
       await db.update(verdicts).set({
         kind: ruled.kind,
         category: ruled.category,
@@ -494,7 +524,7 @@ export async function rejudgeWaiting(db: Db, leaderId: string): Promise<{ id: st
         authorityOthers: named.others,
       }).where(and(eq(verdicts.leaderId, leaderId), eq(verdicts.id, `v-${decision.id}`.slice(0, 120))));
     }
-    out.push({ id: decision.id, kind: ruled.kind, ask: ruled.ask, gap: draftGap(ruled.draft), area: named.area, draft: ruled.draft });
+    out.push({ id: decision.id, kind: ruled.kind, ask: ruled.ask, gap: draftGap(ruled.draft), area: named.area, draft: ruled.draft, note: check.note });
   }
   return out;
 }
@@ -576,7 +606,7 @@ export async function applyLeaderAction(db: Db, leaderId: string, action: string
   }
   if (action === 'approve') {
     const draft = decision.draft.replace(/\n*По вашей правке:[\s\S]*$/u, '').trim();
-    const blocked = approvalBlock(draft);
+    const blocked = approvalBlock(draft, decision.draftNote);
     if (blocked) return blocked;
     await deliverReply(decision.replyName, decision.replyTo, decision.subject, draft);
     await db.update(decisions).set({ status: 'исполнено', draft, pendingRule: '' }).where(eq(decisions.id, decision.id));
@@ -682,7 +712,7 @@ export async function saveLeaderEdit(db: Db, leaderId: string, text: string, dec
   await db
     .update(decisions)
     .set({
-      ...(draft ? { draft } : {}),
+      ...(draft ? { draft, draftNote: '' } : {}),
       originalDraft: decision.originalDraft || decision.draft,
       pendingRule: instead,
       awaitingEdit: false,

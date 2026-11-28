@@ -1,0 +1,1 @@
+ALTER TABLE decisions ADD COLUMN IF NOT EXISTS draft_note text NOT NULL DEFAULT '';

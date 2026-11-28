@@ -62,7 +62,7 @@ export interface Desk {
 
 export interface DeskInput {
   accepted: boolean;
-  decisions: { id: string; status: string; summary: string; replyName: string; createdAt: string; category: string; draft?: string }[];
+  decisions: { id: string; status: string; summary: string; replyName: string; createdAt: string; category: string; draft?: string; draftNote?: string }[];
   verdicts: { id: string; kind: string; category: string; summary: string; basis: string; createdAt: string; area?: string }[];
   letters: { fromName: string; fromEmail: string; subject: string; body: string; received: string; reading?: { area: string; value: number; unit: string; others: boolean } | null }[];
   meetings: { summary: string; minutes: number }[];
@@ -123,13 +123,18 @@ export function buildDesk(input: DeskInput): Desk {
     const rows = [letter ? `${letter.fromName}, ${dateWords(letter.received)}: ${letter.subject}` : decision.summary];
     if (right && person) rows.push(`Полномочие ${person.name}: ${right.area} ${right.limit}${right.unit === '—' ? '' : ` ${right.unit}`}`);
     const gap = draftGap(decision.draft ?? '');
+    const note = (decision.draftNote ?? '').trim();
+    const lines = [
+      ...(gap ? [{ id: `${decision.id}:gap`, title: 'В черновике пропуск. Допишите его перед утверждением.' }] : []),
+      ...(note ? [{ id: `${decision.id}:note`, title: note }] : []),
+    ];
     work.push({
       id: decision.id,
       title: shown(`Решите: ${decision.summary}`),
       wait: decision.createdAt ? `Ждёт с ${dateWords(decision.createdAt)}` : '',
       minutes: '',
       kind: 'decision',
-      lines: gap ? [{ id: `${decision.id}:gap`, title: 'В черновике пропуск. Допишите его перед утверждением.' }] : [],
+      lines,
       origin: made('k2', 'Разбор почты', rows.filter(Boolean).join('. '), howModel(input.calls, 'k2', 'просьба выше полномочия этого человека'), rows),
     });
   }
@@ -329,6 +334,7 @@ export async function deskForLeader(db: Db, leaderId: string, series: { title: s
       createdAt: row.createdAt.toISOString(),
       category: verdictByLetter.get(row.id) ?? '',
       draft: row.draft,
+      draftNote: row.draftNote,
     })),
     verdicts: verdictRows.map((row) => ({
       id: row.id,
