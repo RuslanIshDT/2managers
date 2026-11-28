@@ -707,7 +707,7 @@ describe('правка и второй каталог', () => {
 
   it('второй каталог — другие люди', async () => {
     const first = await loadSynthetic('data/synthetic');
-    const second = await loadSynthetic('data/leader2');
+    const second = await loadSynthetic('data/leader2', { profileOptional: true });
     const firstNames = new Set(first.people.map((person) => person.name));
     expect(second.people.every((person) => !firstNames.has(person.name))).toBe(true);
     expect(second.people.some((person) => person.role === 'подчинённый')).toBe(true);
@@ -1147,7 +1147,12 @@ function trace() {
 }
 
 async function scene(dir: string) {
-  const data = await loadSynthetic(dir);
+  const data = await loadSynthetic(dir, { profileOptional: true });
+  let profile = data.profile;
+  if (!profile.trim()) {
+    const { applyGoals, parseGoals } = await import('../src/agents/profile-file.ts');
+    profile = applyGoals('# Профиль\n\n## Цели на квартал\n', parseGoals(await readFile(`${dir}/goals.csv`, 'utf8')));
+  }
   const files = await readDepartment(dir);
   const until = parseSceneFile(await readFile(`${dir}/scene.csv`, 'utf8')) ?? '2026-12-11';
   const checked = checkDepartment(data.people, files, until);
@@ -1171,6 +1176,6 @@ async function scene(dir: string) {
   }));
   const tasks = data.tasks.map((task) => ({ title: task.task, owner: task.owner, due: task.due, status: task.status }));
   const leader = data.people.find((person) => person.role === 'руководитель');
-  return controlOf(data.profile, withLeader(data.profile, leader?.name ?? '', people), tasks);
+  return controlOf(profile, withLeader(profile, leader?.name ?? '', people), tasks);
 }
 

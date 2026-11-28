@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { applyGoals, parseGoals } from '../src/agents/profile-file.ts';
 import { goalMinutes } from '../src/agents/focus.ts';
 import { GOAL_KINDS } from '../src/agents/conductor.ts';
 import { calendarAfter, freeUses, LEAVE_FREE, profileItems, slotsToFree } from '../src/agents/free-time.ts';
@@ -30,12 +31,12 @@ describe('T57: освобождённое время после «Отпусти
   });
 
   it('без списка в разделе — цели квартала; профили обоих руководителей дают варианты без правки кода', () => {
-    const marina = readFileSync('data/leader2/leader_profile.md', 'utf8');
+    const second = applyGoals('# Профиль\n\n## Цели на квартал\n', parseGoals(readFileSync('data/leader2/goals.csv', 'utf8')));
     const ivan = readFileSync('data/synthetic/leader_profile.md', 'utf8');
-    const goals = profileItems(marina, /^цели/i);
+    const goals = profileItems(second, /^цели/i);
     expect(goals.length).toBeGreaterThan(0);
-    const marinaUses = freeUses(marina, []);
-    expect(marinaUses.slice(0, goals.length).map((row) => row.summary)).toEqual(goals.map((goal) => `Цель: ${goal}`));
+    const secondUses = freeUses(second, []);
+    expect(secondUses.slice(0, goals.length).map((row) => row.summary)).toEqual(goals.map((goal) => `Цель: ${goal}`));
     const ivanUses = freeUses(ivan, matrix);
     expect(ivanUses.some((row) => row.id === 'one:Вера Третья')).toBe(true);
     expect(ivanUses.length).toBeGreaterThan(3);

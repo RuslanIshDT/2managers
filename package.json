@@ -17,6 +17,7 @@
     "tg:chats": "node --env-file=.env src/scripts/audit-telegram.ts --chats",
     "requests": "node --env-file=.env src/scripts/requests.ts",
     "reset-stand": "node src/scripts/reset-stand.ts",
+    "remove-leader": "node --env-file-if-exists=.env src/scripts/remove-leader.ts",
     "sync-materials": "node src/scripts/sync-materials.ts",
     "e2e": "playwright test",
     "eval": "node --env-file-if-exists=.env src/scripts/eval.ts"

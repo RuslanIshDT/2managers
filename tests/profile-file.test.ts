@@ -15,8 +15,7 @@ describe('профиль из файла', () => {
     expect(goals.map((row) => row.n)).toEqual(['1', '2', '3']);
     expect(applyGoals(raw, goals)).toBe(raw);
     expect(await catalogProfile('data/synthetic')).toBe(raw);
-    const second = await readFile('data/leader2/leader_profile.md', 'utf8');
-    expect(await catalogProfile('data/leader2')).toBe(second);
+    expect(await catalogProfile('data/leader2')).toBeNull();
     const replaced = applyGoals(raw, [{ n: '1', goal: 'Другая цель.' }]);
     expect(replaced).toContain('1. Другая цель.');
     expect(replaced).not.toContain('Выполнить план продаж SMB.');
