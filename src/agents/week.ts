@@ -1,5 +1,6 @@
 // Принятие правил недели и сцена «до и после». Модель не вызывается.
 import { readFile } from 'node:fs/promises';
+import { releaseDeferred } from './decision.ts';
 import { clockFor } from './scene.ts';
 import { eq } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
@@ -41,6 +42,7 @@ export async function listFlowRules(db: Db, leaderId: string): Promise<FlowRule[
 }
 
 export async function weekScene(db: Db, leaderId: string) {
+  await releaseDeferred(db, leaderId);
   const [history, ruleRows, verdictRows, decisionRows, letterRows, meetingRows, inbox] = await Promise.all([
     historyOf(db, leaderId),
     listFlowRules(db, leaderId),

@@ -1,4 +1,5 @@
 // Telegram Bot API: отправка сообщений руководителю. Токен и чат — в .env, не в репозитории.
+import { sendLabel } from './agents/decision.ts';
 export function telegramConfig() {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   if (!token) throw new Error('TELEGRAM_BOT_TOKEN не задан (.env)');
@@ -33,21 +34,21 @@ export async function sendMessage(
   });
 }
 
-export async function sendDecisionCard(text: string, decisionId: string, chatId: string) {
-  return sendMessage(text, chatId, {
-    reply_markup: {
-      inline_keyboard: [
-        [
-          { text: 'Утвердить', callback_data: decisionCallback('approve', decisionId) },
-          { text: 'Отклонить', callback_data: decisionCallback('reject', decisionId) },
-        ],
-        [
-          { text: 'Отложить', callback_data: decisionCallback('defer', decisionId) },
-          { text: 'Поправить', callback_data: decisionCallback('edit', decisionId) },
-        ],
+export function decisionKeyboard(decisionId: string, replyName: string) {
+  return {
+    inline_keyboard: [
+      [{ text: sendLabel(replyName), callback_data: decisionCallback('approve', decisionId) }],
+      [
+        { text: 'Отказать', callback_data: decisionCallback('reject', decisionId) },
+        { text: 'Отложить', callback_data: decisionCallback('defer', decisionId) },
       ],
-    },
-  });
+      [{ text: 'Поправить', callback_data: decisionCallback('edit', decisionId) }],
+    ],
+  };
+}
+
+export async function sendDecisionCard(text: string, decisionId: string, chatId: string, replyName = '') {
+  return sendMessage(text, chatId, { reply_markup: decisionKeyboard(decisionId, replyName) });
 }
 
 export function telegramConfigured(): boolean {
@@ -67,7 +68,7 @@ export function parseCallback(data: string): { action: ButtonAction; decisionId:
   return { action: match[1] as ButtonAction, decisionId: match[2] };
 }
 
-export function editChoiceKeyboard(decisionId: string) {
+export function editChoiceKeyboard(decisionId: string, replyName = '') {
   return {
     inline_keyboard: [
       [
@@ -75,8 +76,8 @@ export function editChoiceKeyboard(decisionId: string) {
         { text: 'Запомнить', callback_data: decisionCallback('keep', decisionId) },
       ],
       [
-        { text: 'Утвердить', callback_data: decisionCallback('approve', decisionId) },
-        { text: 'Отклонить', callback_data: decisionCallback('reject', decisionId) },
+        { text: sendLabel(replyName), callback_data: decisionCallback('approve', decisionId) },
+        { text: 'Отказать', callback_data: decisionCallback('reject', decisionId) },
       ],
     ],
   };

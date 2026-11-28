@@ -24,7 +24,7 @@ import { deskForLeader } from '../agents/desk.ts';
 import { combineMorning, interpretMorning, parseMorningStored, shapeWords, storeMorning } from '../agents/morning.ts';
 import { standView } from '../agents/stand-sync.ts';
 import { catalog, isAgentId, MODEL_AGENTS, priceWords } from '../agents/models.ts';
-import { applyClick, applyLeaderAction, hideMailbox, pullInbox, requestFeed, saveEditText, saveLeaderEdit } from '../agents/intake.ts';
+import { applyClick, applyLeaderAction, hideMailbox, pullInbox, requestFeed, saveEditText, saveLeaderEdit, takeDecisionReply } from '../agents/intake.ts';
 import { acceptWeek, acceptWeekByChat, weekScene } from '../agents/week.ts';
 import { focusForLeader, sendFocus } from '../agents/focus-run.ts';
 import { mirrorForLeader, sendWeeklyNote, setSeriesFate } from '../agents/mirror-run.ts';
@@ -576,7 +576,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       .object({
         id: z.string().trim().min(1).max(64),
         action: z.enum(['approve', 'reject', 'defer', 'edit', 'once', 'keep']),
-        text: z.string().trim().max(500).optional(),
+        text: z.string().trim().max(2000).optional(),
       })
       .safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: 'Нужны решение и действие' });
@@ -586,7 +586,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       if (!saved) return reply.code(404).send({ error: 'Решение не найдено' });
       return { notice: saved.text, draft: saved.draft, changed: saved.changed };
     }
-    const notice = await applyLeaderAction(deps.db, leader.id, parsed.data.action, parsed.data.id);
+    const notice = await applyLeaderAction(deps.db, leader.id, parsed.data.action, parsed.data.id, parsed.data.text ?? '', true);
     return { notice };
   });
 
@@ -803,13 +803,16 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       } else if (parsedClick && chatId) {
         try {
           notice = await applyClick(deps.db, parsedClick.action, parsedClick.decisionId, chatId);
+          if (telegramConfigured() && (parsedClick.action === 'edit' || parsedClick.action === 'reject' || parsedClick.action === 'defer')) {
+            await sendMessage(notice, chatId);
+          }
         } catch (err) {
           notice = err instanceof Error ? err.message.slice(0, 180) : 'Не удалось выполнить';
         }
       }
       if (telegramConfigured()) {
         try {
-          await answerCallback(update.callback_query.id, notice);
+          await answerCallback(update.callback_query.id, notice.slice(0, 180));
         } catch (err) {
           console.error('Ответ Telegram на кнопку не ушёл', err);
         }
@@ -835,13 +838,18 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
         if (telegramConfigured()) await sendMessage(`Чат привязан к ${leader.name}. Сообщения помощника подписаны как от ИИ-помощника.`, chatId);
         return { ok: true };
       }
-      // Сначала правка протокола, если он ждёт текст; иначе — правка черновика письма.
-      const protocolNote = await saveProtocolEdit(deps.db, chatId, text);
-      if (protocolNote) {
-        if (telegramConfigured()) await sendMessage(protocolNote, chatId);
+      // Сначала ответ на «Отказать» или «Отложить», если карточка его ждёт; затем протокол; иначе правка черновика.
+      const asked = await takeDecisionReply(deps.db, chatId, text);
+      if (asked !== null) {
+        if (telegramConfigured()) await sendMessage(asked, chatId);
       } else {
-        const letter = await saveEditText(deps.db, chatId, text);
-        if (letter && telegramConfigured()) await sendMessage(letter.text, chatId, { reply_markup: editChoiceKeyboard(letter.id) });
+        const protocolNote = await saveProtocolEdit(deps.db, chatId, text);
+        if (protocolNote) {
+          if (telegramConfigured()) await sendMessage(protocolNote, chatId);
+        } else {
+          const letter = await saveEditText(deps.db, chatId, text);
+          if (letter && telegramConfigured()) await sendMessage(letter.text, chatId, { reply_markup: editChoiceKeyboard(letter.id, letter.replyName) });
+        }
       }
     }
     return { ok: true };

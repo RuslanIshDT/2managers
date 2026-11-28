@@ -19,7 +19,7 @@ test('главная: что нужно от вас, решение с кноп�
   await expect(work.getByRole('button').first()).toBeVisible();
   if (process.env.E2E_DECISION !== '0') {
     const decision = work.getByText(/^Решите:/).first();
-    if (await decision.count()) await expect(work.getByRole('button', { name: /Утвердить|Согласовать|Одобрить|Да/ }).first()).toBeVisible();
+    if (await decision.count()) await expect(work.getByRole('button', { name: /Отправить ответ|Утвердить|Согласовать|Одобрить|Да/ }).first()).toBeVisible();
   }
 
   const origin = page.locator('details', { has: page.getByText('Откуда это и почему можно доверять') }).first();

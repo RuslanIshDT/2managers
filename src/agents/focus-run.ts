@@ -12,6 +12,7 @@ import { canonicalCategory, confirmationPoints } from './confirm.ts';
 import { sendMessage } from '../telegram.ts';
 import { morningQuestions } from './protocol-context.ts';
 import { oneOnOneForDay } from './one-on-one.ts';
+import { releaseDeferred } from './decision.ts';
 import { clockFor, dateWords, moscowDay, shiftDay, waitedDays } from './scene.ts';
 import { liveSources, type LiveMeeting, type LiveTask } from './live-sources.ts';
 import { sendTaskReminders } from './reminders.ts';
@@ -78,6 +79,7 @@ async function morningShape(db: Db, leaderId: string): Promise<MorningShape | nu
 }
 
 async function sceneFor(db: Db, leaderId: string, leaderName: string, live?: { tasks: LiveTask[] | null; meetings: LiveMeeting[] | null }, morningRule: MorningShape | null = null) {
+  await releaseDeferred(db, leaderId);
   const [department, taskRows, decisionRows, verdictRows, storedMeetings, freedRows, kindRows] = await Promise.all([
     departmentForLeader(db, leaderId),
     db.select().from(tasks).where(eq(tasks.leaderId, leaderId)),

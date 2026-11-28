@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState, type FormEvent } from 'react';
 import { ConnectionFields, LeadersPanel } from './leaders.tsx';
+import { rememberChoiceVisible } from './decision-ui.ts';
 import { Button } from './components/ui/button.tsx';
 import { Card } from './components/ui/card.tsx';
 import { Input } from './components/ui/input.tsx';
@@ -196,6 +197,17 @@ interface Origin {
   rows: string[];
 }
 
+interface DecisionMail {
+  fromName: string;
+  when: string;
+  subject: string;
+  excerpt: string;
+  body: string;
+  replyName: string;
+  replyTo: string;
+  draft: string;
+}
+
 interface WorkItem {
   id: string;
   title: string;
@@ -204,6 +216,7 @@ interface WorkItem {
   kind: 'decision' | 'talk' | 'right' | 'series' | 'task' | 'rules';
   lines: { id: string; title: string }[];
   origin: Origin;
+  mail?: DecisionMail;
 }
 
 interface Desk {
@@ -345,13 +358,13 @@ export function App() {
     }
   }
 
-  async function decide(id: string, action: 'approve' | 'reject' | 'defer') {
+  async function decide(id: string, action: 'approve' | 'reject' | 'defer', text = '') {
     setError('');
     setPending(true);
     try {
       const result = await api<{ notice: string }>('/api/decisions', {
         method: 'POST',
-        body: JSON.stringify({ id, action }),
+        body: JSON.stringify({ id, action, ...(text ? { text } : {}) }),
       });
       setJob(result.notice);
       setCabinet(await api<Cabinet>('/api/cabinet'));
@@ -1266,7 +1279,7 @@ function HomeDesk({
 }: {
   desk: Desk | undefined;
   pending: boolean;
-  onDecision: (id: string, action: 'approve' | 'reject' | 'defer') => void;
+  onDecision: (id: string, action: 'approve' | 'reject' | 'defer', text?: string) => void;
   onAccept: () => void;
   onSeries: (key: string, action: 'продлить' | 'отпустить') => void;
   onSend: () => void;
@@ -1321,16 +1334,25 @@ function WorkCard({
 }: {
   item: WorkItem;
   pending: boolean;
-  onDecision: (id: string, action: 'approve' | 'reject' | 'defer') => void;
+  onDecision: (id: string, action: 'approve' | 'reject' | 'defer', text?: string) => void;
   onAccept: () => void;
   onSeries: (key: string, action: 'продлить' | 'отпустить') => void;
   onOpen: (helper: string) => void;
   onTalk: () => void;
   onRefresh: () => Promise<void>;
 }) {
+  const [editOpen, setEditOpen] = useState(false);
   const [edit, setEdit] = useState('');
-  const [draft, setDraft] = useState('');
+  const [rewritten, setRewritten] = useState(false);
+  const [shownDraft, setShownDraft] = useState('');
   const [note, setNote] = useState('');
+  const [refuseOpen, setRefuseOpen] = useState(false);
+  const [reason, setReason] = useState('');
+  const [deferOpen, setDeferOpen] = useState(false);
+  const [until, setUntil] = useState('');
+  const mail = item.mail;
+  const draftText = shownDraft || mail?.draft || '';
+  const sendTo = mail?.replyName?.trim() ? `Отправить ответ ${mail.replyName}` : 'Отправить ответ';
   return (
     <Card>
       <p className="font-semibold">{item.title}</p>
@@ -1341,77 +1363,169 @@ function WorkCard({
             </p>
           ))
         : null}
+      {item.kind === 'decision' && mail ? (
+        <div className="mt-2 grid gap-2 text-sm">
+          <div>
+            <p className="font-medium">Письмо</p>
+            <p>От: {mail.fromName}</p>
+            {mail.when ? <p>Дата: {mail.when}</p> : null}
+            <p>Тема: {mail.subject}</p>
+            {mail.body && mail.body !== mail.excerpt ? (
+              <details className="mt-1">
+                <summary className="cursor-pointer whitespace-pre-wrap">{mail.excerpt || 'Показать текст'}</summary>
+                <p className="mt-1 whitespace-pre-wrap">{mail.body}</p>
+              </details>
+            ) : (
+              <p className="mt-1 whitespace-pre-wrap">{mail.body || mail.excerpt}</p>
+            )}
+          </div>
+          <div>
+            <p className="font-medium">Ответ</p>
+            <p>
+              Кому: {mail.replyName}
+              {mail.replyTo ? ` <${mail.replyTo}>` : ''}
+            </p>
+            <p className="mt-1 whitespace-pre-wrap">{draftText || 'Черновика нет'}</p>
+          </div>
+        </div>
+      ) : null}
       {item.kind === 'decision' && item.lines.length ? <p className="mt-1 text-sm">{item.lines.map((line) => line.title).join(' ')}</p> : null}
       {item.wait ? <p className="mt-1 text-sm text-[#5d6878]">{item.wait}</p> : null}
       {item.minutes ? <p className="text-sm text-[#5d6878]">{item.minutes}</p> : null}
       <Origin origin={item.origin} onOpen={onOpen} />
-      <span className="mt-2 flex flex-wrap gap-2">
+      <div className="mt-2 flex flex-wrap gap-2">
         {item.kind === 'decision' ? (
           <>
             <Button type="button" disabled={pending} onClick={() => onDecision(item.id, 'approve')}>
-              Утвердить
+              {sendTo}
             </Button>
-            <Button type="button" variant="outline" disabled={pending} onClick={() => onDecision(item.id, 'reject')}>
-              Отклонить
+            <Button
+              type="button"
+              variant="outline"
+              disabled={pending}
+              onClick={() => {
+                setRefuseOpen((open) => !open);
+                setDeferOpen(false);
+              }}
+            >
+              Отказать
             </Button>
-            <Button type="button" variant="outline" disabled={pending} onClick={() => onDecision(item.id, 'defer')}>
-              Отложить
+            <Button
+              type="button"
+              variant="outline"
+              disabled={pending}
+              onClick={() => {
+                setDeferOpen((open) => !open);
+                setRefuseOpen(false);
+              }}
+            >
+              Отложить до…
             </Button>
-            <Button type="button" variant="outline" disabled={pending} onClick={() => setDraft(draft ? '' : ' ')}>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={pending}
+              onClick={() => {
+                setEditOpen((open) => !open);
+                setShownDraft((current) => current || mail?.draft || '');
+              }}
+            >
               Поправить
             </Button>
           </>
         ) : null}
-        {item.kind === 'decision' && draft ? (
+        {item.kind === 'decision' && refuseOpen ? (
           <form
-            className="mt-2 grid gap-2"
+            className="mt-2 grid w-full gap-2"
+            onSubmit={(event) => {
+              event.preventDefault();
+              api<{ notice: string }>('/api/decisions', { method: 'POST', body: JSON.stringify({ id: item.id, action: 'reject', text: reason }) })
+                .then(async (result) => {
+                  setNote(result.notice);
+                  setRefuseOpen(false);
+                  await onRefresh();
+                })
+                .catch((err: unknown) => setNote(err instanceof Error ? err.message : 'Не сохранилось'));
+            }}
+          >
+            <Input value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Причина, если есть" />
+            <Button type="submit" variant="outline" disabled={pending}>Отказать</Button>
+          </form>
+        ) : null}
+        {item.kind === 'decision' && deferOpen ? (
+          <form
+            className="mt-2 grid w-full gap-2"
+            onSubmit={(event) => {
+              event.preventDefault();
+              api<{ notice: string }>('/api/decisions', { method: 'POST', body: JSON.stringify({ id: item.id, action: 'defer', text: until }) })
+                .then(async (result) => {
+                  setNote(result.notice);
+                  setDeferOpen(false);
+                  await onRefresh();
+                })
+                .catch((err: unknown) => setNote(err instanceof Error ? err.message : 'Не сохранилось'));
+            }}
+          >
+            <Input type="date" value={until} onChange={(event) => setUntil(event.target.value)} required />
+            <Button type="submit" variant="outline" disabled={pending}>Отложить</Button>
+          </form>
+        ) : null}
+        {item.kind === 'decision' && editOpen ? (
+          <form
+            className="mt-2 grid w-full gap-2"
             onSubmit={(event) => {
               event.preventDefault();
               api<{ notice: string; draft: string; changed: boolean }>('/api/decisions', { method: 'POST', body: JSON.stringify({ id: item.id, action: 'edit', text: edit }) })
                 .then(async (result) => {
-                  setDraft(result.changed ? result.draft : ' ');
+                  if (result.changed) setShownDraft(result.draft);
+                  setRewritten((was) => was || result.changed);
                   setNote(result.notice.split('\n\n')[0] ?? result.notice);
                   await onRefresh();
                 })
                 .catch((err: unknown) => setNote(err instanceof Error ? err.message : 'Не сохранилось'));
             }}
           >
+            <p className="whitespace-pre-wrap text-sm">{draftText || 'Черновика нет'}</p>
             <Input value={edit} onChange={(event) => setEdit(event.target.value)} placeholder="Что изменить" required minLength={3} />
-            <Button type="submit" variant="outline" disabled={pending}>Показать черновик</Button>
-            {draft.trim() ? <p className="whitespace-pre-wrap text-sm">{draft}</p> : null}
-            {note ? <p className="text-sm text-[#5d6878]">{note}</p> : null}
-            <span className="flex flex-wrap gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => {
-                  api<{ notice: string }>('/api/decisions', { method: 'POST', body: JSON.stringify({ id: item.id, action: 'once' }) })
-                    .then(async (result) => {
-                      setNote(result.notice);
-                      await onRefresh();
-                    })
-                    .catch((err: unknown) => setNote(err instanceof Error ? err.message : 'Не сохранилось'));
-                }}
-              >
-                Только сейчас
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => {
-                  api<{ notice: string }>('/api/decisions', { method: 'POST', body: JSON.stringify({ id: item.id, action: 'keep' }) })
-                    .then(async (result) => {
-                      setNote(result.notice);
-                      await onRefresh();
-                    })
-                    .catch((err: unknown) => setNote(err instanceof Error ? err.message : 'Не сохранилось'));
-                }}
-              >
-                Запомнить
-              </Button>
-            </span>
+            <Button type="submit" variant="outline" disabled={pending}>Переписать</Button>
+            {rememberChoiceVisible(rewritten) ? (
+              <>
+                <span className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => {
+                      api<{ notice: string }>('/api/decisions', { method: 'POST', body: JSON.stringify({ id: item.id, action: 'once' }) })
+                        .then(async (result) => {
+                          setNote(result.notice);
+                          await onRefresh();
+                        })
+                        .catch((err: unknown) => setNote(err instanceof Error ? err.message : 'Не сохранилось'));
+                    }}
+                  >
+                    Только сейчас
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => {
+                      api<{ notice: string }>('/api/decisions', { method: 'POST', body: JSON.stringify({ id: item.id, action: 'keep' }) })
+                        .then(async (result) => {
+                          setNote(result.notice);
+                          await onRefresh();
+                        })
+                        .catch((err: unknown) => setNote(err instanceof Error ? err.message : 'Не сохранилось'));
+                    }}
+                  >
+                    Запомнить
+                  </Button>
+                </span>
+                <p className="text-sm text-[#5d6878]">Запомнить — правило для следующих писем, видно в Настройках → Правила.</p>
+              </>
+            ) : null}
           </form>
         ) : null}
+        {note ? <p className="w-full text-sm text-[#5d6878]">{note}</p> : null}
         {item.kind === 'talk' ? (
           <Button type="button" variant="outline" onClick={onTalk}>
             Открыть в отделе
@@ -1440,7 +1554,7 @@ function WorkCard({
             </ul>
           </details>
         ) : null}
-      </span>
+      </div>
     </Card>
   );
 }

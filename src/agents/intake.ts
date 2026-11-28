@@ -60,7 +60,8 @@ import { acceptRewrite, exampleBlock, finishDraft, mailRevisions, rewriteLetter,
 import { writeLeaderAct } from './acts.ts';
 import { applyRevision, revisionPrompt } from './revisions.ts';
 import { listFlowRules } from './week.ts';
-import { clockFor, letterMoment, moscowStamp } from './scene.ts';
+import { deferIsDue, parseDeferDate, performRefusal } from './decision.ts';
+import { clockFor, dateWords, letterMoment, moscowStamp } from './scene.ts';
 import { changeWords, termChanges, type TermChange } from './terms.ts';
 
 const DUMMY: ModelVerdict = {
@@ -311,6 +312,9 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
           replyName: letter.fromName,
           subject: letter.subject,
           awaitingEdit: false,
+          awaitingDefer: false,
+          awaitingRefuse: false,
+          deferUntil: '',
           originalDraft: '',
           pendingRule: '',
           draftNote: check.note,
@@ -333,9 +337,12 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
               ...card,
               draft: ruled.draft,
               note: check.note,
+              to: `${letter.fromName} <${letter.fromEmail}>`,
+              letter: letter.body,
             }),
             letter.id,
             leaderRow.telegramChatId,
+            letter.fromName,
           );
         } catch (err) {
           // Решение остаётся в кабинете; без карточки письмо не разбирается заново.
@@ -352,6 +359,9 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
           replyName: letter.fromName,
           subject: letter.subject,
           awaitingEdit: false,
+          awaitingDefer: false,
+          awaitingRefuse: false,
+          deferUntil: '',
           originalDraft: '',
           pendingRule: '',
           draftNote: check.note,
@@ -373,6 +383,9 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
           replyName: target.name,
           subject: letter.subject,
           awaitingEdit: false,
+          awaitingDefer: false,
+          awaitingRefuse: false,
+          deferUntil: '',
           originalDraft: '',
           pendingRule: '',
           draftNote: '',
@@ -586,7 +599,7 @@ export async function applyClick(db: Db, action: string, decisionId: string, cha
   return applyLeaderAction(db, leader.id, action, decisionId);
 }
 
-export async function applyLeaderAction(db: Db, leaderId: string, action: string, decisionId: string): Promise<string> {
+export async function applyLeaderAction(db: Db, leaderId: string, action: string, decisionId: string, extra = '', confirmed = false): Promise<string> {
   const [decision] = await db
     .select()
     .from(decisions)
@@ -595,8 +608,11 @@ export async function applyLeaderAction(db: Db, leaderId: string, action: string
   if (!decision) return 'Решение не найдено';
   if (decision.status !== 'ждёт') return `Уже ${decision.status}`;
   if (action === 'edit') {
-    await db.update(decisions).set({ awaitingEdit: true }).where(eq(decisions.id, decision.id));
-    return 'Напишите правку. По умолчанию она только для этого письма. «Запомнить» оставит правило для следующих.';
+    await db.update(decisions).set({ awaitingEdit: true, awaitingDefer: false, awaitingRefuse: false }).where(eq(decisions.id, decision.id));
+    const draft = decision.draft.trim();
+    const shown = draft.length > 3000 ? `${draft.slice(0, 3000)}…` : draft;
+    const now = shown ? `Сейчас черновик такой:\n\n${shown}\n\n` : '';
+    return `Напишите правку. ${now}По умолчанию она только для этого письма. «Запомнить» оставит правило для следующих, его видно в Настройках → Правила.`;
   }
   if (action === 'once' || action === 'keep') {
     const remembered = ruleFromChoice(decision.pendingRule, action);
@@ -612,14 +628,14 @@ export async function applyLeaderAction(db: Db, leaderId: string, action: string
       });
     }
     await db.update(decisions).set({ pendingRule: '' }).where(eq(decisions.id, decision.id));
-    return remembered ? 'Правило записано в профиль. Черновик ниже можно утвердить.' : 'Только это письмо. Правило не создано.';
+    return remembered ? 'Правило записано. Оно видно в Настройках → Правила. Черновик ниже можно отправить.' : 'Только это письмо. Правило не создано.';
   }
   if (action === 'approve') {
     const draft = decision.draft.replace(/\n*По вашей правке:[\s\S]*$/u, '').trim();
     const blocked = approvalBlock(draft, decision.draftNote);
     if (blocked) return blocked;
     await deliverReply(decision.replyName, decision.replyTo, decision.subject, draft);
-    await db.update(decisions).set({ status: 'исполнено', draft, pendingRule: '' }).where(eq(decisions.id, decision.id));
+    await db.update(decisions).set({ status: 'исполнено', draft, pendingRule: '', awaitingEdit: false, awaitingDefer: false, awaitingRefuse: false }).where(eq(decisions.id, decision.id));
     await recordAct(db, {
       leaderId,
       subject: decision.subject,
@@ -632,20 +648,84 @@ export async function applyLeaderAction(db: Db, leaderId: string, action: string
     });
     return 'Ответ отправлен';
   }
-  const status = action === 'reject' ? 'отклонено' : action === 'defer' ? 'отложено' : '';
-  if (!status) return 'Неизвестная кнопка';
-  await db.update(decisions).set({ status }).where(eq(decisions.id, decision.id));
-  await recordAct(db, {
-    leaderId,
-    subject: decision.subject,
-    action: status === 'отклонено' ? 'отклонил' : 'отложил',
-    result: status === 'отклонено' ? 'Отклонено' : 'Отложено',
-    original: decision.originalDraft || decision.draft,
-    approved: '',
-    auto: false,
-    refId: decision.id,
-  });
-  return status === 'отклонено' ? 'Отклонено' : 'Отложено';
+  if (action === 'reject') {
+    if (!confirmed) {
+      await db.update(decisions).set({ awaitingRefuse: true, awaitingDefer: false, awaitingEdit: false }).where(eq(decisions.id, decision.id));
+      return 'Напишите причину отказа. Если причины нет, отправьте «нет».';
+    }
+    const reason = /^(нет|без причины|-|—)$/iu.test(extra.trim()) ? '' : extra.trim();
+    return performRefusal(
+      { replyName: decision.replyName, replyTo: decision.replyTo, subject: decision.subject },
+      reason,
+      {
+        send: deliverReply,
+        save: async (status) => {
+          await db
+            .update(decisions)
+            .set({ status, awaitingRefuse: false, awaitingDefer: false, awaitingEdit: false, pendingRule: '' })
+            .where(eq(decisions.id, decision.id));
+        },
+        journal: async (row) => {
+          await recordAct(db, {
+            leaderId,
+            subject: decision.subject,
+            action: row.action,
+            result: row.result,
+            original: decision.originalDraft || decision.draft,
+            approved: row.approved,
+            auto: false,
+            refId: decision.id,
+          });
+        },
+      },
+    );
+  }
+  if (action === 'defer') {
+    const today = clockFor(leaderId).today;
+    const until = confirmed ? parseDeferDate(extra, today) : null;
+    if (!until) {
+      if (!confirmed) await db.update(decisions).set({ awaitingDefer: true, awaitingRefuse: false, awaitingEdit: false }).where(eq(decisions.id, decision.id));
+      return 'Напишите дату, до которой отложить: 20.12.2026.';
+    }
+    if (deferIsDue(until, today)) {
+      await db.update(decisions).set({ awaitingDefer: false }).where(eq(decisions.id, decision.id));
+      return `Дата ${dateWords(until)} уже наступила. Карточка остаётся в ожидании.`;
+    }
+    await db
+      .update(decisions)
+      .set({ status: 'отложено', deferUntil: until, awaitingDefer: false, awaitingRefuse: false, awaitingEdit: false })
+      .where(eq(decisions.id, decision.id));
+    await recordAct(db, {
+      leaderId,
+      subject: decision.subject,
+      action: 'отложил',
+      result: `Отложено до ${dateWords(until)}`,
+      original: decision.originalDraft || decision.draft,
+      approved: '',
+      auto: false,
+      refId: decision.id,
+    });
+    return `Отложено до ${dateWords(until)}. В этот день карточка снова будет ждать.`;
+  }
+  return 'Неизвестная кнопка';
+}
+
+export async function takeDecisionReply(db: Db, chatId: string, text: string): Promise<string | null> {
+  const [leader] = await db.select().from(leaders).where(eq(leaders.telegramChatId, chatId)).limit(1);
+  if (!leader) return null;
+  const [refuse] = await db
+    .select()
+    .from(decisions)
+    .where(and(eq(decisions.leaderId, leader.id), eq(decisions.awaitingRefuse, true), eq(decisions.status, 'ждёт')))
+    .limit(1);
+  if (refuse) return applyLeaderAction(db, leader.id, 'reject', refuse.id, text, true);
+  const [later] = await db
+    .select()
+    .from(decisions)
+    .where(and(eq(decisions.leaderId, leader.id), eq(decisions.awaitingDefer, true), eq(decisions.status, 'ждёт')))
+    .limit(1);
+  if (later) return applyLeaderAction(db, leader.id, 'defer', later.id, text, true);
+  return null;
 }
 
 async function sourceLetter(db: Db, leaderId: string, id: string, subject: string, summary: string): Promise<string> {
@@ -693,7 +773,7 @@ async function rewriteWithModel(leaderId: string, draft: string, instruction: st
   return result.data.text ?? '';
 }
 
-export async function saveEditText(db: Db, chatId: string, text: string): Promise<{ id: string; text: string } | null> {
+export async function saveEditText(db: Db, chatId: string, text: string): Promise<{ id: string; text: string; replyName: string } | null> {
   const instead = text.trim();
   if (instead.length < 3) return null;
   const [leader] = await db.select().from(leaders).where(eq(leaders.telegramChatId, chatId)).limit(1);
@@ -701,7 +781,7 @@ export async function saveEditText(db: Db, chatId: string, text: string): Promis
   return saveLeaderEdit(db, leader.id, instead);
 }
 
-export async function saveLeaderEdit(db: Db, leaderId: string, text: string, decisionId = ''): Promise<{ id: string; text: string; draft: string; changed: boolean } | null> {
+export async function saveLeaderEdit(db: Db, leaderId: string, text: string, decisionId = ''): Promise<{ id: string; text: string; draft: string; changed: boolean; replyName: string } | null> {
   const instead = text.trim();
   if (instead.length < 3) return null;
   const [decision] = decisionId
@@ -736,7 +816,8 @@ export async function saveLeaderEdit(db: Db, leaderId: string, text: string, dec
       id: decision.id,
       draft: decision.draft,
       changed: false,
-      text: `Черновик не изменился: ${why}. «Запомнить» запишет правило, «Только сейчас» — нет.`,
+      replyName: decision.replyName,
+      text: `Черновик не изменился: ${why}. «Запомнить» запишет правило, «Только сейчас» — нет. Правило видно в Настройках → Правила.`,
     };
   }
   await recordAct(db, {
@@ -753,7 +834,8 @@ export async function saveLeaderEdit(db: Db, leaderId: string, text: string, dec
     id: decision.id,
     draft,
     changed: true,
-    text: `Черновик обновлён. «Только сейчас» — правило не создаётся. «Запомнить» — для следующих писем.\n\n${draft}`,
+    replyName: decision.replyName,
+    text: `Черновик обновлён. «Только сейчас» — правило не создаётся. «Запомнить» — правило для следующих писем, видно в Настройках → Правила.\n\n${draft}`,
   };
 }
 

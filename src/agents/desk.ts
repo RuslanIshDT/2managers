@@ -7,6 +7,7 @@ import { draftGap } from './k2.ts';
 import { historyForLeader } from './trust.ts';
 import { kpiStatus } from './k1.ts';
 import { letterHits, meetingHits, readingForLetter, replayWeek, trustOffers, type FlowRule, type HistoryRow } from './replay.ts';
+import { letterExcerpt, releaseDeferred } from './decision.ts';
 import { listFlowRules, ownProposal } from './week.ts';
 import { calendarConfig } from '../yandex/calendar.ts';
 import { trackerConfig } from '../yandex/tracker.ts';
@@ -27,6 +28,17 @@ export interface Origin {
   rows: string[];
 }
 
+export interface DecisionMail {
+  fromName: string;
+  when: string;
+  subject: string;
+  excerpt: string;
+  body: string;
+  replyName: string;
+  replyTo: string;
+  draft: string;
+}
+
 export interface WorkItem {
   id: string;
   title: string;
@@ -35,6 +47,7 @@ export interface WorkItem {
   kind: 'decision' | 'talk' | 'right' | 'series' | 'task' | 'rules';
   lines: { id: string; title: string }[];
   origin: Origin;
+  mail?: DecisionMail;
 }
 
 export interface DoneLine {
@@ -62,9 +75,9 @@ export interface Desk {
 
 export interface DeskInput {
   accepted: boolean;
-  decisions: { id: string; status: string; summary: string; replyName: string; createdAt: string; category: string; draft?: string; draftNote?: string }[];
+  decisions: { id: string; status: string; summary: string; replyName: string; replyTo?: string; subject?: string; createdAt: string; category: string; draft?: string; draftNote?: string }[];
   verdicts: { id: string; kind: string; category: string; summary: string; basis: string; createdAt: string; area?: string }[];
-  letters: { fromName: string; fromEmail: string; subject: string; body: string; received: string; reading?: { area: string; value: number; unit: string; others: boolean } | null }[];
+  letters: { id?: string; fromName: string; fromEmail: string; subject: string; body: string; received: string; reading?: { area: string; value: number; unit: string; others: boolean } | null }[];
   meetings: { summary: string; minutes: number }[];
   rules: FlowRule[];
   people: { id: string; name: string; emails: number; laggingWeeks: { name: string; week: string }[] }[];
@@ -115,9 +128,7 @@ export function buildDesk(input: DeskInput): Desk {
     });
   }
   for (const decision of input.decisions.filter((row) => row.status === 'ждёт')) {
-    const letter =
-      input.letters.find((row) => row.subject === decision.summary) ??
-      input.letters.find((row) => row.fromName === decision.replyName && row.subject.length > 0 && decision.summary.includes(row.subject));
+    const letter = letterOf(decision, input.letters);
     const person = input.people.find((row) => row.name === decision.replyName);
     const named = input.verdicts.find((row) => row.id === `v-${decision.id}`)?.area?.trim().toLowerCase() ?? '';
     const right = person && named ? input.authorities.find((row) => row.personId === person.id && row.area.trim().toLowerCase() === named) : undefined;
@@ -129,6 +140,8 @@ export function buildDesk(input: DeskInput): Desk {
       ...(gap ? [{ id: `${decision.id}:gap`, title: 'В черновике пропуск. Допишите его перед утверждением.' }] : []),
       ...(note ? [{ id: `${decision.id}:note`, title: note }] : []),
     ];
+    const body = letter?.body ?? '';
+    const excerpt = letterExcerpt(body);
     work.push({
       id: decision.id,
       title: shown(`Решите: ${decision.summary}`),
@@ -136,6 +149,16 @@ export function buildDesk(input: DeskInput): Desk {
       minutes: '',
       kind: 'decision',
       lines,
+      mail: {
+        fromName: letter?.fromName || decision.replyName,
+        when: dateWords(letter?.received || decision.createdAt),
+        subject: letter?.subject || decision.subject || decision.summary,
+        excerpt: excerpt.excerpt,
+        body,
+        replyName: decision.replyName,
+        replyTo: decision.replyTo ?? letter?.fromEmail ?? '',
+        draft: decision.draft ?? '',
+      },
       origin: made('k2', 'Разбор почты', rows.filter(Boolean).join('. '), howModel(input.calls, 'k2', 'просьба выше полномочия этого человека'), rows),
     });
   }
@@ -282,6 +305,7 @@ export function buildDesk(input: DeskInput): Desk {
 }
 
 export async function deskForLeader(db: Db, leaderId: string, series: { title: string; open: boolean }[] = []): Promise<Desk> {
+  await releaseDeferred(db, leaderId);
   const [decisionRows, verdictRows, letterRows, meetingRows, personRows, kpiRows, authRows, callRows, planRows, rules, leaderRows, inbox] = await Promise.all([
     db.select().from(decisions).where(eq(decisions.leaderId, leaderId)),
     db.select().from(verdicts).where(eq(verdicts.leaderId, leaderId)).orderBy(desc(verdicts.createdAt)),
@@ -294,7 +318,18 @@ export async function deskForLeader(db: Db, leaderId: string, series: { title: s
     db.select().from(focusPlans).where(eq(focusPlans.leaderId, leaderId)).limit(1),
     listFlowRules(db, leaderId),
     db.select({ profile: leaders.profile }).from(leaders).where(eq(leaders.id, leaderId)).limit(1),
-    db.select({ syntheticId: mailIn.syntheticId, messageId: mailIn.messageId }).from(mailIn).where(eq(mailIn.leaderId, leaderId)),
+    db
+      .select({
+        syntheticId: mailIn.syntheticId,
+        messageId: mailIn.messageId,
+        fromName: mailIn.fromName,
+        fromEmail: mailIn.fromEmail,
+        subject: mailIn.subject,
+        body: mailIn.body,
+        received: mailIn.received,
+      })
+      .from(mailIn)
+      .where(eq(mailIn.leaderId, leaderId)),
   ]);
   const history = await historyForLeader(db, leaderId);
   const mailByPerson = new Map<string, number>();
@@ -315,6 +350,7 @@ export async function deskForLeader(db: Db, leaderId: string, series: { title: s
     at: row.createdAt.toISOString(),
   }));
   const letters = letterRows.map((row) => ({
+    id: row.externalId,
     fromName: row.fromName,
     fromEmail: row.fromEmail,
     subject: row.subject,
@@ -322,6 +358,20 @@ export async function deskForLeader(db: Db, leaderId: string, series: { title: s
     received: row.received,
     reading: readingForLetter(row.externalId, readings, inbox),
   }));
+  const knownLetters = new Set(letters.map((row) => row.id));
+  for (const row of inbox) {
+    if (!row.syntheticId || knownLetters.has(row.syntheticId)) continue;
+    knownLetters.add(row.syntheticId);
+    letters.push({
+      id: row.syntheticId,
+      fromName: row.fromName,
+      fromEmail: row.fromEmail,
+      subject: row.subject,
+      body: row.body,
+      received: row.received,
+      reading: readingForLetter(row.syntheticId, readings, inbox),
+    });
+  }
   const meetingList = meetingRows.map((row) => ({ summary: row.summary, minutes: row.minutes }));
   const proposal = rules.length ? [] : await ownProposal(db, leaderId);
   const preview = replayWeek(letters, meetingList, proposal, proposal.length > 0);
@@ -332,6 +382,8 @@ export async function deskForLeader(db: Db, leaderId: string, series: { title: s
       status: row.status,
       summary: row.summary,
       replyName: row.replyName,
+      replyTo: row.replyTo,
+      subject: row.subject,
       createdAt: row.createdAt.toISOString(),
       category: verdictByLetter.get(row.id) ?? '',
       draft: row.draft,
@@ -409,7 +461,7 @@ function helperCards(
     card('k10', 'Правила потока', 'код', 'Принятое изменение становится правилом, и закрытые им письма больше не доходят.', input.accepted ? `Правил: ${input.rules.length}.` : 'Правила недели ещё не приняты.', saved || 'Снятых часов на этих данных нет.', 'Письмо пункта подтверждения правило не забирает.'),
     card('k11', 'Индекс зависимости', 'код', 'Считает, какая доля потока всё ещё требует руководителя.', input.accepted ? `Сейчас ${picture.after}% из ${picture.before}%.` : 'Правил нет, доля — весь каталог.', `Остаются ${picture.stillLetters} писем и ${picture.stillMeetings} встреч.`, 'Это итог блока «Сделано без вас», не отдельная цифра.'),
     card('k12', 'Доверие по решениям', 'код', 'После нескольких утверждений подряд без правок предлагает отдать право.', `В истории ${countWords(input.history.length, 'решение', 'решения', 'решений')}.`, trustOffers(input.history, input.authorities).length ? 'Есть предложение отдать право.' : 'Порога для нового права история не достигла.', 'Пока руководитель не нажмёт «Принять», право не действует.'),
-    card('k13', 'Карточка решения', 'код', 'Оставляет руководителю одну строку, рекомендацию, основание и кнопки.', `Ждут решения: ${input.decisions.filter((row) => row.status === 'ждёт').length}.`, 'Кнопки: утвердить, отклонить, отложить.', 'Без кнопки ответ по такой карточке не отправляется.'),
+    card('k13', 'Карточка решения', 'код', 'Показывает письмо, кому уйдёт ответ и черновик. Кнопки: отправить, отказать, отложить до даты, поправить.', `Ждут решения: ${input.decisions.filter((row) => row.status === 'ждёт').length}.`, 'Отказ уходит письмом отправителю. Отложенное возвращается в выбранный день.', 'Без кнопки «Отправить ответ» черновик не уходит.'),
     card('k14', 'Записка человеку', 'код', 'Раз в неделю пишет человеку, с чем он приходил и что решает сам.', 'Текст собирается из его писем и принятых правил.', 'В ящик уходит записка каждому, кому она ещё не уходила.', 'Адрес в синтетике писем не принимает, поэтому письмо уходит в тестовый ящик.'),
     card('k15', 'Календарь с нуля', 'код', 'Регулярная встреча без решения предлагается к отпуску.', `Открытых серий в списке работы: ${input.series.filter((row) => row.open).length}.`, 'Продление хранится в базе.', remote.calendar ? '«Отпустить» убирает будущие встречи серии из календаря «Стенд» и ставит на их время выбранный приоритет: встречу один на один или время на цель из профиля.' : 'Календарь не подключён: освобождение записывается только на стенде.'),
   ];
@@ -456,6 +508,25 @@ function staleQuiet(title: string, people: DeskInput['people']): boolean {
   const text = title.toLowerCase();
   if (!text.includes('писем 0') && !text.includes('тихая проблема')) return false;
   return people.some((person) => person.emails > 0 && person.name.trim() && text.includes(person.name.toLowerCase()));
+}
+
+function letterOf(
+  decision: { id: string; summary: string; replyName: string; subject?: string },
+  letters: { id?: string; fromName: string; fromEmail: string; subject: string; body: string; received: string }[],
+) {
+  const byId = letters.find((row) => row.id && row.id === decision.id);
+  if (byId) return byId;
+  const subject = (decision.subject ?? '').trim();
+  if (subject) {
+    const named = letters.find((row) => row.subject === subject && row.fromName === decision.replyName);
+    if (named) return named;
+    const same = letters.find((row) => row.subject === subject);
+    if (same) return same;
+  }
+  return (
+    letters.find((row) => row.subject === decision.summary) ??
+    letters.find((row) => row.fromName === decision.replyName && row.subject.length > 0 && decision.summary.includes(row.subject))
+  );
 }
 
 function sameMatter(task: string, summary: string): boolean {

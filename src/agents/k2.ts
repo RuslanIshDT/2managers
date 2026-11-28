@@ -442,7 +442,10 @@ export function cardText(input: {
   контекст: string;
   draft: string;
   note?: string;
+  to?: string;
+  letter?: string;
 }): string {
+  const letter = (input.letter ?? '').trim();
   const lines = [
     '<b>ИИ-помощник</b>',
     '',
@@ -468,6 +471,8 @@ export function cardText(input: {
     '',
     ...(input.note ? ['<b>Сверка</b>', escapeHtml(input.note), ''] : []),
     ...(draftGap(input.draft) ? ['<b>Пропуск</b>', 'В черновике пропуск. Допишите его перед утверждением.', ''] : []),
+    ...(input.to ? ['<b>Кому уйдёт ответ</b>', escapeHtml(input.to), ''] : []),
+    ...(letter ? ['<b>Письмо</b>', escapeHtml(letter.length > 800 ? `${letter.slice(0, 800).trimEnd()}…` : letter), ''] : []),
     '<b>Черновик ответа</b>',
     escapeHtml(input.draft || '—'),
   ];
