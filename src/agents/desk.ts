@@ -3,6 +3,7 @@ import { desc, eq } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
 import { authorities, decisions, emails, focusPlans, kpis, leaders, llmCalls, mailIn, meetings, people, verdicts } from '../db/schema.ts';
 import { confirmationPoints, leaderMustConfirm } from './confirm.ts';
+import { draftGap } from './k2.ts';
 import { historyForLeader } from './trust.ts';
 import { kpiStatus } from './k1.ts';
 import { letterHits, meetingHits, readingForLetter, replayWeek, trustOffers, type FlowRule, type HistoryRow } from './replay.ts';
@@ -61,7 +62,7 @@ export interface Desk {
 
 export interface DeskInput {
   accepted: boolean;
-  decisions: { id: string; status: string; summary: string; replyName: string; createdAt: string; category: string }[];
+  decisions: { id: string; status: string; summary: string; replyName: string; createdAt: string; category: string; draft?: string }[];
   verdicts: { id: string; kind: string; category: string; summary: string; basis: string; createdAt: string; area?: string }[];
   letters: { fromName: string; fromEmail: string; subject: string; body: string; received: string; reading?: { area: string; value: number; unit: string; others: boolean } | null }[];
   meetings: { summary: string; minutes: number }[];
@@ -121,13 +122,14 @@ export function buildDesk(input: DeskInput): Desk {
     const right = person && named ? input.authorities.find((row) => row.personId === person.id && row.area.trim().toLowerCase() === named) : undefined;
     const rows = [letter ? `${letter.fromName}, ${dateWords(letter.received)}: ${letter.subject}` : decision.summary];
     if (right && person) rows.push(`Полномочие ${person.name}: ${right.area} ${right.limit}${right.unit === '—' ? '' : ` ${right.unit}`}`);
+    const gap = draftGap(decision.draft ?? '');
     work.push({
       id: decision.id,
       title: shown(`Решите: ${decision.summary}`),
       wait: decision.createdAt ? `Ждёт с ${dateWords(decision.createdAt)}` : '',
       minutes: '',
       kind: 'decision',
-      lines: [],
+      lines: gap ? [{ id: `${decision.id}:gap`, title: 'В черновике пропуск. Допишите его перед утверждением.' }] : [],
       origin: made('k2', 'Разбор почты', rows.filter(Boolean).join('. '), howModel(input.calls, 'k2', 'просьба выше полномочия этого человека'), rows),
     });
   }
@@ -326,6 +328,7 @@ export async function deskForLeader(db: Db, leaderId: string, series: { title: s
       replyName: row.replyName,
       createdAt: row.createdAt.toISOString(),
       category: verdictByLetter.get(row.id) ?? '',
+      draft: row.draft,
     })),
     verdicts: verdictRows.map((row) => ({
       id: row.id,

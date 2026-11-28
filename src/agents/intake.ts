@@ -9,7 +9,7 @@ import { staffFromVerdict } from './dependence.ts';
 import { kpiStatus, personAddresses } from './k1.ts';
 import { loadAudienceState, personInAudience } from './audience.ts';
 import { amountBlocksRule, breachesFromAnswer, confirmationPoints, normalizeUnit, unitInText } from './confirm.ts';
-import { cardText, chainKey, enforce, failedRuling, judgeLetter, letterPrompt, rightRuling, type ModelVerdict, type Ruled } from './k2.ts';
+import { approvalBlock, cardText, chainKey, enforce, failedRuling, judgeLetter, letterPrompt, rightRuling, type ModelVerdict, type Ruled } from './k2.ts';
 import { callJson, withLlmScope, type JsonSchema } from '../llm.ts';
 import { externalContext, judgeWithTools, k2Context, stepsWords } from './k2-tools.ts';
 import { readHistory } from './dependence.ts';
@@ -477,6 +477,8 @@ export async function applyLeaderAction(db: Db, leaderId: string, action: string
   }
   if (action === 'approve') {
     const draft = decision.draft.replace(/\n*По вашей правке:[\s\S]*$/u, '').trim();
+    const blocked = approvalBlock(draft);
+    if (blocked) return blocked;
     await deliverReply(decision.replyName, decision.replyTo, decision.subject, draft);
     await db.update(decisions).set({ status: 'исполнено', draft, pendingRule: '' }).where(eq(decisions.id, decision.id));
     await recordAct(db, {

@@ -1289,6 +1289,7 @@ function WorkCard({
   return (
     <Card>
       <p className="font-semibold">{item.title}</p>
+      {item.kind === 'decision' && item.lines.length ? <p className="mt-1 text-sm">{item.lines.map((line) => line.title).join(' ')}</p> : null}
       {item.wait ? <p className="mt-1 text-sm text-[#5d6878]">{item.wait}</p> : null}
       {item.minutes ? <p className="text-sm text-[#5d6878]">{item.minutes}</p> : null}
       <Origin origin={item.origin} onOpen={onOpen} />
