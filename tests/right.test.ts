@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { enforce, rightRuling, type ModelVerdict } from '../src/agents/k2.ts';
-import { letterHits, replayWeek, type FlowRule, type RightReading } from '../src/agents/replay.ts';
+import { grantReading, letterHits, replayWeek, type FlowRule, type RightReading } from '../src/agents/replay.ts';
 
 const discount: FlowRule = {
   kind: 'полномочие',
@@ -71,6 +71,19 @@ describe('принятое право только по своему предм�
     expect(hit('olga@example', 'Скидка 7% и отсрочка оплаты 60 дней', { area: 'скидка', value: 7, unit: '%', others: true }, [discount])).toBeNull();
     const asked = enforce(answer({ другие_просьбы: 'да' }), 'Скидка 7% и отсрочка оплаты 60 дней', ['деньги и бюджеты'], [], null);
     expect(asked.ask).toBe(true);
+  });
+
+  it('одного «целиком да» мало: область и предел сравнивает код', () => {
+    const wholeYes = { area: 'нет', value: 4, unit: '%', whole: 'да' };
+    expect(letterHits({ fromEmail: 'olga@example', subject: 'Можно увеличить бюджет на 4%?', body: '' }, [discount], grantReading(wholeYes))).toBeNull();
+    const otherArea = { area: 'бюджет', value: 4, unit: '%', whole: 'да' };
+    expect(letterHits({ fromEmail: 'olga@example', subject: 'Можно увеличить бюджет на 4%?', body: '' }, [discount], grantReading(otherArea))).toBeNull();
+    const over = { area: 'скидка', value: 12, unit: '%', whole: 'да' };
+    expect(letterHits({ fromEmail: 'olga@example', subject: 'Скидка 12%', body: '' }, [discount], grantReading(over))).toBeNull();
+    const notWhole = { area: 'скидка', value: 7, unit: '%', whole: 'нет' };
+    expect(letterHits({ fromEmail: 'olga@example', subject: 'Скидка 7% и отсрочка', body: '' }, [discount], grantReading(notWhole))).toBeNull();
+    const fits = grantReading({ area: 'скидка', value: 7, unit: '%', whole: 'да' });
+    expect(letterHits({ fromEmail: 'olga@example', subject: 'Клиент просит скидку 7%', body: '' }, [discount], fits)?.effect).toBe('сам');
   });
 
   it('индекс покрывает право только по разбору', () => {

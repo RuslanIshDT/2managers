@@ -13,7 +13,24 @@ import { applyCheckResult, approvalBlock, askDraftCheck, cardText, chainKey, dra
 import { callJson, withLlmScope, type JsonSchema } from '../llm.ts';
 import { externalContext, gatheredFacts, judgeWithTools, k2Context, stepsWords } from './k2-tools.ts';
 import { readHistory } from './dependence.ts';
-import { letterHits, type FlowRule } from './replay.ts';
+import { grantReading, letterHits, type FlowRule } from './replay.ts';
+import { askRight } from './right.ts';
+
+async function tryGranted(leaderId: string, letter: { id: string; fromEmail: string; subject: string; body: string }, rules: FlowRule[]): Promise<Ruled | null> {
+  const own = rules.filter((rule) => rule.kind === 'полномочие' && rule.effect === 'сам' && rule.fromEmail.toLowerCase() === letter.fromEmail.toLowerCase() && rule.area.trim());
+  if (!own.length) return null;
+  try {
+    const answer = await withLlmScope(
+      { agent: 'right', leaderId, operationId: `right:${leaderId}:${letter.id}:${Date.now()}`, title: 'Принятое право' },
+      () => askRight(letter, own),
+    );
+    const granted = letterHits(letter, own, grantReading(answer));
+    return granted?.kind === 'полномочие' ? rightRuling(granted) : null;
+  } catch (error) {
+    console.error('Проверка права не удалась', letter.id, error instanceof Error ? error.message : error);
+    return null;
+  }
+}
 
 async function reviewDraft(leaderId: string, id: string, letter: string, facts: string, draft: string): Promise<DraftCheck> {
   if (!draft.trim()) return { checked: true, draft, unconfirmed: [], note: '' };
@@ -171,6 +188,7 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
       });
       const prior = latestDecision(decisionRows, key, letter.id);
       let ruled: Ruled;
+      let byRight = false;
       let named = { area: '', value: '', unit: '', others: '' };
       let facts = leaderRow.profile;
       const covered = letterHits(letter, authority);
@@ -206,6 +224,11 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
           deferred += 1;
           continue;
         } else {
+          const grantedNow = await tryGranted(leaderId, letter, authority);
+          if (grantedNow) {
+            ruled = grantedNow;
+            byRight = true;
+          } else {
           const ctx = inside && person
             ? k2Context(person, { authorities: authRows, kpi: kpiRows, tasks: taskRows, history, mail: pastMail, revisions: edits, people: peopleList })
             : externalContext({ name: letter.fromName, email: letter.fromEmail }, { mail: pastMail, revisions: edits, people: peopleList });
@@ -263,22 +286,16 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
           ruled = judged.model
             ? enforce(judged.model, letterText, points, breaches, prior, changes, staff, letter.fromEmail, audiences, letter.fromName, audienceState.built, persons)
             : failedRuling(letterText, judged.error);
-          if (judged.model) {
-            const granted = letterHits(letter, authority, {
-              area: named.area,
-              value: Number(named.value),
-              unit: named.unit,
-              others: named.others !== 'нет',
-            });
-            if (granted?.kind === 'полномочие') ruled = rightRuling(granted);
-          }
           if (!judged.model && changes.length) ruled = { ...ruled, summary: `Условия изменились: ${changeWords(changes)}. ${ruled.summary}` };
           if (steps) ruled = { ...ruled, context: [ruled.context, steps].filter(Boolean).join('\n') };
           if (changes.length && ruled.ask) await supersede(db, leaderId, key, letter.id, decisionRows);
+          }
         }
       }
       ruled = { ...ruled, draft: finishDraft(applyRevision(ruled.draft, ruled.category, edits), letterText, edits, inside) };
-      const check = await reviewDraft(leaderId, letter.id, letterText, facts, ruled.draft);
+      const check = byRight
+        ? { checked: true, draft: ruled.draft, unconfirmed: [] as string[], note: '' }
+        : await reviewDraft(leaderId, letter.id, letterText, facts, ruled.draft);
       ruled = { ...ruled, draft: check.draft };
       ruled = keepForLeader(ruled, check);
 
@@ -487,13 +504,6 @@ export async function rejudgeWaiting(db: Db, leaderId: string, only: string[] = 
         others: judged.verdict.другие_просьбы === 'да' || judged.verdict.другие_просьбы === 'нет' ? judged.verdict.другие_просьбы : '',
       };
       ruled = enforce(judged.verdict, letterText, points, breaches, null, [], staff, letter.fromEmail, audienceState.audiences, letter.fromName, audienceState.built, persons);
-      const granted = letterHits({ fromEmail: letter.fromEmail, subject: letter.subject, body: letter.body }, authority, {
-        area: named.area,
-        value: Number(named.value),
-        unit: named.unit,
-        others: named.others !== 'нет',
-      });
-      if (granted?.kind === 'полномочие') ruled = rightRuling(granted);
       if (judged.steps.length) {
         facts = gatheredFacts(ctx, judged.steps, leaderRow.profile);
         ruled = { ...ruled, context: [ruled.context, stepsWords(judged.steps)].filter(Boolean).join('\n') };

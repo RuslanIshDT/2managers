@@ -338,6 +338,7 @@ export async function oneOnOneForDay(
         dueOn: row.dueOn,
         status: row.status,
         closedAt: '',
+        createdAt: '',
       }));
   return oneOnOneBrief(
     {

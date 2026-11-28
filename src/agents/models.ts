@@ -9,6 +9,7 @@ export const MODEL_AGENTS = [
   { id: 'one-on-one', name: 'К встрече один на один', unit: 'сводка к встрече' },
   { id: 'audience', name: 'Кому относится пункт', unit: 'разбор пунктов' },
   { id: 'draft-check', name: 'Сверка черновика', unit: 'сверка черновика' },
+  { id: 'right', name: 'Принятое право', unit: 'проверка права' },
   { id: 'k15', name: 'Тип встреч', unit: 'разбор серий' },
   { id: 'accuracy', name: 'Точность писем', unit: 'разбор одного письма' },
   { id: 'protocol', name: 'Протокол встречи', unit: 'протокол' },

@@ -218,6 +218,14 @@ export function authorityCovers(rule: FlowRule, email: string, reading: RightRea
   return Number.isFinite(reading.value) && reading.value <= limit;
 }
 
+// Короткий вопрос о праве. «Целиком — да» само по себе право не включает: область должна совпасть, единица — та же, число — не выше предела.
+export function grantReading(answer: { area: string; value: number; unit: string; whole: string } | null): RightReading | null {
+  if (!answer || answer.whole !== 'да') return null;
+  if (!answer.area.trim() || answer.area.trim().toLowerCase() === 'нет') return null;
+  if (!Number.isFinite(answer.value)) return null;
+  return { area: answer.area, value: answer.value, unit: answer.unit, others: false };
+}
+
 export function readingOf(verdict: { area: string; value: string; unit: string; others: string } | null | undefined): RightReading | null {
   if (!verdict || verdict.others !== 'нет' || !verdict.area.trim()) return null;
   const value = Number(String(verdict.value).replace(/\s/g, '').replace(',', '.'));
