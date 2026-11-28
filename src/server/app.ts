@@ -329,6 +329,19 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     return saved;
   });
 
+  const feedQuery = z.object({
+    offset: z.coerce.number().int().min(0).max(10000).optional(),
+    kind: z.string().max(40).optional(),
+  });
+
+  app.get('/api/feed', async (request, reply) => {
+    const leader = await currentLeader(request);
+    if (!leader) return reply.code(401).send({ error: 'Нужен вход' });
+    const parsed = feedQuery.safeParse(request.query);
+    if (!parsed.success) return reply.code(400).send({ error: 'Некорректный запрос' });
+    return requestFeed(deps.db, leader.id, { offset: parsed.data.offset ?? 0, kind: parsed.data.kind ?? '' });
+  });
+
   app.get('/api/cabinet', async (request, reply) => {
     const leader = await currentLeader(request);
     if (!leader) return reply.code(401).send({ error: 'Нужен вход' });

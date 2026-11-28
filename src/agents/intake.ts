@@ -1,6 +1,6 @@
 // Письмо из ящика → разбор почты (внутр. или внеш.) → карточка руководителю, ответ, пересылка, сводка или без ответа.
 import { randomUUID } from 'node:crypto';
-import { and, asc, count, desc, eq, ne } from 'drizzle-orm';
+import { and, asc, count, eq, ne } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
 import { authorities, decisions, emails, kpis, leaderActs, leaders, mailIn, people, revisions, tasks, verdicts } from '../db/schema.ts';
 import { mailConfig, sendMail, type MailboxLetter } from '../mail.ts';
@@ -11,6 +11,7 @@ import { loadAudienceState, personInAudience } from './audience.ts';
 import { amountBlocksRule, breachesFromAnswer, confirmationPoints, normalizeUnit, unitInText } from './confirm.ts';
 import { applyCheckResult, approvalBlock, askDraftCheck, cardText, chainKey, draftGap, enforce, failedRuling, keepForLeader, judgeLetter, letterForCheck, letterPrompt, rightRuling, type DraftCheck, type ModelVerdict, type Ruled } from './k2.ts';
 import { callJson, withLlmScope, type JsonSchema } from '../llm.ts';
+import { assembleFeed, prepareFeed } from './feed.ts';
 import { externalContext, gatheredFacts, judgeWithTools, k2Context, stepsWords } from './k2-tools.ts';
 import { readHistory } from './dependence.ts';
 import { grantReading, letterHits, type FlowRule } from './replay.ts';
@@ -849,29 +850,60 @@ export function hideMailbox(text: string, mailbox: string): string {
   return next.replace(/[ \t]{2,}/g, ' ').trim();
 }
 
-export async function requestFeed(db: Db, leaderId: string) {
+export async function requestFeed(db: Db, leaderId: string, options: { offset?: number; kind?: string } = {}) {
   await dropOwnMailbox(db, leaderId);
   const mailbox = mailConfig()?.user ?? '';
-  const [hidden] = await db
-    .select({ n: count() })
-    .from(verdicts)
-    .where(and(eq(verdicts.leaderId, leaderId), eq(verdicts.kind, 'не_из_отдела')));
-  const rows = await db
-    .select()
-    .from(verdicts)
-    .where(and(eq(verdicts.leaderId, leaderId), ne(verdicts.kind, 'не_из_отдела')))
-    .orderBy(desc(verdicts.createdAt))
-    .limit(20);
-  return {
-    outside: Number(hidden?.n ?? 0),
-    items: rows.map((row) => ({
-      id: row.id,
-      kind: row.kind,
-      category: row.category,
-      summary: hideMailbox(row.summary, mailbox),
-      basis: hideMailbox(row.basis, mailbox),
-    })),
-  };
+  const [hidden, verdictRows, inboxRows, catalogRows, decisionRows] = await Promise.all([
+    db.select({ n: count() }).from(verdicts).where(and(eq(verdicts.leaderId, leaderId), eq(verdicts.kind, 'не_из_отдела'))),
+    db
+      .select({
+        id: verdicts.id,
+        leaderId: verdicts.leaderId,
+        messageId: verdicts.messageId,
+        chainKey: verdicts.chainKey,
+        kind: verdicts.kind,
+        category: verdicts.category,
+        summary: verdicts.summary,
+        basis: verdicts.basis,
+        createdAt: verdicts.createdAt,
+      })
+      .from(verdicts)
+      .where(eq(verdicts.leaderId, leaderId)),
+    db
+      .select({
+        leaderId: mailIn.leaderId,
+        messageId: mailIn.messageId,
+        syntheticId: mailIn.syntheticId,
+        received: mailIn.received,
+        fromName: mailIn.fromName,
+        subject: mailIn.subject,
+      })
+      .from(mailIn)
+      .where(eq(mailIn.leaderId, leaderId)),
+    db
+      .select({
+        leaderId: emails.leaderId,
+        externalId: emails.externalId,
+        received: emails.received,
+        fromName: emails.fromName,
+        subject: emails.subject,
+      })
+      .from(emails)
+      .where(eq(emails.leaderId, leaderId)),
+    db
+      .select({
+        id: decisions.id,
+        leaderId: decisions.leaderId,
+        status: decisions.status,
+        replyName: decisions.replyName,
+        draft: decisions.draft,
+      })
+      .from(decisions)
+      .where(eq(decisions.leaderId, leaderId)),
+  ]);
+  const prepared = prepareFeed(leaderId, { verdicts: verdictRows, inbox: inboxRows, catalog: catalogRows, decisions: decisionRows }, (text) => hideMailbox(text, mailbox));
+  const page = assembleFeed(prepared, { offset: options.offset ?? 0, kind: options.kind || undefined });
+  return { outside: Number(hidden[0]?.n ?? 0), ...page };
 }
 
 export async function deliverReply(name: string, email: string, subject: string, draft: string) {

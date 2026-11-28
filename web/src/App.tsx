@@ -3,6 +3,7 @@ import { ConnectionFields, LeadersPanel } from './leaders.tsx';
 import { rememberChoiceVisible } from './decision-ui.ts';
 import { FlowRules, type FlowRuleView } from './flow-rules.tsx';
 import { helperIdForName } from '../../src/agents/agent-names.ts';
+import { reminderLabel } from '../../src/agents/feed.ts';
 import { splitPreview, workGroups } from '../../src/agents/home-groups.ts';
 import { Button } from './components/ui/button.tsx';
 import { Card } from './components/ui/card.tsx';
@@ -46,6 +47,19 @@ interface FeedItem {
   category: string;
   summary: string;
   basis: string;
+  at: string;
+  fromName: string;
+  subject: string;
+  sentTo: string;
+  sentText: string;
+  reminders: { at: string }[];
+}
+
+interface FeedView {
+  items: FeedItem[];
+  outside: number;
+  counts: { kind: string; n: number }[];
+  more: boolean;
 }
 
 interface StaffCard {
@@ -164,7 +178,7 @@ interface Cabinet {
     trackerQueue: string;
   };
   department: { errors: string[]; people: DepartmentPerson[] };
-  feed: { items: FeedItem[]; outside: number };
+  feed: FeedView;
   week: WeekScene;
   focus: FocusScene;
   mirror: MirrorScene;
@@ -242,7 +256,7 @@ const SECTIONS: { id: Section; label: string }[] = [
   { id: 'home', label: 'Главная' },
   { id: 'department', label: 'Отдел' },
   { id: 'flow', label: 'Поток' },
-  { id: 'feed', label: 'Лента' },
+  { id: 'feed', label: 'Разбор почты' },
   { id: 'helper', label: 'Помощник' },
   { id: 'docs', label: 'Документация' },
   { id: 'settings', label: 'Настройки' },
@@ -653,26 +667,7 @@ export function App() {
           </p>
         </>
       ) : null}
-      {section === 'feed' ? (
-      <Card className="mb-4">
-        <h2 className="mb-2 text-lg font-semibold">Что помощник сделал сам</h2>
-        {(cabinet?.feed.outside ?? 0) > 0 ? <p className="mb-3 text-sm text-[#5d6878]">Не из отдела: {cabinet?.feed.outside}</p> : null}
-        {cabinet && cabinet.feed.items.length ? (
-          <ul className="grid gap-2 text-sm">
-            {cabinet.feed.items.map((item) => (
-              <li key={item.id}>
-                <b>{kindLabel(item.kind)}</b> · {categoryWords(item.category)}
-                <span className="block">{cleanDots(item.summary)}</span>
-                <span className="block text-[#5d6878]">{cleanDots(item.basis)}</span>
-                <Origin origin={cabinet.desk.feed.find((row) => row.id === item.id)?.origin} onOpen={openHelper} />
-              </li>
-            ))}
-          </ul>
-        ) : cabinet?.feed.outside ? null : (
-          <p className="text-sm text-[#5d6878]">Пока пусто. Письма подчинённых читаются из ящика, не из файла.</p>
-        )}
-      </Card>
-      ) : null}
+      {section === 'feed' && cabinet ? <MailJournal feed={cabinet.feed} origins={cabinet.desk.feed} onOpen={openHelper} /> : null}
       {section === 'helper' ? <Helpers cards={cabinet?.desk.helpers ?? []} /> : null}
       {section === 'docs' ? <Guide text={guide} cards={cabinet?.desk.helpers ?? []} onOpen={openHelper} /> : null}
       {section === 'tasks' ? (
@@ -2005,6 +2000,106 @@ function seriesKindWords(kind: string): string {
   if (kind === 'внешняя') return 'клиенты и партнёры';
   if (kind === 'стратегия') return 'стратегия и цели';
   return kind;
+}
+
+function MailJournal({ feed, origins, onOpen }: { feed: FeedView; origins: { id: string; origin: Origin }[]; onOpen: (helper: string) => void }) {
+  const [kind, setKind] = useState('');
+  const [items, setItems] = useState(feed.items);
+  const [counts, setCounts] = useState(feed.counts);
+  const [more, setMore] = useState(feed.more);
+  const [outside, setOutside] = useState(feed.outside);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState('');
+
+  useEffect(() => {
+    setKind('');
+    setItems(feed.items);
+    setCounts(feed.counts);
+    setMore(feed.more);
+    setOutside(feed.outside);
+  }, [feed]);
+
+  async function load(nextKind: string, offset: number) {
+    setBusy(true);
+    setNote('');
+    try {
+      const params = new URLSearchParams({ offset: String(offset) });
+      if (nextKind) params.set('kind', nextKind);
+      const page = await api<FeedView>(`/api/feed?${params}`);
+      setKind(nextKind);
+      setItems((prev) => (offset > 0 ? [...prev, ...page.items] : page.items));
+      setCounts(page.counts);
+      setMore(page.more);
+      setOutside(page.outside);
+    } catch (err) {
+      setNote(err instanceof Error ? err.message : 'Не удалось загрузить');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card className="mb-4">
+      <h2 className="mb-2 text-lg font-semibold">Разбор почты</h2>
+      {counts.length ? (
+        <div className="mb-3 flex flex-wrap gap-1.5">
+          {counts.map((item) => (
+            <button
+              key={item.kind}
+              type="button"
+              className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${kind === item.kind ? 'bg-[#1c2430] text-white' : 'bg-[#eef1f5] text-[#1c2430]'}`}
+              onClick={() => load(kind === item.kind ? '' : item.kind, 0)}
+            >
+              {kindLabel(item.kind)} {item.n}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {outside > 0 ? <p className="mb-3 text-sm text-[#5d6878]">Не из отдела: {outside}</p> : null}
+      {items.length ? (
+        <ul className="grid gap-3 text-sm">
+          {items.map((item) => (
+            <li key={item.id} className="border-b border-[#e6ebf2] pb-3 last:border-0">
+              <p className="text-[#5d6878]">{[dayWords(item.at), item.fromName, item.subject].filter(Boolean).join(' · ')}</p>
+              <p className="mt-1">
+                <b>{kindLabel(item.kind)}</b>
+                {item.category ? ` · ${categoryWords(item.category)}` : ''}
+              </p>
+              {item.summary ? <p className="mt-1">{cleanDots(item.summary)}</p> : null}
+              {item.basis ? <p className="text-[#5d6878]">{cleanDots(item.basis)}</p> : null}
+              {item.sentTo || item.sentText ? (
+                <details className="mt-1">
+                  <summary>Кому: {item.sentTo || 'получатель не назван'}</summary>
+                  {item.sentText ? <p className="mt-2 whitespace-pre-wrap">{item.sentText}</p> : null}
+                </details>
+              ) : null}
+              {item.reminders.length ? (
+                <details className="mt-1">
+                  <summary>{reminderLabel(item.reminders.length)}</summary>
+                  <ul className="mt-1 grid gap-1 text-[#5d6878]">
+                    {item.reminders.map((reminder, index) => (
+                      <li key={`${reminder.at}-${index}`}>{dayWords(reminder.at)}</li>
+                    ))}
+                  </ul>
+                </details>
+              ) : null}
+              <Origin origin={origins.find((row) => row.id === item.id)?.origin} onOpen={onOpen} />
+            </li>
+          ))}
+        </ul>
+      ) : counts.length ? (
+        <p className="text-sm text-[#5d6878]">Таких разборов нет.</p>
+      ) : outside ? null : (
+        <p className="text-sm text-[#5d6878]">Пока пусто. Письма подчинённых читаются из ящика, не из файла.</p>
+      )}
+      {more ? (
+        <Button className="mt-3" type="button" variant="outline" disabled={busy} onClick={() => load(kind, items.length)}>
+          {busy ? 'Загрузка…' : 'Показать ещё'}
+        </Button>
+      ) : null}
+      {note ? <p className="mt-2 text-sm text-[#a3302a]">{note}</p> : null}
+    </Card>
+  );
 }
 
 function kindLabel(kind: string): string {
