@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState, type FormEvent } from 'react';
 import { ConnectionFields, LeadersPanel } from './leaders.tsx';
 import { rememberChoiceVisible } from './decision-ui.ts';
+import { FlowRules, type FlowRuleView } from './flow-rules.tsx';
 import { splitPreview, workGroups } from '../../src/agents/home-groups.ts';
 import { Button } from './components/ui/button.tsx';
 import { Card } from './components/ui/card.tsx';
@@ -73,6 +74,8 @@ interface WeekScene {
   remaining: string[];
   offers: string[];
   rules: number;
+  rulesView?: FlowRuleView;
+  acceptedOn?: string;
   askPercent: number;
   waitingHours: number;
   staff: StaffCard | null;
@@ -602,6 +605,10 @@ export function App() {
             window.setTimeout(() => document.getElementById(`helper-${helper}`)?.scrollIntoView({ block: 'start' }), 0);
           }}
           onTalk={() => setSection('department')}
+          onShowRules={() => {
+            setSection('flow');
+            window.setTimeout(() => document.getElementById('flow-rules')?.scrollIntoView({ block: 'start' }), 0);
+          }}
           onRefresh={async () => {
             const fresh = await api<Cabinet>('/api/cabinet');
             setCabinet(fresh);
@@ -1278,6 +1285,7 @@ function HomeDesk({
   onOpen,
   onTalk,
   onRefresh,
+  onShowRules,
 }: {
   desk: Desk | undefined;
   pending: boolean;
@@ -1288,11 +1296,12 @@ function HomeDesk({
   onOpen: (helper: string) => void;
   onTalk: () => void;
   onRefresh: () => Promise<void>;
+  onShowRules: () => void;
 }) {
   if (!desk) return null;
   const groups = workGroups(desk.work);
   const card = (item: WorkItem) => (
-    <WorkCard key={item.id} item={item} pending={pending} onDecision={onDecision} onAccept={onAccept} onSeries={onSeries} onOpen={onOpen} onTalk={onTalk} onRefresh={onRefresh} />
+    <WorkCard key={item.id} item={item} pending={pending} onDecision={onDecision} onAccept={onAccept} onSeries={onSeries} onOpen={onOpen} onTalk={onTalk} onRefresh={onRefresh} onShowRules={onShowRules} />
   );
   return (
     <>
@@ -1345,6 +1354,7 @@ function WorkCard({
   onOpen,
   onTalk,
   onRefresh,
+  onShowRules,
 }: {
   item: WorkItem;
   pending: boolean;
@@ -1354,6 +1364,7 @@ function WorkCard({
   onOpen: (helper: string) => void;
   onTalk: () => void;
   onRefresh: () => Promise<void>;
+  onShowRules: () => void;
 }) {
   const [editOpen, setEditOpen] = useState(false);
   const [edit, setEdit] = useState('');
@@ -1552,6 +1563,11 @@ function WorkCard({
             Открыть в отделе
           </Button>
         ) : null}
+        {item.kind === 'rules' ? (
+          <Button type="button" variant="outline" onClick={onShowRules}>
+            Посмотреть правила
+          </Button>
+        ) : null}
         {item.kind === 'right' || item.kind === 'rules' ? (
           <Button type="button" disabled={pending} onClick={onAccept}>
             Принять
@@ -1658,17 +1674,9 @@ function Week({
             : 'Правила недели ещё не приняты.'}
         </p>
       )}
-      {mode === 'flow'
-        ? week.offers.map((offer) => (
-            <p key={offer} className="mt-3 text-sm">
-              {offer}
-            </p>
-          ))
-        : null}
+      {mode === 'flow' ? <FlowRules view={week.rulesView} acceptedOn={week.accepted ? week.acceptedOn ?? '' : ''} /> : null}
       {mode === 'flow' ? (
-        week.accepted ? (
-          <p className="mt-3 text-sm text-[#1b7a45]">Правила приняты ({week.rules}).</p>
-        ) : (
+        week.accepted ? null : (
           <Button className="mt-3" type="button" onClick={onAccept} disabled={pending}>
             {pending ? 'Запись…' : 'Принять правила недели'}
           </Button>

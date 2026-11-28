@@ -9,6 +9,7 @@ import { staffFromVerdict, type StaffCard } from './dependence.ts';
 import { historyForLeader } from './trust.ts';
 import { audienceEmails, loadAudiences } from './audience.ts';
 import { confirmationPoints, leaderMustConfirm } from './confirm.ts';
+import { acceptedLine, flowRuleList } from './flow-list.ts';
 import {
   askShare,
   readingForLetter,
@@ -43,14 +44,26 @@ export async function listFlowRules(db: Db, leaderId: string): Promise<FlowRule[
 
 export async function weekScene(db: Db, leaderId: string) {
   await releaseDeferred(db, leaderId);
-  const [history, ruleRows, verdictRows, decisionRows, letterRows, meetingRows, inbox] = await Promise.all([
+  const [history, ruleRows, verdictRows, decisionRows, letterRows, meetingRows, inbox, personRows, stampRows] = await Promise.all([
     historyOf(db, leaderId),
     listFlowRules(db, leaderId),
     db.select().from(verdicts).where(eq(verdicts.leaderId, leaderId)),
     db.select().from(decisions).where(eq(decisions.leaderId, leaderId)),
     db.select().from(emails).where(eq(emails.leaderId, leaderId)),
     db.select().from(meetings).where(eq(meetings.leaderId, leaderId)),
-    db.select({ syntheticId: mailIn.syntheticId, messageId: mailIn.messageId }).from(mailIn).where(eq(mailIn.leaderId, leaderId)),
+    db
+      .select({
+        syntheticId: mailIn.syntheticId,
+        messageId: mailIn.messageId,
+        fromName: mailIn.fromName,
+        fromEmail: mailIn.fromEmail,
+        subject: mailIn.subject,
+        body: mailIn.body,
+      })
+      .from(mailIn)
+      .where(eq(mailIn.leaderId, leaderId)),
+    db.select().from(people).where(eq(people.leaderId, leaderId)),
+    db.select({ acceptedAt: rules.acceptedAt }).from(rules).where(eq(rules.leaderId, leaderId)),
   ]);
   const accepted = ruleRows.length > 0;
   const readings = verdictRows.map((row) => ({
@@ -75,6 +88,40 @@ export async function weekScene(db: Db, leaderId: string) {
   );
   await closeReturned(db, decisionRows, verdictRows);
   const offers = trustOffers(history, await currentRights(db, leaderId));
+  const proposal = accepted ? ruleRows : await ownProposal(db, leaderId);
+  const flowLetters = letterRows.map((row) => ({
+    id: row.externalId,
+    fromName: row.fromName,
+    fromEmail: row.fromEmail,
+    subject: row.subject,
+    body: row.body,
+    reading: readingForLetter(row.externalId, readings, inbox),
+  }));
+  const knownLetters = new Set(flowLetters.map((row) => row.id));
+  for (const row of inbox) {
+    if (!row.syntheticId || knownLetters.has(row.syntheticId)) continue;
+    knownLetters.add(row.syntheticId);
+    flowLetters.push({
+      id: row.syntheticId,
+      fromName: row.fromName,
+      fromEmail: row.fromEmail,
+      subject: row.subject,
+      body: row.body,
+      reading: readingForLetter(row.syntheticId, readings, inbox),
+    });
+  }
+  const rulesView = flowRuleList({
+    rules: proposal,
+    letters: flowLetters,
+    meetings: meetingRows.map((row) => ({ summary: row.summary, minutes: row.minutes })),
+    people: personRows.map((row) => ({
+      id: row.externalId,
+      name: row.name,
+      emails: [row.email, row.extraEmail].map((value) => value.trim()).filter(Boolean),
+    })),
+    offers,
+  });
+  const acceptedOn = accepted ? acceptedLine(earliestIso(stampRows)) : '';
   const asks = verdictRows.filter((row) => row.kind === 'нужен_руководитель');
   const asked = [...asks].reverse().find((row) => row.recommendation.trim()) ?? asks.at(-1);
   const staff: StaffCard | null = asked
@@ -105,6 +152,8 @@ export async function weekScene(db: Db, leaderId: string) {
     remaining: picture.remaining,
     offers: offers.map((offer) => offer.title),
     rules: ruleRows.length,
+    rulesView,
+    acceptedOn,
     askPercent: askShare(verdictRows.map((row) => row.kind)),
     waitingHours: waitingHours(decisionRows, clockFor(leaderId).now),
     staff,
@@ -123,6 +172,12 @@ export async function weekScene(db: Db, leaderId: string) {
         };
       }),
   };
+}
+
+function earliestIso(rows: { acceptedAt: Date }[]): string {
+  const times = rows.map((row) => row.acceptedAt.getTime()).filter((time) => Number.isFinite(time));
+  if (!times.length) return '';
+  return new Date(Math.min(...times)).toISOString();
 }
 
 export function freshVerdictKind(
