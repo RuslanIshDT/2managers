@@ -172,15 +172,65 @@ export function checkDepartment(
   return { errors, cards: errors.length ? [] : cards };
 }
 
+export interface PersonSyncRow {
+  externalId: string;
+  position: string;
+  role: string;
+  reportsTo: string;
+}
+
+export function planPeopleSync(
+  current: PersonSyncRow[],
+  incoming: { id: string; name: string; position: string; role: string; reportsTo: string; email: string }[],
+): {
+  insert: { id: string; name: string; position: string; role: string; reportsTo: string; email: string }[];
+  update: { id: string; position: string; role: string; reportsTo: string }[];
+} {
+  const byId = new Map(current.map((row) => [row.externalId, row]));
+  const insert = incoming.filter((person) => !byId.has(person.id));
+  const update = incoming.flatMap((person) => {
+    const row = byId.get(person.id);
+    if (!row) return [];
+    if (row.position === person.position && row.role === person.role && row.reportsTo === person.reportsTo) return [];
+    return [{ id: person.id, position: person.position, role: person.role, reportsTo: person.reportsTo }];
+  });
+  return { insert, update };
+}
+
 export async function loadDepartment(db: Db, leaderId: string, dir = 'data/synthetic') {
-  const data = await loadSynthetic(dir);
+  const data = await loadSynthetic(dir, { profileOptional: true });
   const files = await readDepartment(dir);
   const checked = checkDepartment(data.people, files, await sceneUntil(dir));
   const now = new Date();
+  let added = 0;
   if (checked.errors.length === 0) {
     await db.transaction(async (tx) => {
       await tx.update(people).set({ zone: '', goal: '', leaderGoal: '' }).where(eq(people.leaderId, leaderId));
       const current = await tx.select().from(people).where(eq(people.leaderId, leaderId));
+      const plan = planPeopleSync(
+        current.map((row) => ({ externalId: row.externalId, position: row.position, role: row.role, reportsTo: row.reportsTo })),
+        data.people,
+      );
+      added = plan.insert.length;
+      if (plan.insert.length) {
+        await tx.insert(people).values(
+          plan.insert.map((person) => ({
+            leaderId,
+            externalId: person.id,
+            name: person.name,
+            position: person.position,
+            role: person.role,
+            reportsTo: person.reportsTo,
+            email: person.email,
+          })),
+        );
+      }
+      for (const row of plan.update) {
+        await tx
+          .update(people)
+          .set({ position: row.position, role: row.role, reportsTo: row.reportsTo })
+          .where(and(eq(people.leaderId, leaderId), eq(people.externalId, row.id)));
+      }
       for (const card of checked.cards) {
         const row = current.find((person) => person.externalId === card.personId);
         const file = data.people.find((person) => person.id === card.personId);
@@ -242,7 +292,7 @@ export async function loadDepartment(db: Db, leaderId: string, dir = 'data/synth
     status: checked.errors.length ? 'failed' : 'done',
     detail: checked.errors.length ? checked.errors.join('\n') : `подчинённых: ${checked.cards.length}`,
   });
-  return { errors: checked.errors, loaded: checked.cards.length };
+  return { errors: checked.errors, loaded: checked.cards.length, added };
 }
 
 export function personAddresses(person: { email: string; extraEmail?: string }): string[] {

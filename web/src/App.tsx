@@ -601,7 +601,18 @@ export function App() {
             <Stat label="Встречи" value={counts?.meetings} />
             <Stat label="Задачи" value={counts?.tasks} />
           </div>
-          <Department department={cabinet?.department} origins={cabinet?.desk.people ?? []} onOpen={openHelper} />
+          <Department
+            department={cabinet?.department}
+            origins={cabinet?.desk.people ?? []}
+            onOpen={openHelper}
+            onReload={async () => {
+              const result = await api<{ errors: string[]; loaded: number; added: number }>('/api/department/reload', { method: 'POST', body: '{}' });
+              const fresh = await api<Cabinet>('/api/cabinet');
+              setCabinet(fresh);
+              if (result.errors.length) return result.errors.join(' ');
+              return result.added ? `Из источника добавлено людей: ${result.added}.` : 'Источник совпал с отделом, новых людей нет.';
+            }}
+          />
           <Goals control={cabinet?.control} onOpen={openHelper} />
           <Signals signals={cabinet?.control.signals ?? []} title="Сигналы KPI" onOpen={openHelper} />
           <Matrix rows={cabinet?.focus.matrix ?? []} onOpen={openHelper} />
@@ -1643,15 +1654,40 @@ function Department({
   department,
   origins,
   onOpen,
+  onReload,
 }: {
   department: Cabinet['department'] | undefined;
   origins: { id: string; origin: Origin }[];
   onOpen: (helper: string) => void;
+  onReload?: () => Promise<string>;
 }) {
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
   const people = department?.people ?? [];
   return (
     <section className="mb-4">
-      <h2 className="mb-2 text-lg font-semibold">Отдел</h2>
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-lg font-semibold">Отдел</h2>
+        {onReload ? (
+          <Button
+            type="button"
+            variant="outline"
+            disabled={busy}
+            onClick={() => {
+              setBusy(true);
+              setNote('');
+              onReload()
+                .then(setNote)
+                .catch((err: unknown) => setNote(err instanceof Error ? err.message : 'Источник не обновлён'))
+                .finally(() => setBusy(false));
+            }}
+          >
+            {busy ? 'Обновление…' : 'Обновить из источников'}
+          </Button>
+        ) : null}
+      </div>
+      <p className="mb-3 text-sm text-[#5d6878]">Люди приходят из кадровой системы. Человека, которого в источнике больше нет, система не удаляет.</p>
+      {note ? <p className="mb-3 text-sm">{note}</p> : null}
       {department?.errors.length ? (
         <Card className="mb-3">
           <p className="text-sm text-[#a3302a]">{department.errors.join(' ')}</p>

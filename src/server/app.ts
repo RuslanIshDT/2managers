@@ -12,12 +12,13 @@ import { z } from 'zod';
 import { hashToken, newSessionToken, verifyPassword } from '../auth.ts';
 import type { Db } from '../db/client.ts';
 import { agentModels, agentRuns, emails, flowReports, leaderActs, leaders, mailIn, meetings, operations, people, protocols, revisions, sessions, tasks, telegramClicks } from '../db/schema.ts';
-import { departmentForLeader } from '../agents/k1.ts';
+import { departmentForLeader, loadDepartment } from '../agents/k1.ts';
+import { refreshGoalSection } from '../agents/profile-file.ts';
 import { accuracyView } from '../agents/accuracy.ts';
 import { controlOf, withLeader } from '../agents/control.ts';
 import { approveProtocol, askProtocolEdit, chooseProtocolScope, parseProtocolCallback, protocolCard, rejectProtocol, reviseProtocol, saveProtocolEdit, scopeProtocolByChat } from '../agents/protocol.ts';
 import { costView, type OperationRow } from '../agents/cost.ts';
-import { loadAudienceState } from '../agents/audience.ts';
+import { loadAudienceState, refreshAudiences } from '../agents/audience.ts';
 import { confirmationPoints } from '../agents/confirm.ts';
 import { deskForLeader } from '../agents/desk.ts';
 import { combineMorning, interpretMorning, parseMorningStored, shapeWords, storeMorning } from '../agents/morning.ts';
@@ -298,6 +299,22 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     trackerOrg: z.string().max(200).optional(),
     trackerQueue: z.string().max(200).optional(),
     trackerToken: z.string().max(200).optional(),
+  });
+
+  app.post('/api/department/reload', async (request, reply) => {
+    const leader = await currentLeader(request);
+    if (!leader) return reply.code(401).send({ error: 'Нужен вход' });
+    const dir = join('data', leader.id);
+    let department: { errors: string[]; loaded: number; added: number };
+    try {
+      department = await loadDepartment(deps.db, leader.id, dir);
+    } catch (err) {
+      return reply.code(400).send({ error: 'Источник не прочитан', errors: [err instanceof Error ? err.message : 'сбой'] });
+    }
+    if (department.errors.length) return { errors: department.errors, loaded: 0, added: 0 };
+    await refreshGoalSection(deps.db, leader.id, dir);
+    await refreshAudiences(deps.db, leader.id);
+    return department;
   });
 
   app.post('/api/connections', async (request, reply) => {

@@ -65,6 +65,22 @@ export async function catalogProfile(dir: string): Promise<string | null> {
   return file;
 }
 
+export async function refreshGoalSection(db: Db, leaderId: string, dir: string): Promise<boolean> {
+  let goals: GoalFileRow[] = [];
+  try {
+    goals = parseGoals(await readFile(join(dir, 'goals.csv'), 'utf8'));
+  } catch {
+    return false;
+  }
+  if (goals.length === 0) return false;
+  const [row] = await db.select({ profile: leaders.profile }).from(leaders).where(eq(leaders.id, leaderId));
+  if (!row) return false;
+  const next = applyGoals(row.profile, goals);
+  if (next === row.profile) return false;
+  await db.update(leaders).set({ profile: next }).where(eq(leaders.id, leaderId));
+  return true;
+}
+
 export async function reloadProfiles(db: Db, root = 'data'): Promise<string[]> {
   const rows = await db.select({ id: leaders.id, profile: leaders.profile, profileLocked: leaders.profileLocked }).from(leaders);
   const changed: string[] = [];
