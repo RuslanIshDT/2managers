@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { forceMailAction } from '../src/agents/accuracy.ts';
-import { addresseeHold, audiencesFromAnswer, orgStamp, type OrgMember } from '../src/agents/audience.ts';
+import { addresseeHold, audiencesFromAnswer, audiencesOnFailure, orgStamp, type OrgMember } from '../src/agents/audience.ts';
+import { MODEL_AGENTS } from '../src/agents/models.ts';
 import { enforce, type ModelVerdict } from '../src/agents/k2.ts';
 import { ruleEffect, rulesFromAudit } from '../src/agents/replay.ts';
 
@@ -86,6 +87,45 @@ describe('адресаты пункта профиля', () => {
     );
     expect(forwarded.ask).toBe(true);
     expect(forwarded.basis).toContain(peer.name);
+  });
+
+  it('сбой без списка оставляет ответ начальнику на утверждении, сохранённый список остаётся прежним', () => {
+    const none = audiencesOnFailure(null);
+    expect(none.built).toBe(false);
+    const waiting = enforce(reply, 'Как прошла встреча?', [topic], [], null, [], [], boss.email, none.audiences, boss.name, none.built, [boss, peer]);
+    expect(waiting.ask).toBe(true);
+    expect(waiting.send).toBe(false);
+    expect(waiting.basis).toContain('не построен');
+    const subordinate = { ...peer, role: 'подчинённый', email: 'staff@example', name: 'Илья Сотрудник' };
+    const own = enforce(reply, 'Как прошла встреча?', [topic], [], null, [], [], subordinate.email, none.audiences, subordinate.name, none.built, [boss, subordinate]);
+    expect(own.ask).toBe(false);
+    const forwarded = enforce(
+      { ...reply, действие: 'передать', кому_передать: boss.name },
+      'Просьба',
+      [topic],
+      [],
+      null,
+      [],
+      [{ name: boss.name, email: boss.email }],
+      'other@example',
+      none.audiences,
+      'Кто-то',
+      none.built,
+      [boss],
+    );
+    expect(forwarded.ask).toBe(true);
+    const saved = audiencesFromAnswer({ пункты: [{ пункт: addressed, люди: [boss.name] }] }, [addressed], [boss, peer]);
+    const kept = audiencesOnFailure(saved);
+    expect(kept.built).toBe(true);
+    expect(kept.audiences).toEqual(saved);
+    const still = enforce(reply, 'Как прошла встреча?', [addressed], [], null, [], [], boss.email, kept.audiences, boss.name, kept.built, [boss, peer]);
+    expect(still.ask).toBe(true);
+    expect(still.basis).toContain(addressed);
+    expect(still.basis).not.toContain('не построен');
+    const empty = audiencesOnFailure([{ point: topic, people: [] }]);
+    const free = enforce(reply, 'Как прошла встреча?', [topic], [], null, [], [], boss.email, empty.audiences, boss.name, empty.built, [boss]);
+    expect(free.ask).toBe(false);
+    expect(MODEL_AGENTS.some((agent) => agent.id === 'audience' && agent.name === 'Кому относится пункт')).toBe(true);
   });
 
   it('неизвестное имя отбрасывается, смена должности меняет отпечаток оргструктуры', () => {

@@ -167,9 +167,37 @@ export async function askAudiences(points: string[], members: OrgMember[]): Prom
   return safe.data;
 }
 
-export async function loadAudiences(db: Db, leaderId: string): Promise<PointAudience[]> {
+export function audiencesOnFailure(stored: PointAudience[] | null): { audiences: PointAudience[]; built: boolean } {
+  if (stored) return { audiences: stored, built: true };
+  return { audiences: [], built: false };
+}
+
+// Список не построен: ответ и пересылка человеку организации, который не подчинённый, ждут руководителя.
+export function unbuiltHold(
+  built: boolean,
+  action: string,
+  sender: { name: string; email: string },
+  target: { name: string; email: string } | null,
+  others: { name: string; email: string; role: string }[],
+): { point: string; name: string } | null {
+  if (built) return null;
+  const person = action === 'ответить' ? sender : action === 'передать' ? target : null;
+  if (!person) return null;
+  const email = person.email.trim().toLowerCase();
+  const name = person.name.trim().toLowerCase();
+  const hit = others.find((item) => item.role !== 'подчинённый' && ((email && item.email.toLowerCase() === email) || (!email && name && item.name.toLowerCase() === name)));
+  if (!hit) return null;
+  return { point: 'Список адресатов не построен', name: hit.name };
+}
+
+export async function loadAudienceState(db: Db, leaderId: string): Promise<{ audiences: PointAudience[]; built: boolean }> {
   const [row] = await db.select().from(confirmationAudiences).where(eq(confirmationAudiences.leaderId, leaderId)).limit(1);
-  return audiencesOf(row?.audiences);
+  if (!row) return { audiences: [], built: false };
+  return { audiences: audiencesOf(row.audiences), built: true };
+}
+
+export async function loadAudiences(db: Db, leaderId: string): Promise<PointAudience[]> {
+  return (await loadAudienceState(db, leaderId)).audiences;
 }
 
 export async function refreshAudiences(db: Db, leaderId: string): Promise<'same' | 'updated' | 'failed'> {
@@ -198,6 +226,7 @@ export async function refreshAudiences(db: Db, leaderId: string): Promise<'same'
       audiences = audiencesFromAnswer(data, points, members);
     } catch (err) {
       console.error('Пункты профиля не разобраны', leaderId, err instanceof Error ? err.message : err);
+      // Строка не переписывается: прежний список остаётся. Строки не было — список не построен.
       return 'failed';
     }
   }

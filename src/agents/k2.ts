@@ -2,7 +2,7 @@
 // Код отправляет к руководителю письмо пункта и просьбу выше числового предела полномочия.
 import { z } from 'zod';
 import { callJson, type ChatMessage, type JsonSchema, type ToolSpec } from '../llm.ts';
-import { addresseeHold, personInAudience, type PointAudience } from './audience.ts';
+import { addresseeHold, personInAudience, unbuiltHold, type PointAudience } from './audience.ts';
 import { breachBasis, canonicalCategory, categoryChoices, normalizeUnit, unitInText, type LimitBreach, OTHER } from './confirm.ts';
 import { changeWords, type TermChange } from './terms.ts';
 
@@ -216,6 +216,8 @@ export function enforce(
   senderEmail = '',
   audiences: PointAudience[] = [],
   senderName = '',
+  listBuilt = true,
+  others: { name: string; email: string; role: string }[] = [],
 ): Ruled {
   if (prior && !changes.length) {
     return {
@@ -243,7 +245,10 @@ export function enforce(
   if (toSender) target = null;
   const action: MailDecision = toSender ? 'ответить' : model.действие;
   const sender = { name: senderName, email: senderEmail };
-  const hold = addresseeHold(audiences, action, sender, target) ?? (action === 'руководителю' ? personInAudience(audiences, sender) : null);
+  const hold =
+    unbuiltHold(listBuilt, action, sender, target, others) ??
+    addresseeHold(audiences, action, sender, target) ??
+    (action === 'руководителю' ? personInAudience(audiences, sender) : null);
   if (hold) {
     reasons.push(`${hold.point}: ${hold.name}`);
     category = hold.point;

@@ -143,6 +143,7 @@ interface Cabinet {
   profile: string;
   confirmation?: string;
   audiences?: { point: string; people: string[] }[];
+  audiencesBuilt?: boolean;
   linkCode: string;
   counts: { people: number; emails: number; meetings: number; tasks: number };
   mail: 'configured' | 'missing';
@@ -689,7 +690,7 @@ export function App() {
         <h2 className="mb-2 text-lg font-semibold">Профиль</h2>
         <p className="mb-2 text-sm text-[#5d6878]">Полный профиль руководителя. Ниже — действующие правила: их можно добавить, изменить и удалить. Правило применяется со следующего письма, протокола или утреннего плана.</p>
         {cabinet?.confirmation ? <p className="mb-2 text-sm text-[#a3302a]">{cabinet.confirmation}</p> : null}
-        <div className="whitespace-pre-wrap font-sans text-sm leading-relaxed">{profileShown(cabinet?.profile ?? '', cabinet?.audiences ?? [])}</div>
+        <div className="whitespace-pre-wrap font-sans text-sm leading-relaxed">{profileShown(cabinet?.profile ?? '', cabinet?.audiences ?? [], cabinet?.audiencesBuilt !== false)}</div>
       </Card>
       <ModelsPanel
         data={models}
@@ -1715,17 +1716,21 @@ function plainProfile(text: string): string {
   return text.replace(/^#{1,6}\s+/gm, '').replace(/\*\*/g, '');
 }
 
-function profileShown(text: string, audiences: { point: string; people: string[] }[]): string {
+function profileShown(text: string, audiences: { point: string; people: string[] }[], built = true): string {
   const plain = plainProfile(text);
-  if (!audiences.some((row) => row.people.length)) return plain;
-  return plain
-    .split('\n')
-    .flatMap((line) => {
-      const item = (/^\s*(?:[-*•]|\d+[.)])\s+(.+)$/.exec(line)?.[1] ?? '').trim().replace(/[;,.]+$/, '').trim().toLowerCase();
-      const hit = audiences.find((row) => row.people.length && row.point.trim().toLowerCase() === item);
-      return hit ? [line, `Кому: ${hit.people.join(', ')}`] : [line];
-    })
-    .join('\n');
+  const body = built ? '' : 'Список адресатов не построен.\n';
+  if (!audiences.some((row) => row.people.length)) return `${body}${plain}`;
+  return (
+    body +
+    plain
+      .split('\n')
+      .flatMap((line) => {
+        const item = (/^\s*(?:[-*•]|\d+[.)])\s+(.+)$/.exec(line)?.[1] ?? '').trim().replace(/[;,.]+$/, '').trim().toLowerCase();
+        const hit = audiences.find((row) => row.people.length && row.point.trim().toLowerCase() === item);
+        return hit ? [line, `Кому: ${hit.people.join(', ')}`] : [line];
+      })
+      .join('\n')
+  );
 }
 
 const MATRIX_CELLS = [

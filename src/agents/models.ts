@@ -7,6 +7,7 @@ export const MODEL_AGENTS = [
   { id: 'k4', name: 'Три дела', unit: 'утреннее сообщение' },
   { id: 'morning', name: 'Правило утра', unit: 'разбор правила' },
   { id: 'one-on-one', name: 'К встрече один на один', unit: 'сводка к встрече' },
+  { id: 'audience', name: 'Кому относится пункт', unit: 'разбор пунктов' },
   { id: 'k15', name: 'Тип встреч', unit: 'разбор серий' },
   { id: 'accuracy', name: 'Точность писем', unit: 'разбор одного письма' },
   { id: 'protocol', name: 'Протокол встречи', unit: 'протокол' },

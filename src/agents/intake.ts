@@ -7,7 +7,7 @@ import { mailConfig, sendMail, type MailboxLetter } from '../mail.ts';
 import { sendDecisionCard } from '../telegram.ts';
 import { staffFromVerdict } from './dependence.ts';
 import { kpiStatus, personAddresses } from './k1.ts';
-import { loadAudiences, personInAudience } from './audience.ts';
+import { loadAudienceState, personInAudience } from './audience.ts';
 import { amountBlocksRule, breachesFromAnswer, confirmationPoints, normalizeUnit, unitInText } from './confirm.ts';
 import { cardText, chainKey, enforce, failedRuling, judgeLetter, letterPrompt, rightRuling, type ModelVerdict, type Ruled } from './k2.ts';
 import { callJson, withLlmScope, type JsonSchema } from '../llm.ts';
@@ -125,7 +125,8 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
   let calls = 0;
   let deferred = 0;
 
-  const audiences = await loadAudiences(db, leaderId);
+  const audienceState = await loadAudienceState(db, leaderId);
+  const audiences = audienceState.audiences;
   const clock = clockFor(leaderId);
   const mailbox = mailConfig()?.user ?? '';
   // Адреса руководителя: ящик помощника и адрес из оргструктуры. В «Кому» — письмо ему; только в копии — для сведения.
@@ -244,7 +245,7 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
             };
           }
           ruled = judged.model
-            ? enforce(judged.model, letterText, points, breaches, prior, changes, staff, letter.fromEmail, audiences, letter.fromName)
+            ? enforce(judged.model, letterText, points, breaches, prior, changes, staff, letter.fromEmail, audiences, letter.fromName, audienceState.built, persons)
             : failedRuling(letterText, judged.error);
           if (judged.model) {
             const granted = letterHits(letter, authority, {

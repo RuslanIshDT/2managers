@@ -7,7 +7,7 @@ import { authorities, emailEtalon, emails, kpis, leaders, people, revisions, tas
 import { withLlmScope } from '../llm.ts';
 import { readHistory } from './dependence.ts';
 import { personAddresses } from './k1.ts';
-import { loadAudiences, refreshAudiences } from './audience.ts';
+import { loadAudienceState, refreshAudiences } from './audience.ts';
 import { breachesFromAnswer, confirmationPoints, leaderMustConfirm } from './confirm.ts';
 import { enforce, failedRuling, type Ruled } from './k2.ts';
 import { externalContext, judgeWithTools, k2Context } from './k2-tools.ts';
@@ -117,7 +117,8 @@ export async function runEval(
     db.select().from(revisions).where(eq(revisions.leaderId, leaderId)).orderBy(asc(revisions.createdAt)),
   ]);
   await refreshAudiences(db, leaderId);
-  const audiences = await loadAudiences(db, leaderId);
+  const audienceState = await loadAudienceState(db, leaderId);
+  const audiences = audienceState.audiences;
   const history = await readHistory(`data/${leaderId}`).catch(() => []);
   const etalon = new Map(etalonRows.map((row) => [row.externalId, row]));
   const edits = mailRevisions(revisionRows.map((row) => ({ category: row.category, area: row.area, instead: row.instead })));
@@ -155,7 +156,7 @@ export async function runEval(
         { area: run.verdict.область ?? 'нет', value: run.verdict.число ?? 0, unit: run.verdict.единица ?? '' },
         limits,
       );
-      ruled = enforce(run.verdict, text, points, breaches, null, [], staff, letter.fromEmail, audiences, letter.fromName);
+      ruled = enforce(run.verdict, text, points, breaches, null, [], staff, letter.fromEmail, audiences, letter.fromName, audienceState.built, persons);
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
       ruled = failedRuling(text, error);

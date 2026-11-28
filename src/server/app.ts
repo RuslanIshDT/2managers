@@ -17,7 +17,7 @@ import { accuracyView } from '../agents/accuracy.ts';
 import { controlOf, withLeader } from '../agents/control.ts';
 import { approveProtocol, askProtocolEdit, chooseProtocolScope, parseProtocolCallback, protocolCard, rejectProtocol, reviseProtocol, saveProtocolEdit, scopeProtocolByChat } from '../agents/protocol.ts';
 import { costView, type OperationRow } from '../agents/cost.ts';
-import { loadAudiences } from '../agents/audience.ts';
+import { loadAudienceState } from '../agents/audience.ts';
 import { confirmationPoints } from '../agents/confirm.ts';
 import { deskForLeader } from '../agents/desk.ts';
 import { combineMorning, interpretMorning, parseMorningStored, shapeWords, storeMorning } from '../agents/morning.ts';
@@ -255,12 +255,14 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
         ? mirror.series.map((item) => ({ title: item.title, open: item.action === '' }))
         : [],
     );
+    const audienceState = await loadAudienceState(deps.db, leader.id);
     return {
       name: leader.name,
       scene: sceneWords(leader.id),
       profile: hideMailbox(profileRow[0]?.profile ?? '', mailConfig()?.user ?? ''),
       confirmation: confirmationNote(profileRow[0]?.profile ?? ''),
-      audiences: (await loadAudiences(deps.db, leader.id)).map((row) => ({ point: row.point, people: row.people.map((person) => person.name) })),
+      audiences: audienceState.audiences.map((row) => ({ point: row.point, people: row.people.map((person) => person.name) })),
+      audiencesBuilt: audienceState.built,
       linkCode: profileRow[0]?.linkCode ?? '',
       counts: {
         people: Number(peopleN[0]?.n ?? 0),
