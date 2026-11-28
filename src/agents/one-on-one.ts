@@ -7,7 +7,7 @@ import { emails, mailIn, people, protocols, seriesKind, tasks as taskTable } fro
 import { callJson, withLlmScope, type JsonSchema } from '../llm.ts';
 import type { LiveTask } from './live-sources.ts';
 import { meetingOfFile } from './protocol-context.ts';
-import { dateWords } from './scene.ts';
+import { clockFor, dateWords, onSceneClock } from './scene.ts';
 import { mailConfig, readOutgoing } from '../mail.ts';
 
 export interface BriefSource {
@@ -53,6 +53,7 @@ export interface BriefTask {
   owner: string;
   status: string;
   closedAt?: string;
+  createdAt?: string;
 }
 
 export interface BriefMeeting {
@@ -286,11 +287,12 @@ export async function oneOnOneForDay(
   ]);
   const leader = staff.find((person) => person.role === 'руководитель') ?? staff.find((person) => sameName(person.name, leaderName));
   const kindOf = new Map(kinds.map((row) => [row.seriesKey, row.kind]));
+  const clock = clockFor(leaderId);
   let outgoing: BriefLetter[] = [];
   try {
     outgoing = (await readOutgoing()).map((row) => ({
       id: row.id,
-      at: row.received,
+      at: onSceneClock(row.received, clock),
       fromName: row.fromName,
       fromEmail: row.fromEmail,
       toEmail: (row.to ?? []).join(' '),
@@ -348,7 +350,14 @@ export async function oneOnOneForDay(
       meetings: meetings.map((meeting) => ({ ...meeting, kind: kindOf.get(meeting.summary) })),
       letters,
       protocols: briefProtocols,
-      tasks: storedTasks.map((task) => ({ key: task.id, title: task.title, owner: task.owner, status: task.status, closedAt: task.closedAt })),
+      tasks: storedTasks.map((task) => ({
+        key: task.id,
+        title: task.title,
+        owner: task.owner,
+        status: task.status,
+        closedAt: onSceneClock(task.closedAt, clock),
+        createdAt: onSceneClock(task.createdAt ?? '', clock),
+      })),
     },
     (packet) =>
       withLlmScope(
@@ -394,6 +403,8 @@ function sourcesFor(person: { name: string; email: string }, input: BriefInput, 
   for (const task of input.tasks) {
     const about = sameName(task.owner, person.name) || mentioned(person.name, task.title);
     if (!about) continue;
+    const created = stamp(task.createdAt ?? '');
+    if (created && created > until) continue;
     const closed = CLOSED.has(task.status.trim().toLowerCase());
     const at = stamp(task.closedAt ?? '');
     if (closed && floor && at && at < floor) continue;

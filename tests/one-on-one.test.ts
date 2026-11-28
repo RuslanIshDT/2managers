@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { renderMorning, morningHtml } from '../src/agents/focus.ts';
 import { letterById, liveLetterId, parseMailboxSource } from '../src/mail.ts';
 import { blocksFromVerdicts, briefPackets, oneOnOneBrief, type BriefInput, type BriefLetter, type MeetingPacket, type TurnVerdict } from '../src/agents/one-on-one.ts';
+import { onSceneClock, sceneClock } from '../src/agents/scene.ts';
 
 const people = [
   { name: 'Наталья Фомина', email: 'natalia@example.test' },
@@ -113,6 +114,33 @@ describe('контекст встречи один на один', () => {
     });
     expect(broken[0]?.lines[0]?.text).toContain('не смог проверить');
     expect(blocksFromVerdicts([{ ...packet!, sources: [] }], [{ waiting: true, action: 'Выбрать', reason: '', sourceIds: [] }])).toEqual([]);
+  });
+
+  it('даты отправленных и задач на сдвинутой сцене, задача после утра встречи не входит', () => {
+    const clock = sceneClock('2026-12-11', new Date('2026-11-28T08:00:00Z'));
+    expect(clock.offset).not.toBe(0);
+    const sent = onSceneClock('2026-11-27T18:00:00+03:00', clock);
+    expect(sent.startsWith('2026-12-10')).toBe(true);
+    expect(onSceneClock('2026-11-28 11:00', sceneClock(null, new Date('2026-11-28T08:00:00Z')))).toBe('2026-11-28 11:00');
+    const reply: BriefLetter = {
+      id: 'sent-reply',
+      at: sent,
+      fromName: 'Наталья Фомина',
+      fromEmail: 'natalia@example.test',
+      toEmail: 'kirill@example.test',
+      subject: 'Re: Варианты запуска',
+      body: 'Делаем по второму.',
+    };
+    const withReply = briefPackets(input('2026-12-11', [options, reply]))[0];
+    expect(blocksFromVerdicts([withReply!], [{ waiting: false, action: 'нет', reason: 'руководитель решил', sourceIds: ['m:sent-reply'] }])).toEqual([]);
+    const closedAt = onSceneClock('2026-11-28T12:00:00+03:00', clock);
+    const closed = briefPackets(input('2026-12-11', [options], [{ key: 'QUEUE-3', title: 'Выбрать вариант запуска', owner: 'Кирилл Белов', status: 'закрыта', closedAt, createdAt: '2026-12-09T10:00' }]));
+    expect(closed[0]?.sources.some((source) => source.id === 't:QUEUE-3' && source.role === 'задача_закрыта')).toBe(true);
+    expect(blocksFromVerdicts(closed, [{ waiting: false, action: 'Выбрать', reason: 'задача закрыта', sourceIds: ['t:QUEUE-3'] }])).toEqual([]);
+    const late = briefPackets(input('2026-12-15', [options], [{ key: 'QUEUE-8', title: 'Выбрать вариант запуска', owner: 'Кирилл Белов', status: 'в работе', createdAt: '2026-12-15T09:00' }]));
+    expect(late[0]?.sources.some((source) => source.id === 't:QUEUE-8')).toBe(false);
+    const morning = briefPackets(input('2026-12-15', [options], [{ key: 'QUEUE-8', title: 'Выбрать вариант запуска', owner: 'Кирилл Белов', status: 'в работе', createdAt: '2026-12-15T08:00' }]));
+    expect(morning[0]?.sources.some((source) => source.id === 't:QUEUE-8')).toBe(true);
   });
 
   it('письмо из отправленных находится по тому же номеру, что в ссылке', () => {

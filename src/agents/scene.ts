@@ -84,6 +84,15 @@ export function moscowStamp(at: Date): string {
 }
 
 // Время письма на сцене: письмо из данных руководителя несёт своё время, живое письмо сдвигается на дату сцены.
+// Живая дата (письмо из «Отправленных», создание и закрытие задачи) на часах сцены. Без сдвига — как есть.
+export function onSceneClock(value: string, clock: SceneClock): string {
+  if (!value.trim() || clock.offset === 0) return value;
+  const parsed = Date.parse(value);
+  const shifted = Number.isNaN(parsed) ? letterMoment(value, false, clock) : new Date(parsed + clock.offset);
+  if (Number.isNaN(shifted.getTime())) return value;
+  return moscowStamp(shifted);
+}
+
 export function letterMoment(received: string, marked: boolean, clock: SceneClock): Date {
   const own = parseMoscow(received);
   if (marked && own) return own;

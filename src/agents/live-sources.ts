@@ -15,6 +15,7 @@ export interface LiveTask {
   dueOn: string;
   status: string;
   closedAt?: string;
+  createdAt?: string;
 }
 
 export interface LiveMeeting {
@@ -55,6 +56,7 @@ export function tasksFromIssues(issues: QueueIssue[], leaderId: string, leaderNa
       dueOn: issue.deadline,
       status: issue.open ? issue.status : 'закрыта',
       closedAt: issue.resolvedAt,
+      createdAt: issue.createdAt,
     }];
   });
 }
