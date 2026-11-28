@@ -10,6 +10,7 @@ import { audienceEmails, loadAudiences } from './audience.ts';
 import { confirmationPoints, leaderMustConfirm } from './confirm.ts';
 import {
   askShare,
+  readingForLetter,
   replayWeek,
   rulesFromAudit,
   subjectKey,
@@ -40,17 +41,32 @@ export async function listFlowRules(db: Db, leaderId: string): Promise<FlowRule[
 }
 
 export async function weekScene(db: Db, leaderId: string) {
-  const [history, ruleRows, verdictRows, decisionRows, letterRows, meetingRows] = await Promise.all([
+  const [history, ruleRows, verdictRows, decisionRows, letterRows, meetingRows, inbox] = await Promise.all([
     historyOf(db, leaderId),
     listFlowRules(db, leaderId),
     db.select().from(verdicts).where(eq(verdicts.leaderId, leaderId)),
     db.select().from(decisions).where(eq(decisions.leaderId, leaderId)),
     db.select().from(emails).where(eq(emails.leaderId, leaderId)),
     db.select().from(meetings).where(eq(meetings.leaderId, leaderId)),
+    db.select({ syntheticId: mailIn.syntheticId, messageId: mailIn.messageId }).from(mailIn).where(eq(mailIn.leaderId, leaderId)),
   ]);
   const accepted = ruleRows.length > 0;
+  const readings = verdictRows.map((row) => ({
+    id: row.id,
+    messageId: row.messageId,
+    area: row.authorityArea,
+    value: row.authorityValue,
+    unit: row.authorityUnit,
+    others: row.authorityOthers,
+    at: row.createdAt.toISOString(),
+  }));
   const picture = replayWeek(
-    letterRows.map((row) => ({ fromEmail: row.fromEmail, subject: row.subject, body: row.body })),
+    letterRows.map((row) => ({
+      fromEmail: row.fromEmail,
+      subject: row.subject,
+      body: row.body,
+      reading: readingForLetter(row.externalId, readings, inbox),
+    })),
     meetingRows.map((row) => ({ summary: row.summary })),
     ruleRows,
     accepted,

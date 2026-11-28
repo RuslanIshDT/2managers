@@ -165,6 +165,7 @@ export const verdicts = pgTable('verdicts', {
   authorityArea: text('authority_area').notNull().default(''),
   authorityValue: text('authority_value').notNull().default(''),
   authorityUnit: text('authority_unit').notNull().default(''),
+  authorityOthers: text('authority_others').notNull().default(''),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
 });
 

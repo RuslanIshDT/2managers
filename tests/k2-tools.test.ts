@@ -38,6 +38,7 @@ const verdict = {
   область: 'нет',
   число: 0,
   единица: '',
+  другие_просьбы: 'нет',
 };
 
 function reply(message: Record<string, unknown>) {

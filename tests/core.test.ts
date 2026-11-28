@@ -683,8 +683,11 @@ describe('пересчёт недели', () => {
     expect(twice.gluedLetters).toBe(1);
     expect(twice.digestLetters).toBe(0);
     expect(letterHits(letters[0], rules)?.effect).toBe('стоп');
-    expect(letterHits({ fromEmail: 'a@example', subject: 'Скидка новая', body: 'Скидка 8%' }, rules)?.effect).toBe('сам');
-    expect(letterHits({ fromEmail: 'a@example', subject: 'Скидка новая', body: 'Скидка 12%' }, rules)).toBeNull();
+    const within = { area: 'скидка', value: 8, unit: '%', others: false };
+    expect(letterHits({ fromEmail: 'a@example', subject: 'Скидка новая', body: 'Скидка 8%' }, rules)).toBeNull();
+    expect(letterHits({ fromEmail: 'a@example', subject: 'Скидка новая', body: 'Скидка 8%' }, rules, within)?.effect).toBe('сам');
+    expect(letterHits({ fromEmail: 'a@example', subject: 'Скидка новая', body: 'Скидка 12%' }, rules, { ...within, value: 12 })).toBeNull();
+    expect(letterHits({ fromEmail: 'a@example', subject: 'Скидка новая', body: 'бюджет 4%' }, rules, { area: 'бюджет', value: 4, unit: '%', others: false })).toBeNull();
     const other = rulesFromAudit(pieces, second, new Map([['b', 'b@example']]));
     expect(other.some((rule) => rule.personId === 'b' && rule.limitValue === '')).toBe(false);
     expect(other.some((rule) => rule.personId === 'a')).toBe(false);

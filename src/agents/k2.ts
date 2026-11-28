@@ -3,7 +3,7 @@
 import { z } from 'zod';
 import { callJson, type ChatMessage, type JsonSchema, type ToolSpec } from '../llm.ts';
 import { addresseeHold, personInAudience, type PointAudience } from './audience.ts';
-import { breachBasis, canonicalCategory, categoryChoices, type LimitBreach, OTHER } from './confirm.ts';
+import { breachBasis, canonicalCategory, categoryChoices, normalizeUnit, unitInText, type LimitBreach, OTHER } from './confirm.ts';
 import { changeWords, type TermChange } from './terms.ts';
 
 export const ACTIONS = ['руководителю', 'ответить', 'передать', 'в_сводку', 'без_ответа'] as const;
@@ -28,6 +28,7 @@ export interface ModelVerdict {
   область?: string;
   число?: number;
   единица?: string;
+  другие_просьбы?: 'да' | 'нет';
 }
 
 // kind в базе: нужен_руководитель — ждёт руководителя; вернуть — помощник ответил сам; делегировать — передал сотруднику;
@@ -57,6 +58,27 @@ export interface PriorDecision {
 }
 
 // Модель не дала разбор: письмо уходит руководителю, повторного вызова нет.
+export function rightRuling(rule: { area: string; limitValue: string; title: string }): Ruled {
+  const limit = Number(String(rule.limitValue).replace(/\s/g, '').replace(',', '.'));
+  const unit = normalizeUnit(rule.limitValue) || unitInText(rule.title);
+  const mark = unit === '%' ? '%' : unit ? ` ${unit}` : '';
+  const limitText = Number.isFinite(limit) ? `${limit}${mark}` : rule.limitValue;
+  return {
+    kind: 'вернуть',
+    category: OTHER,
+    summary: `В пределах принятого права: ${rule.area}`,
+    draft: `Это ваше право: ${rule.area} до ${limitText}. Решите сами и напишите адресату.`,
+    basis: `Правило: ${rule.title}`,
+    context: '',
+    recommendation: '',
+    risks: '',
+    ifNot: '',
+    authorityOffer: '',
+    ask: false,
+    send: true,
+  };
+}
+
 export function failedRuling(_letterText: string, reason: string): Ruled {
   return {
     kind: 'нужен_руководитель',
@@ -83,6 +105,7 @@ function verdictContract(points: string[], areas: string[]) {
     область: z.enum(areaChoices),
     число: z.number(),
     единица: z.enum(units),
+    другие_просьбы: z.enum(['да', 'нет']),
     кому_передать: z.string().max(200),
     в_полномочиях: z.enum(['да', 'нет', 'неясно']),
     есть_предложение: z.enum(['да', 'нет']),
@@ -120,12 +143,14 @@ function verdictContract(points: string[], areas: string[]) {
       'область',
       'число',
       'единица',
+      'другие_просьбы',
     ],
     properties: {
       действие: { type: 'string', enum: [...ACTIONS] },
       область: { type: 'string', enum: areaChoices },
       число: { type: 'number' },
       единица: { type: 'string', enum: units },
+      другие_просьбы: { type: 'string', enum: ['да', 'нет'] },
       кому_передать: { type: 'string' },
       в_полномочиях: { type: 'string', enum: ['да', 'нет', 'неясно'] },
       есть_предложение: { type: 'string', enum: ['да', 'нет'] },
@@ -161,7 +186,8 @@ export function mailSystem(points: string[]): string {
 предложение_полномочия — если такие письма можно больше не носить руководителю: какое право дать и кому. Иначе пусто.
 суть — одна фраза, о чём письмо. основание — одна фраза: какое правило, полномочие, данные или прошлое решение привели к действию.
 ${list}
-Если отправитель просит число в одной из своих областей с пределом, в область впиши эту область, в число — запрошенное число, в единица — %, ч или ₽. «8 тыс.» — это 8000, «0,25 млн» — 250000, «р.» и «руб.» — рубли. Если такого числа нет, область «нет», число 0, единица пустая. Код сам сравнит число с пределом.
+Если отправитель просит число в одной из своих областей с пределом, в область впиши эту область, в число — запрошенное число, в единица — %, ч или ₽, даже если число больше предела в карточке. «8 тыс.» — это 8000, «0,25 млн» — 250000, «р.» и «руб.» — рубли. Если такого числа нет, область «нет», число 0, единица пустая. Код сравнивает с правом только эти поля, текст основания не читает.
+другие_просьбы — «нет», если в письме одна просьба. «да» — если просьб две или больше. Пункт профиля и предел в карточке второй просьбой не являются: считай только то, о чём просит отправитель.
 Каждое текстовое поле короче 400 знаков. Эталонных меток писем у тебя нет.`;
 }
 

@@ -1,11 +1,11 @@
 // Главная руководителя и происхождение цифр. Имена и числа приходят из данных, в коде их нет.
 import { desc, eq } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
-import { authorities, decisions, emails, focusPlans, kpis, leaders, llmCalls, meetings, people, verdicts } from '../db/schema.ts';
+import { authorities, decisions, emails, focusPlans, kpis, leaders, llmCalls, mailIn, meetings, people, verdicts } from '../db/schema.ts';
 import { confirmationPoints, leaderMustConfirm } from './confirm.ts';
 import { historyForLeader } from './trust.ts';
 import { kpiStatus } from './k1.ts';
-import { letterHits, meetingHits, replayWeek, trustOffers, type FlowRule, type HistoryRow } from './replay.ts';
+import { letterHits, meetingHits, readingForLetter, replayWeek, trustOffers, type FlowRule, type HistoryRow } from './replay.ts';
 import { listFlowRules, ownProposal } from './week.ts';
 import { calendarConfig } from '../yandex/calendar.ts';
 import { trackerConfig } from '../yandex/tracker.ts';
@@ -63,7 +63,7 @@ export interface DeskInput {
   accepted: boolean;
   decisions: { id: string; status: string; summary: string; replyName: string; createdAt: string; category: string }[];
   verdicts: { id: string; kind: string; category: string; summary: string; basis: string; createdAt: string; area?: string }[];
-  letters: { fromName: string; fromEmail: string; subject: string; body: string; received: string }[];
+  letters: { fromName: string; fromEmail: string; subject: string; body: string; received: string; reading?: { area: string; value: number; unit: string; others: boolean } | null }[];
   meetings: { summary: string; minutes: number }[];
   rules: FlowRule[];
   people: { id: string; name: string; emails: number; laggingWeeks: { name: string; week: string }[] }[];
@@ -83,7 +83,7 @@ export function buildDesk(input: DeskInput): Desk {
   const picture = replayWeek(input.letters, input.meetings, input.rules, input.accepted);
   const heldLetters = input.accepted
     ? input.letters.filter((letter) => {
-        const hit = letterHits(letter, input.rules);
+        const hit = letterHits(letter, input.rules, letter.reading);
         return Boolean(hit && hit.effect !== 'карточка');
       })
     : [];
@@ -274,7 +274,7 @@ export function buildDesk(input: DeskInput): Desk {
 }
 
 export async function deskForLeader(db: Db, leaderId: string, series: { title: string; open: boolean }[] = []): Promise<Desk> {
-  const [decisionRows, verdictRows, letterRows, meetingRows, personRows, kpiRows, authRows, callRows, planRows, rules, leaderRows] = await Promise.all([
+  const [decisionRows, verdictRows, letterRows, meetingRows, personRows, kpiRows, authRows, callRows, planRows, rules, leaderRows, inbox] = await Promise.all([
     db.select().from(decisions).where(eq(decisions.leaderId, leaderId)),
     db.select().from(verdicts).where(eq(verdicts.leaderId, leaderId)).orderBy(desc(verdicts.createdAt)),
     db.select().from(emails).where(eq(emails.leaderId, leaderId)),
@@ -286,6 +286,7 @@ export async function deskForLeader(db: Db, leaderId: string, series: { title: s
     db.select().from(focusPlans).where(eq(focusPlans.leaderId, leaderId)).limit(1),
     listFlowRules(db, leaderId),
     db.select({ profile: leaders.profile }).from(leaders).where(eq(leaders.id, leaderId)).limit(1),
+    db.select({ syntheticId: mailIn.syntheticId, messageId: mailIn.messageId }).from(mailIn).where(eq(mailIn.leaderId, leaderId)),
   ]);
   const history = await historyForLeader(db, leaderId);
   const mailByPerson = new Map<string, number>();
@@ -296,12 +297,22 @@ export async function deskForLeader(db: Db, leaderId: string, series: { title: s
   }
   const plan = planRows[0]?.plan as { today?: { title?: string; minutes?: number; goal?: string }[] } | undefined;
   const verdictByLetter = new Map(verdictRows.map((row) => [row.messageId, row.category]));
+  const readings = verdictRows.map((row) => ({
+    id: row.id,
+    messageId: row.messageId,
+    area: row.authorityArea,
+    value: row.authorityValue,
+    unit: row.authorityUnit,
+    others: row.authorityOthers,
+    at: row.createdAt.toISOString(),
+  }));
   const letters = letterRows.map((row) => ({
     fromName: row.fromName,
     fromEmail: row.fromEmail,
     subject: row.subject,
     body: row.body,
     received: row.received,
+    reading: readingForLetter(row.externalId, readings, inbox),
   }));
   const meetingList = meetingRows.map((row) => ({ summary: row.summary, minutes: row.minutes }));
   const proposal = rules.length ? [] : await ownProposal(db, leaderId);

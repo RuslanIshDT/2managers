@@ -8,12 +8,23 @@ import { sendDecisionCard } from '../telegram.ts';
 import { staffFromVerdict } from './dependence.ts';
 import { kpiStatus, personAddresses } from './k1.ts';
 import { loadAudiences, personInAudience } from './audience.ts';
-import { amountBlocksRule, breachesFromAnswer, confirmationPoints, normalizeUnit } from './confirm.ts';
-import { cardText, chainKey, enforce, failedRuling, judgeLetter, letterPrompt, type ModelVerdict, type Ruled } from './k2.ts';
+import { amountBlocksRule, breachesFromAnswer, confirmationPoints, normalizeUnit, unitInText } from './confirm.ts';
+import { cardText, chainKey, enforce, failedRuling, judgeLetter, letterPrompt, rightRuling, type ModelVerdict, type Ruled } from './k2.ts';
 import { callJson, withLlmScope, type JsonSchema } from '../llm.ts';
 import { externalContext, judgeWithTools, k2Context, stepsWords } from './k2-tools.ts';
 import { readHistory } from './dependence.ts';
-import { letterHits } from './replay.ts';
+import { letterHits, type FlowRule } from './replay.ts';
+
+function rightsHint(rules: FlowRule[], email: string): string {
+  const lines = rules
+    .filter((rule) => rule.kind === 'полномочие' && rule.effect === 'сам' && rule.fromEmail.toLowerCase() === email.toLowerCase())
+    .map((rule) => {
+      const unit = normalizeUnit(rule.limitValue) || unitInText(rule.title);
+      const mark = unit === '%' ? '%' : unit ? ` ${unit}` : '';
+      return `${rule.area} до ${rule.limitValue}${mark}`;
+    });
+  return lines.length ? `Принятые права этого отправителя: ${lines.join('; ')}.` : '';
+}
 import { acceptRewrite, exampleBlock, finishDraft, mailRevisions, rewriteLetter, ruleFromChoice, ruleHint } from './memory.ts';
 import { writeLeaderAct } from './acts.ts';
 import { applyRevision, revisionPrompt } from './revisions.ts';
@@ -145,7 +156,7 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
       });
       const prior = latestDecision(decisionRows, key, letter.id);
       let ruled: Ruled;
-      let named = { area: '', value: '', unit: '' };
+      let named = { area: '', value: '', unit: '', others: '' };
       const covered = letterHits(letter, authority);
       const fromAudience = personInAudience(audiences, { name: letter.fromName, email: letter.fromEmail });
       const copyOnly = (letter.to?.length ?? 0) > 0 && !letter.to!.some((address) => leaderAddresses.has(address));
@@ -193,7 +204,7 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
               subject: letter.subject,
               body: modelBody,
               ctx,
-              hints: [ruleHint(edits), exampleBlock(`${letter.subject}\n${letter.body}`, actRows)].filter(Boolean).join('\n\n'),
+              hints: [ruleHint(edits), rightsHint(authority, letter.fromEmail), exampleBlock(`${letter.subject}\n${letter.body}`, actRows)].filter(Boolean).join('\n\n'),
             })
               .then((run) => {
                 steps = stepsWords(run.steps);
@@ -224,12 +235,26 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
           const breaches = judged.model
             ? breachesFromAnswer({ area: judged.model.область ?? 'нет', value: judged.model.число ?? 0, unit: judged.model.единица ?? '' }, limits)
             : [];
-          if (judged.model?.область && judged.model.область !== 'нет') {
-            named = { area: judged.model.область, value: String(judged.model.число ?? ''), unit: judged.model.единица ?? '' };
+          if (judged.model) {
+            named = {
+              area: judged.model.область && judged.model.область !== 'нет' ? judged.model.область : '',
+              value: judged.model.область && judged.model.область !== 'нет' ? String(judged.model.число ?? '') : '',
+              unit: judged.model.область && judged.model.область !== 'нет' ? judged.model.единица ?? '' : '',
+              others: judged.model.другие_просьбы === 'да' || judged.model.другие_просьбы === 'нет' ? judged.model.другие_просьбы : '',
+            };
           }
           ruled = judged.model
             ? enforce(judged.model, letterText, points, breaches, prior, changes, staff, letter.fromEmail, audiences, letter.fromName)
             : failedRuling(letterText, judged.error);
+          if (judged.model) {
+            const granted = letterHits(letter, authority, {
+              area: named.area,
+              value: Number(named.value),
+              unit: named.unit,
+              others: named.others !== 'нет',
+            });
+            if (granted?.kind === 'полномочие') ruled = rightRuling(granted);
+          }
           if (!judged.model && changes.length) ruled = { ...ruled, summary: `Условия изменились: ${changeWords(changes)}. ${ruled.summary}` };
           if (steps) ruled = { ...ruled, context: [ruled.context, steps].filter(Boolean).join('\n') };
           if (changes.length && ruled.ask) await supersede(db, leaderId, key, letter.id, decisionRows);
@@ -355,6 +380,7 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
         authorityArea: named.area,
         authorityValue: named.value,
         authorityUnit: named.unit,
+        authorityOthers: named.others,
         createdAt: new Date(),
       }).onConflictDoNothing();
       verdictRows.push({ chainKey: key, kind: ruled.kind, createdAt: new Date() });

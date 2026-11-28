@@ -1,5 +1,5 @@
 // Пересчёт недели через правила. Код не знает людей и лимиты синтетики: они приходят в данных.
-import { leaderMustConfirm, normalizeUnit, unitInText, withinLimit } from './confirm.ts';
+import { leaderMustConfirm, normalizeUnit, unitInText } from './confirm.ts';
 
 export interface HistoryRow {
   personId: string;
@@ -198,9 +198,48 @@ export function rulesFromAudit(
   return rules;
 }
 
+export interface RightReading {
+  area: string;
+  value: number;
+  unit: string;
+  others: boolean;
+}
+
+// Принятое право покрывает разбор, а не текст письма. Без разбора не покрывает.
+export function authorityCovers(rule: FlowRule, email: string, reading: RightReading | null | undefined): boolean {
+  if (!reading || reading.others) return false;
+  if (rule.kind !== 'полномочие' || rule.effect !== 'сам') return false;
+  if (rule.fromEmail.toLowerCase() !== email.toLowerCase()) return false;
+  if (!rule.area.trim() || rule.area.trim().toLowerCase() !== reading.area.trim().toLowerCase()) return false;
+  const limit = Number(String(rule.limitValue).replace(/\s/g, '').replace(',', '.'));
+  const unit = normalizeUnit(rule.limitValue) || unitInText(rule.title);
+  if (!Number.isFinite(limit) || rule.limitValue === '' || !unit) return false;
+  if (normalizeUnit(reading.unit) !== unit) return false;
+  return Number.isFinite(reading.value) && reading.value <= limit;
+}
+
+export function readingOf(verdict: { area: string; value: string; unit: string; others: string } | null | undefined): RightReading | null {
+  if (!verdict || verdict.others !== 'нет' || !verdict.area.trim()) return null;
+  const value = Number(String(verdict.value).replace(/\s/g, '').replace(',', '.'));
+  if (!Number.isFinite(value)) return null;
+  return { area: verdict.area, value, unit: verdict.unit, others: false };
+}
+
+export function readingForLetter(
+  letterId: string,
+  verdicts: { id: string; messageId: string; area: string; value: string; unit: string; others: string; at?: string }[],
+  links: { syntheticId: string; messageId: string }[],
+): RightReading | null {
+  const messages = new Set([letterId, ...links.filter((link) => link.syntheticId === letterId).map((link) => link.messageId)]);
+  const hits = verdicts.filter((verdict) => messages.has(verdict.messageId) || messages.has(verdict.id.replace(/^v-/, '')));
+  const verdict = [...hits].sort((a, b) => (a.at ?? '').localeCompare(b.at ?? '')).at(-1);
+  return readingOf(verdict);
+}
+
 export function letterHits(
   letter: { fromEmail: string; subject: string; body: string },
   rules: FlowRule[],
+  reading?: RightReading | null,
 ): FlowRule | null {
   const email = letter.fromEmail.toLowerCase();
   const key = subjectKey(letter.subject);
@@ -211,15 +250,7 @@ export function letterHits(
       rule.subjectKey === key &&
       (rule.effect === 'стоп' || rule.effect === 'дайджест' || rule.effect === 'карточка'),
   );
-  const text = `${letter.subject}\n${letter.body}`;
-  const authority =
-    rules.find((rule) => {
-      if (rule.kind !== 'полномочие' || rule.effect !== 'сам') return false;
-      if (rule.fromEmail.toLowerCase() !== email) return false;
-      const limit = Number(rule.limitValue);
-      const unit = normalizeUnit(rule.limitValue) || unitInText(rule.title);
-      return Number.isFinite(limit) && rule.limitValue !== '' && unit !== '' && withinLimit(text, rule.area, limit, unit);
-    }) ?? null;
+  const authority = rules.find((rule) => authorityCovers(rule, email, reading)) ?? null;
   if (authority && thread?.effect !== 'стоп' && thread?.effect !== 'дайджест') return authority;
   if (thread) return thread;
   return authority;
@@ -230,7 +261,7 @@ export function meetingHits(summary: string, rules: FlowRule[]): FlowRule | null
 }
 
 export function replayWeek(
-  letters: { fromEmail: string; subject: string; body: string }[],
+  letters: { fromEmail: string; subject: string; body: string; reading?: RightReading | null }[],
   meetings: { summary: string }[],
   rules: FlowRule[],
   accepted: boolean,
@@ -261,7 +292,7 @@ export function replayWeek(
   const seenLetters = new Set<string>();
   const remaining: string[] = [];
   for (const letter of letters) {
-    const hit = letterHits(letter, rules);
+    const hit = letterHits(letter, rules, letter.reading);
     if (!hit) {
       stillLetters += 1;
       remaining.push(letter.subject);
