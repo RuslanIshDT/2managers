@@ -7,6 +7,7 @@ import { mailConfig, sendMail, type MailboxLetter } from '../mail.ts';
 import { sendDecisionCard } from '../telegram.ts';
 import { staffFromVerdict } from './dependence.ts';
 import { kpiStatus, personAddresses } from './k1.ts';
+import { loadAudiences, personInAudience } from './audience.ts';
 import { confirmationPoints, limitBreaches } from './confirm.ts';
 import { cardText, chainKey, enforce, failedRuling, judgeLetter, letterPrompt, type ModelVerdict, type Ruled } from './k2.ts';
 import { callJson, withLlmScope, type JsonSchema } from '../llm.ts';
@@ -113,6 +114,7 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
   let calls = 0;
   let deferred = 0;
 
+  const audiences = await loadAudiences(db, leaderId);
   const clock = clockFor(leaderId);
   const mailbox = mailConfig()?.user ?? '';
   // Адреса руководителя: ящик помощника и адрес из оргструктуры. В «Кому» — письмо ему; только в копии — для сведения.
@@ -139,10 +141,11 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
       const prior = latestDecision(decisionRows, key, letter.id);
       let ruled: Ruled;
       const covered = letterHits(letter, authority);
+      const fromAudience = personInAudience(audiences, { name: letter.fromName, email: letter.fromEmail });
       const copyOnly = (letter.to?.length ?? 0) > 0 && !letter.to!.some((address) => leaderAddresses.has(address));
       if (copyOnly) {
         ruled = copyRuling(letter.cc?.some((address) => leaderAddresses.has(address)) ?? false);
-      } else if (covered && covered.effect !== 'карточка' && breaches.length === 0) {
+      } else if (covered && covered.effect !== 'карточка' && breaches.length === 0 && !fromAudience) {
         ruled = {
           kind: covered.effect === 'сам' ? 'вернуть' : 'в_сводку',
           category: 'иное',
@@ -211,7 +214,9 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
             (err: unknown) => ({ model: null, error: err instanceof Error ? err.message : String(err) }),
           );
           calls += 1;
-          ruled = judged.model ? enforce(judged.model, letterText, points, breaches, prior, changes, staff, letter.fromEmail) : failedRuling(letterText, judged.error);
+          ruled = judged.model
+            ? enforce(judged.model, letterText, points, breaches, prior, changes, staff, letter.fromEmail, audiences, letter.fromName)
+            : failedRuling(letterText, judged.error);
           if (!judged.model && changes.length) ruled = { ...ruled, summary: `Условия изменились: ${changeWords(changes)}. ${ruled.summary}` };
           if (steps) ruled = { ...ruled, context: [ruled.context, steps].filter(Boolean).join('\n') };
           if (changes.length && ruled.ask) await supersede(db, leaderId, key, letter.id, decisionRows);

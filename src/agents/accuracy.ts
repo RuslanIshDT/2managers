@@ -5,6 +5,7 @@ import { z } from 'zod';
 import type { Db } from '../db/client.ts';
 import { emailEtalon, emails, leaders, mailActions } from '../db/schema.ts';
 import { callJson, withLlmScope, type JsonSchema } from '../llm.ts';
+import { loadAudiences, personInAudience } from './audience.ts';
 import { confirmationPoints, leaderMustConfirm } from './confirm.ts';
 import { chainKey } from './k2.ts';
 
@@ -38,7 +39,13 @@ const SYSTEM = [
   'Эталонных меток у тебя нет.',
 ].join(' ');
 
-export function forceMailAction(category: string, points: string[], chosen: MailAction): { action: MailAction; forced: boolean } {
+export function forceMailAction(
+  category: string,
+  points: string[],
+  chosen: MailAction,
+  fromAudience = false,
+): { action: MailAction; forced: boolean } {
+  if (fromAudience && chosen === 'авто') return { action: 'спросить_руководителя', forced: true };
   if (leaderMustConfirm(category, points) && chosen !== 'спросить_руководителя') return { action: 'спросить_руководителя', forced: true };
   return { action: chosen, forced: false };
 }
@@ -108,13 +115,15 @@ export async function measureAccuracy(db: Db, leaderId: string): Promise<{ calls
   ]);
   const known = new Set(etalonRows.map((row) => row.externalId));
   const done = new Set(stored.map((row) => row.chainKey));
-  const threads = new Map<string, { letter: string }>();
+  const audiences = await loadAudiences(db, leaderId);
+  const threads = new Map<string, { letter: string; fromAudience: boolean }>();
   for (const letter of letterRows) {
     if (!known.has(letter.externalId)) continue;
     const key = chainKey(letter.fromEmail, letter.subject);
     if (done.has(key) || threads.has(key)) continue;
     threads.set(key, {
       letter: `От: ${letter.fromName}\nТема: ${letter.subject}\n${letter.body}`,
+      fromAudience: Boolean(personInAudience(audiences, { name: letter.fromName, email: letter.fromEmail })),
     });
   }
   const points = confirmationPoints(leader.profile);
@@ -124,7 +133,7 @@ export async function measureAccuracy(db: Db, leaderId: string): Promise<{ calls
       { agent: 'accuracy', leaderId, operationId: crypto.randomUUID(), title: 'Разбор письма для точности' },
       () => judgeMail({ purpose: `accuracy:${leaderId}`, profile: leader.profile, letter: thread.letter }),
     );
-    const ruled = forceMailAction(chosen.category, points, chosen.action);
+    const ruled = forceMailAction(chosen.category, points, chosen.action, thread.fromAudience);
     await db.insert(mailActions).values({
       leaderId,
       chainKey: key,

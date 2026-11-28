@@ -6,6 +6,7 @@ import type { Db } from '../db/client.ts';
 import { authorities, decisions, emailEtalon, seriesKind, emails, flowReports, leaders, meetings, people, rules, verdicts } from '../db/schema.ts';
 import { staffFromVerdict, type StaffCard } from './dependence.ts';
 import { historyForLeader } from './trust.ts';
+import { audienceEmails, loadAudiences } from './audience.ts';
 import { confirmationPoints, leaderMustConfirm } from './confirm.ts';
 import {
   askShare,
@@ -134,7 +135,8 @@ export async function acceptWeek(db: Db, leaderId: string) {
   const offers = trustOffers(history, await currentRights(db, leaderId));
   const emailByPerson = new Map(persons.map((person) => [person.externalId, person.email]));
   const categories = await categoriesByLetter(db, leaderId);
-  const built = rulesFromAudit(pieces, offers, emailByPerson, categories.map, categories.points);
+  const audiences = await loadAudiences(db, leaderId);
+  const built = rulesFromAudit(pieces, offers, emailByPerson, categories.map, categories.points, audienceEmails(audiences));
   const now = new Date();
   await db.delete(rules).where(eq(rules.leaderId, leaderId));
   if (built.length) {
@@ -197,7 +199,15 @@ export async function ownProposal(db: Db, leaderId: string): Promise<FlowRule[]>
   ]);
   const emailByPerson = new Map(persons.map((person) => [person.externalId, person.email]));
   const categories = await categoriesByLetter(db, leaderId);
-  return rulesFromAudit(pieces, trustOffers(history, await currentRights(db, leaderId)), emailByPerson, categories.map, categories.points);
+  const audiences = await loadAudiences(db, leaderId);
+  return rulesFromAudit(
+    pieces,
+    trustOffers(history, await currentRights(db, leaderId)),
+    emailByPerson,
+    categories.map,
+    categories.points,
+    audienceEmails(audiences),
+  );
 }
 
 async function readPieces(db: Db, leaderId: string): Promise<AuditPiece[]> {

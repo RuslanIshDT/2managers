@@ -56,8 +56,8 @@ export interface Replay {
   remaining: string[];
 }
 
-export function ruleEffect(verdict: string, category: string, points: string[] = []): 'стоп' | 'карточка' | null {
-  if (leaderMustConfirm(category, points)) return verdict === 'должно' ? null : 'карточка';
+export function ruleEffect(verdict: string, category: string, points: string[] = [], fromAudience = false): 'стоп' | 'карточка' | null {
+  if (fromAudience || leaderMustConfirm(category, points)) return verdict === 'должно' ? null : 'карточка';
   if (verdict === 'должно' || verdict === '') return null;
   if (verdict === 'не_должно') return 'стоп';
   return 'карточка';
@@ -133,6 +133,7 @@ export function rulesFromAudit(
   emailByPerson: Map<string, string>,
   categoryByKey: Map<string, string> = new Map(),
   points: string[] = [],
+  audienceEmails: Set<string> = new Set(),
 ): FlowRule[] {
   const rules: FlowRule[] = [];
   for (const piece of pieces) {
@@ -140,7 +141,8 @@ export function rulesFromAudit(
     const fromEmail = split >= 0 ? piece.key.slice(0, split) : '';
     const subject = subjectKey(split >= 0 ? piece.key.slice(split + 1) : piece.title);
     const category = piece.kind === 'письма' ? categoryByKey.get(`${fromEmail.toLowerCase()}|${subject}`) ?? '' : categoryByKey.get(`встреча|${subject}`) ?? '';
-    const effect = ruleEffect(piece.verdict, category, points);
+    const fromAudience = piece.kind === 'письма' && audienceEmails.has(fromEmail.toLowerCase());
+    const effect = ruleEffect(piece.verdict, category, points, fromAudience);
     if (!effect) continue;
     if (piece.kind === 'письма') {
       rules.push({

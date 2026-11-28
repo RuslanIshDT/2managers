@@ -10,6 +10,7 @@ import { sendFocusAll } from '../agents/focus-run.ts';
 import { pullInbox } from '../agents/intake.ts';
 import { readSyntheticInbox } from '../mail.ts';
 import { seedIfEmpty, seedMissingCatalogs } from '../db/seed.ts';
+import { refreshAudiences } from '../agents/audience.ts';
 import { reloadProfiles } from '../agents/profile-file.ts';
 import { startBoss } from '../jobs/flow-audit-job.ts';
 import { buildApp } from './app.ts';
@@ -33,6 +34,9 @@ for (const row of leaderRows) {
   const department = await loadDepartment(db, row.id, dir);
   if (department.errors.length) console.error(`K1 ${row.id}: ${department.errors.join('; ')}`);
   else console.log(`K1 ${row.id}: подчинённых ${department.loaded}`);
+  const audience = await refreshAudiences(db, row.id);
+  if (audience === 'updated') console.log(`Пункты профиля: кому относятся, обновлено: ${row.id}`);
+  else if (audience === 'failed') console.error(`Пункты профиля не разобраны: ${row.id}`);
 }
 
 const boss = await startBoss(connectionString, db);

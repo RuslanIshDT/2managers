@@ -2,6 +2,7 @@
 // Код отправляет к руководителю письмо пункта и просьбу выше числового предела полномочия.
 import { z } from 'zod';
 import { callJson, type ChatMessage, type JsonSchema, type ToolSpec } from '../llm.ts';
+import { addresseeHold, personInAudience, type PointAudience } from './audience.ts';
 import { breachBasis, canonicalCategory, categoryChoices, type LimitBreach, OTHER } from './confirm.ts';
 import { changeWords, type TermChange } from './terms.ts';
 
@@ -162,6 +163,7 @@ export function chainKey(fromEmail: string, subject: string): string {
 
 // changes — новые условия против прежних писем цепочки. С ними письмо не повтор.
 // points — пункты подтверждения этого руководителя. breaches — числа выше предела полномочия отправителя.
+// audiences — люди, которых модель отнесла к пункту про адресата. Ответ или пересылка им ждёт руководителя.
 export function enforce(
   model: ModelVerdict,
   _letterText: string,
@@ -171,6 +173,8 @@ export function enforce(
   changes: TermChange[] = [],
   staff: { name: string; email: string }[] = [],
   senderEmail = '',
+  audiences: PointAudience[] = [],
+  senderName = '',
 ): Ruled {
   if (prior && !changes.length) {
     return {
@@ -188,7 +192,7 @@ export function enforce(
       send: false,
     };
   }
-  const category = canonicalCategory(model.категория, points);
+  let category = canonicalCategory(model.категория, points);
   const reasons: string[] = [];
   const over = breachBasis(breaches);
   if (over) reasons.push(over);
@@ -197,10 +201,17 @@ export function enforce(
   const toSender = Boolean(target && senderEmail && target.email.toLowerCase() === senderEmail.toLowerCase());
   if (toSender) target = null;
   const action: MailDecision = toSender ? 'ответить' : model.действие;
+  const sender = { name: senderName, email: senderEmail };
+  const hold = addresseeHold(audiences, action, sender, target) ?? (action === 'руководителю' ? personInAudience(audiences, sender) : null);
+  if (hold) {
+    reasons.push(`${hold.point}: ${hold.name}`);
+    category = hold.point;
+  }
   if (action === 'передать' && !target) reasons.push(`передать «${model.кому_передать || 'не указано'}» — такого человека нет в списке`);
   if ((action === 'ответить' || action === 'передать') && !model.черновик_ответа.trim()) reasons.push('нет текста ответа');
   const protectedPoint = category !== OTHER;
   const mustAsk =
+    Boolean(hold) ||
     protectedPoint ||
     breaches.length > 0 ||
     action === 'руководителю' ||

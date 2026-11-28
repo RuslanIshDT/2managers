@@ -316,6 +316,13 @@ export const mailActions = pgTable(
   (t) => [primaryKey({ columns: [t.leaderId, t.chainKey] })],
 );
 
+export const confirmationAudiences = pgTable('confirmation_audiences', {
+  leaderId: text('leader_id').primaryKey(),
+  profileText: text('profile_text').notNull().default(''),
+  orgStamp: text('org_stamp').notNull().default(''),
+  audiences: jsonb('audiences').notNull(),
+});
+
 export const flowReports = pgTable('flow_reports', {
   leaderId: text('leader_id').primaryKey(),
   report: jsonb('report').notNull(),
