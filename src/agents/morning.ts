@@ -1,6 +1,6 @@
 // Правило утра хранится структурой, которую собрала модель. Код по ней строит план и не разбирает формулировку.
 import { z } from 'zod';
-import { callJson, type JsonSchema } from '../llm.ts';
+import { callJson, withLlmScope, type JsonSchema } from '../llm.ts';
 
 export const MORNING_BLOCKS = [
   { id: 'waiting', title: 'ждут решения' },
@@ -132,7 +132,9 @@ export function morningLimit(shape: MorningShape | null | undefined, block: Morn
 
 export async function interpretMorning(leaderId: string, text: string): Promise<{ shape: MorningShape | null; note: string }> {
   try {
-    const result = await callJson<unknown>({
+    const result = await withLlmScope(
+      { agent: 'morning', leaderId, operationId: `morning:${leaderId}:${Date.now()}`, title: 'Правило утра' },
+      () => callJson<unknown>({
       purpose: `morning-rule:${leaderId}`,
       system: [
         'Ты разбираешь одно правило утреннего плана руководителя в структуру.',
@@ -146,7 +148,7 @@ export async function interpretMorning(leaderId: string, text: string): Promise<
       user: text.trim(),
       schemaName: 'morning_rule',
       schema: answerSchema,
-    });
+    }));
     return shapeFromAnswer(result.data);
   } catch {
     return { shape: null, note: MORNING_UNUSABLE };
