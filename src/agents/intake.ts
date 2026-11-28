@@ -9,7 +9,7 @@ import { staffFromVerdict } from './dependence.ts';
 import { kpiStatus, personAddresses } from './k1.ts';
 import { loadAudienceState, personInAudience } from './audience.ts';
 import { amountBlocksRule, breachesFromAnswer, confirmationPoints, normalizeUnit, unitInText } from './confirm.ts';
-import { approvalBlock, cardText, chainKey, enforce, failedRuling, judgeLetter, letterPrompt, rightRuling, type ModelVerdict, type Ruled } from './k2.ts';
+import { approvalBlock, cardText, chainKey, draftGap, enforce, failedRuling, judgeLetter, letterPrompt, rightRuling, type ModelVerdict, type Ruled } from './k2.ts';
 import { callJson, withLlmScope, type JsonSchema } from '../llm.ts';
 import { externalContext, judgeWithTools, k2Context, stepsWords } from './k2-tools.ts';
 import { readHistory } from './dependence.ts';
@@ -398,6 +398,105 @@ export async function pullInbox(db: Db, leaderId: string, letters: MailboxLetter
   }
 
   return { lines, calls, deferred };
+}
+
+// Заново разбирает только ждущие письма. Решённые не меняет, ответ не отправляет, карточку в Telegram не шлёт.
+export async function rejudgeWaiting(db: Db, leaderId: string): Promise<{ id: string; kind: string; ask: boolean; gap: string; area: string; draft: string }[]> {
+  const [leaderRow] = await db.select().from(leaders).where(eq(leaders.id, leaderId)).limit(1);
+  if (!leaderRow) throw new Error('Руководитель не найден');
+  const waiting = await db.select().from(decisions).where(and(eq(decisions.leaderId, leaderId), eq(decisions.status, 'ждёт')));
+  const persons = await db.select().from(people).where(eq(people.leaderId, leaderId));
+  const kpiRows = await db.select().from(kpis).where(eq(kpis.leaderId, leaderId));
+  const authRows = await db.select().from(authorities).where(eq(authorities.leaderId, leaderId));
+  const taskRows = await db.select().from(tasks).where(eq(tasks.leaderId, leaderId));
+  const revisionRows = await db.select().from(revisions).where(eq(revisions.leaderId, leaderId)).orderBy(asc(revisions.createdAt));
+  const edits = mailRevisions(revisionRows.map((row) => ({ category: row.category, area: row.area, instead: row.instead })));
+  const actRows = await db.select().from(leaderActs).where(eq(leaderActs.leaderId, leaderId)).orderBy(asc(leaderActs.at));
+  const history = await readHistory(`data/${leaderId}`).catch(() => []);
+  const catalog = await db.select().from(emails).where(eq(emails.leaderId, leaderId));
+  const inbox = await db.select().from(mailIn).where(eq(mailIn.leaderId, leaderId));
+  const authority = await listFlowRules(db, leaderId);
+  const audienceState = await loadAudienceState(db, leaderId);
+  const staff = persons.filter((row) => row.role === 'подчинённый').map((row) => ({ name: row.name, email: row.email }));
+  const peopleList = persons.filter((row) => row.role === 'подчинённый').map((row) => ({ name: row.name, position: row.position, zone: row.zone }));
+  const pastMail = inbox.map((row) => ({ fromEmail: row.fromEmail, subject: row.subject, received: row.received, kind: null as string | null }));
+  const out: { id: string; kind: string; ask: boolean; gap: string; area: string; draft: string }[] = [];
+  for (const decision of waiting) {
+    const letter = catalog.find((row) => row.externalId === decision.id) ?? inbox.find((row) => row.syntheticId === decision.id || row.messageId === decision.id);
+    if (!letter) {
+      out.push({ id: decision.id, kind: 'нет письма', ask: true, gap: '', area: '', draft: '' });
+      continue;
+    }
+    const person = persons.find((row) => personAddresses(row).includes(letter.fromEmail.toLowerCase()));
+    const inside = Boolean(person && person.role !== 'руководитель');
+    const letterText = `${letter.subject}\n${letter.body}`;
+    const ownAuth = person ? authRows.filter((row) => row.personId === person.externalId) : [];
+    const points = confirmationPoints(leaderRow.profile);
+    const limits = ownAuth.map((row) => ({ area: row.area, limit: row.limitValue, unit: row.unit }));
+    const areas = limits.flatMap((row) => {
+      const limit = Number(String(row.limit).replace(/\s/g, '').replace(',', '.'));
+      return Number.isFinite(limit) && normalizeUnit(row.unit) ? [row.area] : [];
+    });
+    const ctx = inside && person
+      ? k2Context(person, { authorities: authRows, kpi: kpiRows, tasks: taskRows, history, mail: pastMail, revisions: edits, people: peopleList })
+      : externalContext({ name: letter.fromName, email: letter.fromEmail }, { mail: pastMail, revisions: edits, people: peopleList });
+    const agent = inside ? 'k2' : 'mail_ext';
+    let named = { area: '', value: '', unit: '', others: '' };
+    let ruled: Ruled;
+    try {
+      const judged = await withLlmScope(
+        { agent, leaderId, operationId: `${agent}:rejudge:${decision.id}`, title: letter.subject.slice(0, 180) || 'Разбор письма' },
+        () => judgeWithTools({
+          purpose: `${agent}:rejudge:${decision.id}`,
+          profile: leaderRow.profile,
+          subject: letter.subject,
+          body: letter.body,
+          ctx,
+          hints: [ruleHint(edits), rightsHint(authority, letter.fromEmail), exampleBlock(letterText, actRows)].filter(Boolean).join('\n\n'),
+        }),
+      );
+      const breaches = breachesFromAnswer({ area: judged.verdict.область ?? 'нет', value: judged.verdict.число ?? 0, unit: judged.verdict.единица ?? '' }, limits);
+      named = {
+        area: judged.verdict.область && judged.verdict.область !== 'нет' ? judged.verdict.область : '',
+        value: judged.verdict.область && judged.verdict.область !== 'нет' ? String(judged.verdict.число ?? '') : '',
+        unit: judged.verdict.область && judged.verdict.область !== 'нет' ? judged.verdict.единица ?? '' : '',
+        others: judged.verdict.другие_просьбы === 'да' || judged.verdict.другие_просьбы === 'нет' ? judged.verdict.другие_просьбы : '',
+      };
+      ruled = enforce(judged.verdict, letterText, points, breaches, null, [], staff, letter.fromEmail, audienceState.audiences, letter.fromName, audienceState.built, persons);
+      const granted = letterHits({ fromEmail: letter.fromEmail, subject: letter.subject, body: letter.body }, authority, {
+        area: named.area,
+        value: Number(named.value),
+        unit: named.unit,
+        others: named.others !== 'нет',
+      });
+      if (granted?.kind === 'полномочие') ruled = rightRuling(granted);
+      if (judged.steps.length) ruled = { ...ruled, context: [ruled.context, stepsWords(judged.steps)].filter(Boolean).join('\n') };
+    } catch (error) {
+      ruled = failedRuling(letterText, error instanceof Error ? error.message : String(error));
+    }
+    ruled = { ...ruled, draft: finishDraft(applyRevision(ruled.draft, ruled.category, edits), letterText, edits, inside) };
+    if (ruled.ask) {
+      await db.update(decisions).set({ summary: ruled.summary, draft: ruled.draft }).where(and(eq(decisions.id, decision.id), eq(decisions.leaderId, leaderId), eq(decisions.status, 'ждёт')));
+      await db.update(verdicts).set({
+        kind: ruled.kind,
+        category: ruled.category,
+        summary: ruled.summary,
+        draft: ruled.draft,
+        basis: ruled.basis,
+        context: ruled.context,
+        recommendation: ruled.recommendation,
+        authorityOffer: ruled.authorityOffer,
+        risks: ruled.risks,
+        ifNot: ruled.ifNot,
+        authorityArea: named.area,
+        authorityValue: named.value,
+        authorityUnit: named.unit,
+        authorityOthers: named.others,
+      }).where(and(eq(verdicts.leaderId, leaderId), eq(verdicts.id, `v-${decision.id}`.slice(0, 120))));
+    }
+    out.push({ id: decision.id, kind: ruled.kind, ask: ruled.ask, gap: draftGap(ruled.draft), area: named.area, draft: ruled.draft });
+  }
+  return out;
 }
 
 // Руководитель не в «Кому», а в копии (или его вовсе нет среди получателей): письмо для сведения, ответа от него не ждут.

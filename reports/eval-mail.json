@@ -1,67 +1,51 @@
 {
   "model": "anthropic/claude-haiku-4.5",
-  "at": "28.11.2026, 07:29:54 МСК",
-  "costUsd": 1.5658176000000004,
-  "calls": 242,
-  "minutes": 3.3,
+  "at": "28.11.2026, 08:28:44 МСК",
+  "costUsd": 1.4906767999999997,
+  "calls": 241,
+  "minutes": 3.4,
   "score": {
     "total": 80,
-    "correct": 77,
-    "accuracy": 0.9625,
+    "correct": 78,
+    "accuracy": 0.975,
     "needLeader": 40,
     "caught": 40,
     "recall": 1,
-    "falseAlarms": 3,
-    "precision": 0.9302325581395349,
+    "falseAlarms": 2,
+    "precision": 0.9523809523809523,
     "n1": 36,
     "n1Caught": 36,
     "missed": [],
     "alarms": [
       {
-        "id": "m025",
-        "subject": "Доступ к CRM для нового сотрудника",
-        "senderRole": "коллега",
-        "category": "доступы",
+        "id": "m044",
+        "subject": "Жалоба клиента на сроки ответа",
+        "senderRole": "подчинённый",
+        "category": "клиенты",
         "expected": "делегировать",
         "route": "k2",
         "action": "спросить_руководителя",
         "toLeader": true,
         "tools": [
           "person_card",
-          "authorities",
-          "people"
+          "people",
+          "past_decisions"
         ],
         "error": ""
       },
       {
-        "id": "m034",
-        "subject": "Доступ к CRM для нового сотрудника",
-        "senderRole": "коллега",
-        "category": "доступы",
+        "id": "m066",
+        "subject": "Жалоба клиента на сроки ответа",
+        "senderRole": "подчинённый",
+        "category": "клиенты",
         "expected": "делегировать",
         "route": "k2",
         "action": "спросить_руководителя",
         "toLeader": true,
         "tools": [
           "person_card",
-          "authorities",
-          "people"
-        ],
-        "error": ""
-      },
-      {
-        "id": "m043",
-        "subject": "Доступ к CRM для нового сотрудника",
-        "senderRole": "коллега",
-        "category": "доступы",
-        "expected": "делегировать",
-        "route": "k2",
-        "action": "спросить_руководителя",
-        "toLeader": true,
-        "tools": [
-          "person_card",
-          "authorities",
-          "people"
+          "people",
+          "past_decisions"
         ],
         "error": ""
       }
@@ -75,12 +59,12 @@
       {
         "role": "коллега",
         "total": 17,
-        "correct": 14
+        "correct": 17
       },
       {
         "role": "подчинённый",
         "total": 33,
-        "correct": 33
+        "correct": 31
       },
       {
         "role": "приглашение",
@@ -104,14 +88,14 @@
     },
     "errors": 0,
     "toolCalls": {
-      "thread": 43,
-      "people": 23,
+      "thread": 37,
+      "people": 29,
       "leader_edits": 24,
       "person_card": 60,
-      "kpi": 17,
+      "kpi": 11,
+      "open_tasks": 5,
       "authorities": 31,
-      "past_decisions": 22,
-      "open_tasks": 1
+      "past_decisions": 20
     }
   },
   "rows": [
@@ -221,6 +205,7 @@
       "tools": [
         "person_card",
         "kpi",
+        "open_tasks",
         "thread"
       ],
       "error": ""
@@ -282,6 +267,7 @@
       "tools": [
         "person_card",
         "kpi",
+        "open_tasks",
         "thread"
       ],
       "error": ""
@@ -423,8 +409,8 @@
       "toLeader": false,
       "tools": [
         "person_card",
-        "kpi",
-        "thread"
+        "people",
+        "kpi"
       ],
       "error": ""
     },
@@ -488,8 +474,8 @@
       "toLeader": false,
       "tools": [
         "person_card",
-        "kpi",
-        "thread"
+        "people",
+        "kpi"
       ],
       "error": ""
     },
@@ -500,8 +486,8 @@
       "category": "доступы",
       "expected": "делегировать",
       "route": "k2",
-      "action": "спросить_руководителя",
-      "toLeader": true,
+      "action": "авто",
+      "toLeader": false,
       "tools": [
         "person_card",
         "authorities",
@@ -520,8 +506,7 @@
       "toLeader": true,
       "tools": [
         "person_card",
-        "authorities",
-        "kpi"
+        "authorities"
       ],
       "error": ""
     },
@@ -551,8 +536,8 @@
       "toLeader": false,
       "tools": [
         "person_card",
-        "kpi",
-        "thread"
+        "people",
+        "kpi"
       ],
       "error": ""
     },
@@ -641,8 +626,8 @@
       "category": "доступы",
       "expected": "делегировать",
       "route": "k2",
-      "action": "спросить_руководителя",
-      "toLeader": true,
+      "action": "авто",
+      "toLeader": false,
       "tools": [
         "person_card",
         "authorities",
@@ -785,8 +770,8 @@
       "category": "доступы",
       "expected": "делегировать",
       "route": "k2",
-      "action": "спросить_руководителя",
-      "toLeader": true,
+      "action": "авто",
+      "toLeader": false,
       "tools": [
         "person_card",
         "authorities",
@@ -801,8 +786,8 @@
       "category": "клиенты",
       "expected": "делегировать",
       "route": "k2",
-      "action": "авто",
-      "toLeader": false,
+      "action": "спросить_руководителя",
+      "toLeader": true,
       "tools": [
         "person_card",
         "people",
@@ -821,8 +806,7 @@
       "toLeader": true,
       "tools": [
         "person_card",
-        "authorities",
-        "kpi"
+        "authorities"
       ],
       "error": ""
     },
@@ -852,8 +836,8 @@
       "toLeader": false,
       "tools": [
         "person_card",
-        "kpi",
-        "thread"
+        "people",
+        "kpi"
       ],
       "error": ""
     },
@@ -883,8 +867,7 @@
       "toLeader": true,
       "tools": [
         "person_card",
-        "authorities",
-        "kpi"
+        "authorities"
       ],
       "error": ""
     },
@@ -899,8 +882,8 @@
       "toLeader": false,
       "tools": [
         "person_card",
-        "kpi",
-        "thread"
+        "people",
+        "kpi"
       ],
       "error": ""
     },
@@ -977,6 +960,7 @@
       "tools": [
         "person_card",
         "kpi",
+        "open_tasks",
         "thread"
       ],
       "error": ""
@@ -993,6 +977,7 @@
       "tools": [
         "person_card",
         "kpi",
+        "open_tasks",
         "thread"
       ],
       "error": ""
@@ -1072,8 +1057,7 @@
       "toLeader": true,
       "tools": [
         "person_card",
-        "authorities",
-        "kpi"
+        "authorities"
       ],
       "error": ""
     },
@@ -1088,8 +1072,7 @@
       "toLeader": true,
       "tools": [
         "person_card",
-        "authorities",
-        "past_decisions"
+        "authorities"
       ],
       "error": ""
     },
@@ -1118,7 +1101,8 @@
       "action": "игнорировать",
       "toLeader": false,
       "tools": [
-        "thread"
+        "thread",
+        "leader_edits"
       ],
       "error": ""
     },
@@ -1133,8 +1117,8 @@
       "toLeader": false,
       "tools": [
         "person_card",
-        "kpi",
-        "thread"
+        "people",
+        "kpi"
       ],
       "error": ""
     },
@@ -1145,8 +1129,8 @@
       "category": "клиенты",
       "expected": "делегировать",
       "route": "k2",
-      "action": "авто",
-      "toLeader": false,
+      "action": "спросить_руководителя",
+      "toLeader": true,
       "tools": [
         "person_card",
         "people",
@@ -1164,8 +1148,7 @@
       "action": "игнорировать",
       "toLeader": false,
       "tools": [
-        "thread",
-        "leader_edits"
+        "thread"
       ],
       "error": ""
     },
@@ -1212,9 +1195,7 @@
       "tools": [
         "person_card",
         "thread",
-        "past_decisions",
-        "open_tasks",
-        "kpi"
+        "past_decisions"
       ],
       "error": ""
     },
@@ -1262,6 +1243,7 @@
       "tools": [
         "person_card",
         "kpi",
+        "open_tasks",
         "thread"
       ],
       "error": ""
@@ -1307,8 +1289,7 @@
       "toLeader": true,
       "tools": [
         "person_card",
-        "authorities",
-        "kpi"
+        "authorities"
       ],
       "error": ""
     },
@@ -1354,8 +1335,7 @@
       "toLeader": true,
       "tools": [
         "person_card",
-        "authorities",
-        "past_decisions"
+        "authorities"
       ],
       "error": ""
     },
