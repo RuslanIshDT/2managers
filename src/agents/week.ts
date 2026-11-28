@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { clockFor } from './scene.ts';
 import { eq } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
-import { authorities, decisions, emailEtalon, seriesKind, emails, flowReports, leaders, meetings, people, rules, verdicts } from '../db/schema.ts';
+import { authorities, decisions, seriesKind, emails, flowReports, leaders, mailIn, meetings, people, rules, verdicts } from '../db/schema.ts';
 import { staffFromVerdict, type StaffCard } from './dependence.ts';
 import { historyForLeader } from './trust.ts';
 import { audienceEmails, loadAudiences } from './audience.ts';
@@ -136,7 +136,7 @@ export async function acceptWeek(db: Db, leaderId: string) {
   const emailByPerson = new Map(persons.map((person) => [person.externalId, person.email]));
   const categories = await categoriesByLetter(db, leaderId);
   const audiences = await loadAudiences(db, leaderId);
-  const built = rulesFromAudit(pieces, offers, emailByPerson, categories.map, categories.points, audienceEmails(audiences));
+  const built = rulesFromAudit(pieces, offers, emailByPerson, categories.map, categories.points, audienceEmails(audiences), categories.analyzed);
   const now = new Date();
   await db.delete(rules).where(eq(rules.leaderId, leaderId));
   if (built.length) {
@@ -168,25 +168,60 @@ export async function acceptWeekByChat(db: Db, chatId: string): Promise<string> 
   return `Правила приняты. Индекс ${scene.before}% → ${scene.after}%`;
 }
 
-async function categoriesByLetter(db: Db, leaderId: string): Promise<{ map: Map<string, string>; points: string[] }> {
-  const [marks, rows, kinds, leaderRows] = await Promise.all([
-    db.select().from(emailEtalon).where(eq(emailEtalon.leaderId, leaderId)),
+async function categoriesByLetter(db: Db, leaderId: string): Promise<{ map: Map<string, string>; points: string[]; analyzed: Set<string> }> {
+  const [rows, kinds, leaderRows, verdictRows, inbox] = await Promise.all([
     db.select().from(emails).where(eq(emails.leaderId, leaderId)),
     db.select().from(seriesKind).where(eq(seriesKind.leaderId, leaderId)),
     db.select({ profile: leaders.profile }).from(leaders).where(eq(leaders.id, leaderId)).limit(1),
+    db.select({ id: verdicts.id, messageId: verdicts.messageId, category: verdicts.category }).from(verdicts).where(eq(verdicts.leaderId, leaderId)),
+    db.select({ syntheticId: mailIn.syntheticId, messageId: mailIn.messageId }).from(mailIn).where(eq(mailIn.leaderId, leaderId)),
   ]);
   const points = confirmationPoints(leaderRows[0]?.profile ?? '');
-  const byId = new Map(marks.map((row) => [row.externalId, row.category]));
+  const letters = letterCategories(
+    rows.map((row) => ({ id: row.externalId, fromEmail: row.fromEmail, subject: row.subject })),
+    verdictRows,
+    inbox,
+    points,
+  );
+  for (const row of kinds) if (row.category) letters.map.set(`встреча|${subjectKey(row.seriesKey)}`, row.category);
+  return { ...letters, points };
+}
+
+// Категория письма — из разбора помощника. Письмо без разбора в набор разобранных не входит.
+export function letterCategories(
+  letters: { id: string; fromEmail: string; subject: string }[],
+  verdicts: { id: string; messageId: string; category: string }[],
+  links: { syntheticId: string; messageId: string }[],
+  points: string[],
+): { map: Map<string, string>; analyzed: Set<string> } {
+  const byMessage = new Map<string, string[]>();
+  for (const verdict of verdicts) {
+    const ids = [verdict.messageId, verdict.id.replace(/^v-/, '')];
+    for (const id of ids) {
+      const list = byMessage.get(id) ?? [];
+      list.push(verdict.category);
+      byMessage.set(id, list);
+    }
+  }
+  const messagesOf = new Map<string, string[]>();
+  for (const link of links) {
+    const list = messagesOf.get(link.syntheticId) ?? [];
+    list.push(link.messageId);
+    messagesOf.set(link.syntheticId, list);
+  }
   const map = new Map<string, string>();
-  for (const row of rows) {
-    const category = byId.get(row.externalId) ?? '';
-    if (!category) continue;
-    const key = `${row.fromEmail.toLowerCase()}|${subjectKey(row.subject)}`;
+  const analyzed = new Set<string>();
+  for (const letter of letters) {
+    const ids = [letter.id, ...(messagesOf.get(letter.id) ?? [])];
+    const categories = ids.flatMap((id) => byMessage.get(id) ?? []);
+    if (!categories.length) continue;
+    const key = `${letter.fromEmail.toLowerCase()}|${subjectKey(letter.subject)}`;
+    analyzed.add(key);
+    const category = categories.find((item) => leaderMustConfirm(item, points)) ?? categories.at(-1) ?? '';
     const prev = map.get(key);
     if (!prev || leaderMustConfirm(category, points)) map.set(key, category);
   }
-  for (const row of kinds) if (row.category) map.set(`встреча|${subjectKey(row.seriesKey)}`, row.category);
-  return { map, points };
+  return { map, analyzed };
 }
 
 export async function ownProposal(db: Db, leaderId: string): Promise<FlowRule[]> {
@@ -207,6 +242,7 @@ export async function ownProposal(db: Db, leaderId: string): Promise<FlowRule[]>
     categories.map,
     categories.points,
     audienceEmails(audiences),
+    categories.analyzed,
   );
 }
 

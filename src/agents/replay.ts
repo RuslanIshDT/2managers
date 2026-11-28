@@ -134,15 +134,22 @@ export function rulesFromAudit(
   categoryByKey: Map<string, string> = new Map(),
   points: string[] = [],
   audienceEmails: Set<string> = new Set(),
+  analyzedKeys?: Set<string>,
 ): FlowRule[] {
   const rules: FlowRule[] = [];
   for (const piece of pieces) {
     const split = piece.kind === 'письма' ? piece.key.indexOf('|') : -1;
     const fromEmail = split >= 0 ? piece.key.slice(0, split) : '';
     const subject = subjectKey(split >= 0 ? piece.key.slice(split + 1) : piece.title);
-    const category = piece.kind === 'письма' ? categoryByKey.get(`${fromEmail.toLowerCase()}|${subject}`) ?? '' : categoryByKey.get(`встреча|${subject}`) ?? '';
+    const letterKey = `${fromEmail.toLowerCase()}|${subject}`;
+    const category = piece.kind === 'письма' ? categoryByKey.get(letterKey) ?? '' : categoryByKey.get(`встреча|${subject}`) ?? '';
     const fromAudience = piece.kind === 'письма' && audienceEmails.has(fromEmail.toLowerCase());
-    const effect = ruleEffect(piece.verdict, category, points, fromAudience);
+    const unseen = piece.kind === 'письма' && analyzedKeys !== undefined && !analyzedKeys.has(letterKey);
+    const effect = unseen
+      ? piece.verdict === 'должно' || piece.verdict === ''
+        ? null
+        : 'карточка'
+      : ruleEffect(piece.verdict, category, points, fromAudience);
     if (!effect) continue;
     if (piece.kind === 'письма') {
       rules.push({

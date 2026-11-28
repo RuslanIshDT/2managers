@@ -15,7 +15,7 @@ import { hideMailbox, isOwnAddress, lettersForMailbox } from '../src/agents/inta
 import { pickAboveLimit, type PersonLimit } from '../src/agents/reset-stand.ts';
 import { buildDesk, type DeskInput } from '../src/agents/desk.ts';
 import { subjectKey, type FlowRule } from '../src/agents/replay.ts';
-import { freshVerdictKind } from '../src/agents/week.ts';
+import { freshVerdictKind, letterCategories } from '../src/agents/week.ts';
 import { applyRevision, revisionPrompt } from '../src/agents/revisions.ts';
 import { loadSynthetic } from '../src/data/synthetic.ts';
 import { parseSceneFile } from '../src/agents/scene.ts';
@@ -652,6 +652,24 @@ describe('пересчёт недели', () => {
       [peoplePoint],
     );
     expect(guarded[0]?.effect).toBe('карточка');
+    const point = 'обязательства клиентам';
+    const contract = [{ kind: 'письма' as const, key: 'a@example|договор', title: 'Договор', verdict: 'не_должно', change: '', cause: '' }];
+    const seen = rulesFromAudit(contract, [], new Map(), new Map([['a@example|договор', point]]), [point], new Set(), new Set(['a@example|договор']));
+    expect(seen[0]?.effect).toBe('карточка');
+    const unseen = rulesFromAudit(contract, [], new Map(), new Map(), [point], new Set(), new Set());
+    expect(unseen[0]?.effect).toBe('карточка');
+    const ordinary = rulesFromAudit(contract, [], new Map(), new Map([['a@example|договор', 'иное']]), [point], new Set(), new Set(['a@example|договор']));
+    expect(ordinary[0]?.effect).toBe('стоп');
+    const fromVerdict = letterCategories(
+      [{ id: 'm1', fromEmail: 'a@example', subject: 'Договор' }],
+      [{ id: 'v-m1', messageId: 'imap-1', category: point }],
+      [{ syntheticId: 'm1', messageId: 'imap-1' }],
+      [point],
+    );
+    expect(fromVerdict.analyzed.has('a@example|договор')).toBe(true);
+    expect(fromVerdict.map.get('a@example|договор')).toBe(point);
+    const noVerdict = letterCategories([{ id: 'm2', fromEmail: 'a@example', subject: 'Другое' }], [], [], [point]);
+    expect(noVerdict.analyzed.size).toBe(0);
     const twice = replayWeek(
       [
         { fromEmail: 'a@example', subject: 'Отпуск', body: 'даты' },
