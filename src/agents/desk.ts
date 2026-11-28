@@ -72,6 +72,7 @@ export interface DeskInput {
   history: HistoryRow[];
   series: { title: string; open: boolean }[];
   relief: { letters: number; meetings: number } | null;
+  proposal?: FlowRule[];
   tasks: { title: string; minutes: number; goal: string }[];
   calls: { purpose: string; at: string }[];
   remote?: { tracker: boolean; calendar: boolean };
@@ -105,11 +106,11 @@ export function buildDesk(input: DeskInput): Desk {
   if (!input.accepted && input.relief && (input.relief.letters > 0 || input.relief.meetings > 0)) {
     work.push({
       id: 'rules:week',
-      title: `Примите правила недели: уйдёт ${countWords(input.relief.letters, 'письмо', 'письма', 'писем')} и ${countWords(input.relief.meetings, 'встреча', 'встречи', 'встреч')}`,
+      title: rulesTitle(input.relief),
       wait: '',
       minutes: '',
       kind: 'rules',
-      lines: [],
+      lines: rulesLines(input.proposal ?? []),
       origin: made('k10', 'Правила потока', 'Подсчёт по отчёту аудита этого руководителя, правила ещё не записаны', 'Посчитано по данным', []),
     });
   }
@@ -349,6 +350,7 @@ export async function deskForLeader(db: Db, leaderId: string, series: { title: s
     meetings: meetingList,
     rules,
     relief: proposal.length ? { letters: preview.stoppedLetters + preview.digestLetters, meetings: preview.stoppedMeetings + preview.digestMeetings } : null,
+    proposal,
     people: personRows
       .filter((row) => row.role === 'подчинённый')
       .map((row) => ({
@@ -503,4 +505,46 @@ function countWords(n: number, one: string, few: string, many: string): string {
   const hundred = abs % 100;
   const word = tail === 1 && hundred !== 11 ? one : tail >= 2 && tail <= 4 && (hundred < 12 || hundred > 14) ? few : many;
   return `${n} ${word}`;
+}
+
+function singularCount(n: number): boolean {
+  const abs = Math.abs(n);
+  return abs % 10 === 1 && abs % 100 !== 11;
+}
+
+function rulesTitle(relief: { letters: number; meetings: number }): string {
+  const parts: string[] = [];
+  if (relief.letters > 0) parts.push(countWords(relief.letters, 'письмо', 'письма', 'писем'));
+  if (relief.meetings > 0) parts.push(countWords(relief.meetings, 'встреча', 'встречи', 'встреч'));
+  const named = parts.length === 2 ? `${parts[0]} и ${parts[1]}` : (parts[0] ?? '');
+  const alone = parts.length === 1 ? (relief.letters > 0 ? relief.letters : relief.meetings) : 0;
+  const verb = parts.length === 1 && singularCount(alone) ? 'дойдёт' : 'дойдут';
+  return `Примите правила недели: до вас не ${verb} ${named}`;
+}
+
+function blocksFlow(rule: FlowRule): boolean {
+  return rule.effect === 'стоп' || rule.effect === 'дайджест';
+}
+
+function rulesLines(proposal: FlowRule[]): { id: string; title: string }[] {
+  const chains = proposal.filter((rule) => rule.kind === 'письмо' && blocksFlow(rule)).length;
+  const series = proposal.filter((rule) => rule.kind === 'встреча' && blocksFlow(rule)).length;
+  const rights = proposal.filter((rule) => rule.kind === 'полномочие').length;
+  const lines: { id: string; title: string }[] = [];
+  const removed = [chains > 0 ? countWords(chains, 'цепочку', 'цепочки', 'цепочек') : '', series > 0 ? countWords(series, 'серию', 'серии', 'серий') : ''].filter(Boolean);
+  const parts: string[] = [];
+  if (removed.length) {
+    const named = removed.length === 2 ? `${removed[0]} и ${removed[1]}` : removed[0];
+    const reach = chains > 0 && series > 0 ? 'их письма и встречи до вас не доходят' : chains > 0 ? 'их письма до вас не доходят' : 'их встречи до вас не доходят';
+    parts.push(`Аудит потока признал лишними ${named}: ${reach}`);
+  }
+  if (rights > 0) parts.push(`Подчинённым предлагается ${countWords(rights, 'право', 'права', 'прав')} решать самому до предела`);
+  if (parts.length) lines.push({ id: 'rules:made', title: `${parts.join('. ')}.` });
+  lines.push({ id: 'rules:where', title: 'Где смотреть: раздел «Поток» и «Полный аудит потока».' });
+  lines.push({
+    id: 'rules:after',
+    title:
+      'После принятия по новым письмам в пределах права помощник сам отвечает подчинённому «это в вашем праве», вас не спрашивают. По кнопке «Принять» письма никому не уходят. Темы, которые вы по профилю подтверждаете сами, и важные адресаты правилами не отсекаются.',
+  });
+  return lines;
 }

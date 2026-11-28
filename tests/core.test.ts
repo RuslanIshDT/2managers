@@ -938,8 +938,12 @@ describe('главная T34', () => {
     expect(desk.done.some((line) => line.text.startsWith('Было 100% → стало'))).toBe(true);
     const pending = buildDesk({ ...input, accepted: false, rules: [], relief: { letters: 12, meetings: 4 } });
     expect(pending.work[0]?.kind).toBe('rules');
-    expect(pending.work[0]?.title).toContain('12 писем');
-    expect(pending.work[0]?.title).toContain('4 встречи');
+    expect(pending.work[0]?.title).toBe('Примите правила недели: до вас не дойдут 12 писем и 4 встречи');
+    expect(pending.work[0]?.title).not.toContain('уйдёт');
+    const rulesNote = pending.work[0]?.lines.map((line) => line.title).join(' ');
+    expect(rulesNote).toContain('раздел «Поток»');
+    expect(rulesNote).toContain('Полный аудит потока');
+    expect(rulesNote).toContain('«это в вашем праве»');
     expect(desk.work[0]?.kind).toBe('decision');
     expect(desk.work[0]?.title.startsWith('Решите:')).toBe(true);
     expect(desk.work[0]?.origin.data).toContain('Кира');
