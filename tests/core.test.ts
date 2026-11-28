@@ -889,7 +889,10 @@ describe('главная T34', () => {
     const input: DeskInput = {
       accepted: true,
       decisions: [{ id: 'd1', status: 'ждёт', summary: 'Скидка 15% клиенту, ответ до пятницы', replyName: 'Кира', createdAt: '2026-11-26T10:00:00.000Z', category: 'деньги' }],
-      verdicts: [{ id: 'v1', kind: 'вернуть', category: 'кадры', summary: 'Кира просит согласовать отпуск', basis: 'Это кадры', createdAt: '2026-11-20T10:00:00.000Z' }],
+      verdicts: [
+        { id: 'v-d1', kind: 'нужен_руководитель', category: 'деньги', summary: 'Скидка 15% клиенту, ответ до пятницы', basis: 'выше права', area: 'скидка', createdAt: '2026-11-26T10:00:00.000Z' },
+        { id: 'v1', kind: 'вернуть', category: 'кадры', summary: 'Кира просит согласовать отпуск', basis: 'Это кадры', createdAt: '2026-11-20T10:00:00.000Z' },
+      ],
       letters: [{ fromName: 'Кира', fromEmail: 'kira@example.com', subject: 'Статус сделки', body: '', received: '2026-11-25T10:00:00' }],
       meetings: [{ summary: 'Планёрка направления', minutes: 40 }],
       rules: [rule, meetingRule],
@@ -927,6 +930,19 @@ describe('главная T34', () => {
     expect(desk.work[0]?.kind).toBe('decision');
     expect(desk.work[0]?.title.startsWith('Решите:')).toBe(true);
     expect(desk.work[0]?.origin.data).toContain('Кира');
+    expect(desk.work[0]?.origin.data).toContain('Полномочие Кира: скидка 9 %');
+    const budget = buildDesk({
+      ...input,
+      decisions: [{ id: 'd2', status: 'ждёт', summary: 'Бюджет кампании', replyName: 'Кира', createdAt: '2026-11-26T11:00:00.000Z', category: 'деньги' }],
+      verdicts: [{ id: 'v-d2', kind: 'нужен_руководитель', category: 'деньги', summary: 'Бюджет кампании', basis: 'выше права', area: 'бюджет кампании', createdAt: '2026-11-26T11:00:00.000Z' }],
+      authorities: [
+        { personId: 'a', area: 'скидка', limit: '9', unit: '%' },
+        { personId: 'a', area: 'бюджет кампании', limit: '200000', unit: '₽' },
+      ],
+    });
+    const card = budget.work.find((item) => item.kind === 'decision');
+    expect(card?.origin.data).toContain('Полномочие Кира: бюджет кампании 200000 ₽');
+    expect(card?.origin.data).not.toContain('скидка');
     expect(desk.work.some((item) => item.title === 'Поговорите: Кира')).toBe(true);
     const letterLine = desk.done.find((line) => line.text.includes('письмо'));
     const meetingLine = desk.done.find((line) => line.text.includes('встреч'));

@@ -36,7 +36,7 @@ export const K2_TOOLS: ToolSpec[] = [
   { name: 'open_tasks', description: 'Открытые задачи отправителя со сроками и статусом', parameters: OBJECT },
   {
     name: 'past_decisions',
-    description: 'Как руководитель уже решал похожие просьбы этого человека. query — слово из темы, например «скидка»; пусто — все',
+    description: 'Как руководитель уже решал похожие просьбы этого человека. query — слово из темы; пусто — все',
     parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'], additionalProperties: false },
   },
   { name: 'thread', description: 'Прежние письма этого человека руководителю: тема, дата, чем закончился разбор', parameters: OBJECT },

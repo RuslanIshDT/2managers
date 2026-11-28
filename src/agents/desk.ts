@@ -62,7 +62,7 @@ export interface Desk {
 export interface DeskInput {
   accepted: boolean;
   decisions: { id: string; status: string; summary: string; replyName: string; createdAt: string; category: string }[];
-  verdicts: { id: string; kind: string; category: string; summary: string; basis: string; createdAt: string }[];
+  verdicts: { id: string; kind: string; category: string; summary: string; basis: string; createdAt: string; area?: string }[];
   letters: { fromName: string; fromEmail: string; subject: string; body: string; received: string }[];
   meetings: { summary: string; minutes: number }[];
   rules: FlowRule[];
@@ -117,7 +117,8 @@ export function buildDesk(input: DeskInput): Desk {
       input.letters.find((row) => row.subject === decision.summary) ??
       input.letters.find((row) => row.fromName === decision.replyName && row.subject.length > 0 && decision.summary.includes(row.subject));
     const person = input.people.find((row) => row.name === decision.replyName);
-    const right = person ? input.authorities.find((row) => row.personId === person.id && row.area.toLowerCase().includes('скидк')) : undefined;
+    const named = input.verdicts.find((row) => row.id === `v-${decision.id}`)?.area?.trim().toLowerCase() ?? '';
+    const right = person && named ? input.authorities.find((row) => row.personId === person.id && row.area.trim().toLowerCase() === named) : undefined;
     const rows = [letter ? `${letter.fromName}, ${dateWords(letter.received)}: ${letter.subject}` : decision.summary];
     if (right && person) rows.push(`Полномочие ${person.name}: ${right.area} ${right.limit}${right.unit === '—' ? '' : ` ${right.unit}`}`);
     work.push({
@@ -321,6 +322,7 @@ export async function deskForLeader(db: Db, leaderId: string, series: { title: s
       category: row.category,
       summary: row.summary,
       basis: row.basis,
+      area: row.authorityArea,
       createdAt: row.createdAt.toISOString(),
     })),
     letters,
