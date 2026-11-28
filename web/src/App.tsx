@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useState, type FormEvent } from '
 import { ConnectionFields, LeadersPanel } from './leaders.tsx';
 import { rememberChoiceVisible } from './decision-ui.ts';
 import { FlowRules, type FlowRuleView } from './flow-rules.tsx';
+import { helperIdForName } from '../../src/agents/agent-names.ts';
 import { splitPreview, workGroups } from '../../src/agents/home-groups.ts';
 import { Button } from './components/ui/button.tsx';
 import { Card } from './components/ui/card.tsx';
@@ -673,7 +674,7 @@ export function App() {
       </Card>
       ) : null}
       {section === 'helper' ? <Helpers cards={cabinet?.desk.helpers ?? []} /> : null}
-      {section === 'docs' ? <Guide text={guide} /> : null}
+      {section === 'docs' ? <Guide text={guide} cards={cabinet?.desk.helpers ?? []} onOpen={openHelper} /> : null}
       {section === 'tasks' ? (
         <Card className="mb-4">
           <h2 className="text-lg font-semibold">Задачи</h2>
@@ -1016,13 +1017,16 @@ function parseGuide(text: string): { intro: string[]; tabs: GuideTab[] } {
   return { intro, tabs };
 }
 
-function Guide({ text }: { text: string }) {
+function Guide({ text, cards, onOpen }: { text: string; cards: { id: string; name: string }[]; onOpen: (id: string) => void }) {
   const { intro, tabs } = parseGuide(text);
   const [active, setActive] = useState(0);
   const tab = tabs[Math.min(active, tabs.length - 1)];
   const agents = tab ? tab.blocks.filter((block) => block.startsWith('- агент:')).flatMap(parseAgents) : [];
   const names = [...new Set(agents.map((agent) => agent.name))];
-  const jump = (name: string) => document.getElementById(`guide-agent-${names.indexOf(name)}`)?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  const open = (name: string) => {
+    const id = helperIdForName(name, cards);
+    if (id) onOpen(id);
+  };
   return (
     <Card className="max-w-4xl">
       <article className="grid gap-3 text-sm leading-relaxed">
@@ -1047,7 +1051,7 @@ function Guide({ text }: { text: string }) {
               <div className="flex flex-wrap items-center gap-1.5">
                 <span className="text-[#5d6878]">Отработали:</span>
                 {names.map((name) => (
-                  <button key={name} type="button" onClick={() => jump(name)} className="rounded-full bg-[#1f5fbf] px-2.5 py-0.5 text-xs font-medium text-white">
+                  <button key={name} type="button" onClick={() => open(name)} className="rounded-full bg-[#1f5fbf] px-2.5 py-0.5 text-xs font-medium text-white">
                     {name}
                   </button>
                 ))}
@@ -1057,7 +1061,7 @@ function Guide({ text }: { text: string }) {
               block.startsWith('- агент:') ? (
                 <div key={index} className="grid gap-2">
                   {parseAgents(block).map((agent) => (
-                    <AgentCard key={agent.name} agent={agent} anchor={`guide-agent-${names.indexOf(agent.name)}`} />
+                    <AgentCard key={agent.name} agent={agent} anchor={`guide-agent-${names.indexOf(agent.name)}`} onOpen={open} />
                   ))}
                 </div>
               ) : (
@@ -1071,11 +1075,13 @@ function Guide({ text }: { text: string }) {
   );
 }
 
-function AgentCard({ agent, anchor }: { agent: GuideAgent; anchor: string }) {
+function AgentCard({ agent, anchor, onOpen }: { agent: GuideAgent; anchor: string; onOpen: (name: string) => void }) {
   return (
     <div id={anchor} className="scroll-mt-4 rounded-md border border-[#d8dee8] p-3">
       <div className="flex flex-wrap items-center gap-1.5">
-        <span className="rounded-full bg-[#1f5fbf] px-2.5 py-0.5 text-xs font-medium text-white">{agent.name}</span>
+        <button type="button" onClick={() => onOpen(agent.name)} className="rounded-full bg-[#1f5fbf] px-2.5 py-0.5 text-xs font-medium text-white">
+          {agent.name}
+        </button>
         {agent.mode ? <span className="rounded-full bg-[#eef1f5] px-2 py-0.5 text-xs text-[#5d6878]">{agent.mode}</span> : null}
       </div>
       <p className="mt-2">{bold(agent.did.charAt(0).toUpperCase() + agent.did.slice(1))}</p>

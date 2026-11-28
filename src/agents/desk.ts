@@ -1,7 +1,7 @@
 // Главная руководителя и происхождение цифр. Имена и числа приходят из данных, в коде их нет.
-import { desc, eq } from 'drizzle-orm';
+import { count, desc, eq } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
-import { authorities, decisions, emails, focusPlans, kpis, leaders, llmCalls, mailIn, meetings, people, verdicts } from '../db/schema.ts';
+import { authorities, decisions, emails, focusPlans, kpis, leaderActs, leaders, llmCalls, mailIn, meetings, noteSent, people, protocols, revisions, seriesKind, taskReminders, tasks as storedTasks, verdicts } from '../db/schema.ts';
 import { confirmationPoints, leaderMustConfirm } from './confirm.ts';
 import { draftGap } from './k2.ts';
 import { historyForLeader } from './trust.ts';
@@ -10,6 +10,7 @@ import { letterHits, meetingHits, readingForLetter, replayWeek, trustOffers, typ
 import { letterExcerpt, releaseDeferred } from './decision.ts';
 import { listFlowRules, ownProposal } from './week.ts';
 import { adviceKind, emailMedian, personLines, type AdviceKind, type PersonKpi } from './focus.ts';
+import { buildHelperCards, type HelperCard, type HelperFacts } from './helper-cards.ts';
 import { calendarConfig } from '../yandex/calendar.ts';
 import { trackerConfig } from '../yandex/tracker.ts';
 
@@ -57,15 +58,7 @@ export interface DoneLine {
   origin: Origin;
 }
 
-export interface HelperCard {
-  id: string;
-  name: string;
-  mode: 'модель' | 'код' | 'заглушка';
-  does: string;
-  did: string;
-  result: string;
-  value: string;
-}
+export type { HelperCard } from './helper-cards.ts';
 
 export interface Desk {
   work: WorkItem[];
@@ -89,9 +82,10 @@ export interface DeskInput {
   relief: { letters: number; meetings: number } | null;
   proposal?: FlowRule[];
   tasks: { title: string; minutes: number; goal: string; why?: string }[];
-  calls: { purpose: string; at: string }[];
+  calls: { purpose: string; at: string; agent?: string }[];
   remote?: { tracker: boolean; calendar: boolean };
   points?: string[];
+  facts?: HelperFacts;
 }
 
 export function buildDesk(input: DeskInput): Desk {
@@ -202,7 +196,7 @@ export function buildDesk(input: DeskInput): Desk {
       lines: [],
       origin: made(
         'k12',
-        'Доверие по решениям',
+        'Принятое право',
         `${past.length} утверждений подряд без правок, область «${offer.area}»${offer.name ? `, ${offer.name}` : ''}`,
         'Посчитано по данным',
         past.map((row) => `${dateWords(row.at)}: ${row.subject}`),
@@ -305,7 +299,7 @@ export function buildDesk(input: DeskInput): Desk {
   return {
     work: work.map(cleanWork),
     done: done.map((line) => ({ text: shown(line.text), origin: cleanOrigin(line.origin) })),
-    helpers: helperCards(input, picture, returned.length, heldLetters.length, heldMeetings.length, meetingMinutes),
+    helpers: buildHelperCards(input, picture, returned.length, heldLetters.length, heldMeetings.length, meetingMinutes, shownSafety),
     people: input.people.map((person) => ({
       id: person.id,
       origin: made(
@@ -333,7 +327,7 @@ export async function deskForLeader(db: Db, leaderId: string, series: { title: s
     db.select().from(people).where(eq(people.leaderId, leaderId)),
     db.select().from(kpis).where(eq(kpis.leaderId, leaderId)),
     db.select().from(authorities).where(eq(authorities.leaderId, leaderId)),
-    db.select({ purpose: llmCalls.purpose, at: llmCalls.at }).from(llmCalls).where(eq(llmCalls.leaderId, leaderId)),
+    db.select({ purpose: llmCalls.purpose, at: llmCalls.at, agent: llmCalls.agent }).from(llmCalls).where(eq(llmCalls.leaderId, leaderId)),
     db.select().from(focusPlans).where(eq(focusPlans.leaderId, leaderId)).limit(1),
     listFlowRules(db, leaderId),
     db.select({ profile: leaders.profile }).from(leaders).where(eq(leaders.id, leaderId)).limit(1),
@@ -351,6 +345,25 @@ export async function deskForLeader(db: Db, leaderId: string, series: { title: s
       .where(eq(mailIn.leaderId, leaderId)),
   ]);
   const history = await historyForLeader(db, leaderId);
+  const [revisionN, protocolN, reminderN, noteN, kindN, actN, taskN] = await Promise.all([
+    db.select({ n: count() }).from(revisions).where(eq(revisions.leaderId, leaderId)),
+    db.select({ n: count() }).from(protocols).where(eq(protocols.leaderId, leaderId)),
+    db.select({ n: count() }).from(taskReminders).where(eq(taskReminders.leaderId, leaderId)),
+    db.select({ n: count() }).from(noteSent).where(eq(noteSent.leaderId, leaderId)),
+    db.select({ n: count() }).from(seriesKind).where(eq(seriesKind.leaderId, leaderId)),
+    db.select({ n: count() }).from(leaderActs).where(eq(leaderActs.leaderId, leaderId)),
+    db.select({ n: count() }).from(storedTasks).where(eq(storedTasks.leaderId, leaderId)),
+  ]);
+  const facts: HelperFacts = {
+    revisions: Number(revisionN[0]?.n ?? 0),
+    protocols: Number(protocolN[0]?.n ?? 0),
+    reminders: Number(reminderN[0]?.n ?? 0),
+    notes: Number(noteN[0]?.n ?? 0),
+    seriesKinds: Number(kindN[0]?.n ?? 0),
+    acts: Number(actN[0]?.n ?? 0),
+    tasks: Number(taskN[0]?.n ?? 0),
+    goals: personRows.filter((row) => row.goal.trim() || row.leaderGoal.trim()).length,
+  };
   const mailByPerson = new Map<string, number>();
   for (const letter of letterRows) {
     const person = personRows.find((row) => addressesOf(row).includes(letter.fromEmail.toLowerCase()));
@@ -440,61 +453,11 @@ export async function deskForLeader(db: Db, leaderId: string, series: { title: s
     tasks: (plan?.today ?? [])
       .filter((row) => row.title)
       .map((row) => ({ title: row.title ?? '', minutes: row.minutes ?? 0, goal: row.goal ?? '', why: row.why ?? '' })),
-    calls: callRows.map((row) => ({ purpose: row.purpose, at: row.at.toISOString() })),
+    calls: callRows.map((row) => ({ purpose: row.purpose, at: row.at.toISOString(), agent: row.agent })),
     remote: { tracker: Boolean(trackerConfig()), calendar: Boolean(calendarConfig()) },
     points: confirmationPoints(leaderRows[0]?.profile ?? ''),
+    facts,
   });
-}
-
-function helperCards(
-  input: DeskInput,
-  picture: ReturnType<typeof replayWeek>,
-  returned: number,
-  heldLetters: number,
-  heldMeetings: number,
-  meetingMinutes: number,
-): HelperCard[] {
-  const last = (prefix: string) => {
-    const rows = input.calls.filter((call) => call.purpose.startsWith(prefix)).sort((a, b) => b.at.localeCompare(a.at));
-    return rows[0] ? dateWords(rows[0].at) : '';
-  };
-  const modelDid = (prefix: string, empty: string) => {
-    const when = last(prefix);
-    const count = input.calls.filter((call) => call.purpose.startsWith(prefix)).length;
-    if (!count) return empty;
-    return `${countWords(count, 'вызов', 'вызова', 'вызовов')} модели${when ? `, последний ${when}` : ''}`;
-  };
-  const letterValue = heldLetters > 0 ? `${countWords(heldLetters * LETTER_MINUTES, 'минута', 'минуты', 'минут')} писем, оценка` : '';
-  const meetingValue = meetingMinutes > 0 ? `${countWords(meetingMinutes, 'минута', 'минуты', 'минут')} встреч по календарю` : '';
-  const saved = [letterValue, meetingValue].filter(Boolean).join(', ');
-  const remote = input.remote ?? { tracker: false, calendar: false };
-  const cards: HelperCard[] = [
-    card('k1', 'Карточка отдела', 'код', 'Собирает зону, цель, KPI и полномочия человека из файлов отдела.', `В каталоге ${input.people.length} человек.`, 'Карточки отдела заполнены из этих файлов.', 'Коннектор кадровой системы — заглушка, поэтому источник — файлы.'),
-    card('k2', 'Разбор почты', input.calls.some((call) => call.purpose.startsWith('k2') || call.purpose.startsWith('mail_ext')) ? 'модель' : 'код', 'Читает письмо и контекст и решает: ответить самому, передать сотруднику, в сводку, без ответа или руководителю. Внутренние письма (сотрудники, коллеги, начальник) и внешние разбираются отдельно.', modelDid('k2', 'Вызовов модели по письмам на этих данных нет.'), returned ? `Ответил сам или передал: ${returned}.` : 'Ответов и пересылок на этих данных нет.', shownSafety),
-    card('k3', 'Матрица отдела', 'код', 'Кладёт каждого по KPI и числу писем: поговорить, помочь, расширить право или не трогать.', `Посчитано по ${input.people.length} человек.`, 'Тихие проблемы — те, у кого KPI отстаёт и писем нет.', 'Модель для матрицы не вызывается.'),
-    card('k4', 'Три дела на сегодня', input.calls.some((call) => call.purpose.startsWith('k4')) ? 'модель' : 'код', 'Утром выбирает до трёх дел с наибольшим смыслом на час руководителя.', modelDid('k4', 'Сохранённого выбора модели на этих данных нет.'), input.tasks.length ? `В плане ${countWords(input.tasks.length, 'дело', 'дела', 'дел')}.` : 'Плана на сегодня нет.', 'Протокол после утверждения уходит письмом в тестовый ящик.'),
-    card('k5', 'Аудит потока', input.calls.some((call) => call.purpose.startsWith('аудитор')) ? 'модель' : 'код', 'Говорит, каких писем и встреч не должно быть и какое изменение организации их убирает.', modelDid('аудитор', 'Прогона аудита на этих данных нет.'), input.rules.length ? `Правил в базе: ${input.rules.length}.` : 'Принятых правил нет.', 'Эталонные метки писем в запрос модели не входят.'),
-    card('k6', 'Цели', 'код', 'Раскладывает цели руководителя на людей и их KPI и называет дыры.', `Цели собраны по ${input.people.length} человек.`, 'Дыра — цель без владельца, цель без KPI владельца или человек без цели.', 'Модель при открытии кабинета не вызывается.'),
-    card('k7', 'Задачи', 'код', 'Смотрит, двигает ли задача цель исполнителя и реален ли срок.', 'Считает по задачам каталога.', 'Задача без цели — кандидат её снять.', remote.tracker ? 'Экран списка читает очередь Трекера.' : 'Экран списка задач — заглушка: Трекер не подключён.'),
-    card('k8', 'Контроль KPI', 'код', 'Сравнивает план и факт по неделям и поднимает отставание раньше письма.', `Отстающих недель: ${input.people.reduce((sum, person) => sum + person.laggingWeeks.length, 0)}.`, 'Сигнал появляется, когда писем от человека нет.', 'Прогноз — ещё один шаг того же наклона, не конец квартала.'),
-    card('k9', 'Контекст решения', input.calls.some((call) => call.purpose.startsWith('k2')) ? 'модель' : 'код', 'К просьбе, которая осталась у руководителя, добавляет контекст и один вариант решения.', modelDid('k2', 'Отдельного вызова на контекст нет: его пишет разбор письма.'), 'Руководитель видит рекомендацию и основание.', 'Решение всё равно принимает руководитель.'),
-    card('k10', 'Правила потока', 'код', 'Принятое изменение становится правилом, и закрытые им письма больше не доходят.', input.accepted ? `Правил: ${input.rules.length}.` : 'Правила недели ещё не приняты.', saved || 'Снятых часов на этих данных нет.', 'Письмо пункта подтверждения правило не забирает.'),
-    card('k11', 'Индекс зависимости', 'код', 'Считает, какая доля потока всё ещё требует руководителя.', input.accepted ? `Сейчас ${picture.after}% из ${picture.before}%.` : 'Правил нет, доля — весь каталог.', `Остаются ${picture.stillLetters} писем и ${picture.stillMeetings} встреч.`, 'Это итог блока «Сделано без вас», не отдельная цифра.'),
-    card('k12', 'Доверие по решениям', 'код', 'После нескольких утверждений подряд без правок предлагает отдать право.', `В истории ${countWords(input.history.length, 'решение', 'решения', 'решений')}.`, trustOffers(input.history, input.authorities).length ? 'Есть предложение отдать право.' : 'Порога для нового права история не достигла.', 'Пока руководитель не нажмёт «Принять», право не действует.'),
-    card('k13', 'Карточка решения', 'код', 'Показывает письмо, кому уйдёт ответ и черновик. Кнопки: отправить, отказать, отложить до даты, поправить.', `Ждут решения: ${input.decisions.filter((row) => row.status === 'ждёт').length}.`, 'Отказ уходит письмом отправителю. Отложенное возвращается в выбранный день.', 'Без кнопки «Отправить ответ» черновик не уходит.'),
-    card('k14', 'Записка человеку', 'код', 'Раз в неделю пишет человеку, с чем он приходил и что решает сам.', 'Текст собирается из его писем и принятых правил.', 'В ящик уходит записка каждому, кому она ещё не уходила.', 'Адрес в синтетике писем не принимает, поэтому письмо уходит в тестовый ящик.'),
-    card('k15', 'Календарь с нуля', 'код', 'Регулярная встреча без решения предлагается к отпуску.', `Открытых серий в списке работы: ${input.series.filter((row) => row.open).length}.`, 'Продление хранится в базе.', remote.calendar ? '«Отпустить» убирает будущие встречи серии из календаря «Стенд» и ставит на их время выбранный приоритет: встречу один на один или время на цель из профиля.' : 'Календарь не подключён: освобождение записывается только на стенде.'),
-  ];
-  cards.push(
-    card('stub-tasks', 'Список задач', remote.tracker ? 'код' : 'заглушка', 'Показывает задачи из файла и из утверждённого протокола.', remote.tracker ? 'Те же задачи лежат в очереди Трекера.' : 'Трекер не подключён.', remote.tracker ? 'Экран читает очередь.' : 'Строки не уходят во внешнюю систему.', remote.tracker ? 'Рядом в описании — письмо, если тема совпала.' : 'Это заглушка: список есть, Трекера нет.'),
-    card('stub-calendar', 'Календарь', remote.calendar ? 'код' : 'заглушка', 'Показывает встречи из файла.', remote.calendar ? 'Те же встречи стоят в календаре «Стенд».' : 'Календарь не подключён.', remote.calendar ? 'Встреча протокола встаёт туда же.' : 'Встреча по протоколу приходит файлом .ics в письме, в календарь сама не встаёт.', remote.calendar ? '«Отпустить» серию убирает её будущие встречи и ставит блок приоритета.' : 'Это заглушка.'),
-    card('r5', 'Рассылка протокола', 'код', 'После «Утвердить» каждому участнику — письмо с его поручениями, протокол и приглашение .ics.', 'Письма уходят на ящик стенда, получатель назван в тексте.', 'Одно поручение — одна задача со своим сроком.', remote.tracker || remote.calendar ? 'Задачи пишутся в Трекер, протокол и новые встречи — в календарь «Стенд».' : 'Календарь и Трекер не подключаются.'),
-  );
-  return cards;
-}
-
-function card(id: string, name: string, mode: HelperCard['mode'], does: string, did: string, result: string, value: string): HelperCard {
-  return { id, name, mode, does, did, result, value };
 }
 
 let shownSafety = safetyText([]);
