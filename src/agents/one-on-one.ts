@@ -147,17 +147,51 @@ export function briefPackets(input: BriefInput): MeetingPacket[] {
   return packets;
 }
 
+function lastEmployeeLetter(packet: MeetingPacket): PacketSource | undefined {
+  return packet.sources.filter((source) => source.role === 'письмо_сотрудника').sort((a, b) => a.at.localeCompare(b.at)).at(-1);
+}
+
+function notBefore(at: string, last: string | undefined): boolean {
+  if (!last) return true;
+  if (!at) return false;
+  return at >= last;
+}
+
+function citedSources(packet: MeetingPacket, ids: string[]): PacketSource[] {
+  return ids.flatMap((id) => {
+    const source = sourceById(packet, id);
+    return source ? [source] : [];
+  });
+}
+
+function shownSources(packet: MeetingPacket, ids: string[]): PacketSource[] {
+  const named = citedSources(packet, ids);
+  if (named.length) return named;
+  const letter = lastEmployeeLetter(packet);
+  if (letter) return [letter];
+  const protocol = packet.sources.find((source) => source.role === 'протокол');
+  return protocol ? [protocol] : [];
+}
+
+function sourceTitle(source: PacketSource): string {
+  return /«([^»]*)»/.exec(source.label)?.[1] ?? source.label;
+}
+
+function uncheckedText(packet: MeetingPacket): string {
+  const letter = lastEmployeeLetter(packet) ?? packet.sources.find((source) => source.role === 'протокол');
+  const title = letter ? sourceTitle(letter) : 'источник';
+  return `Помощник не смог проверить, посмотрите письмо «${title}».`;
+}
+
 export function blocksFromVerdicts(packets: MeetingPacket[], verdicts: TurnVerdict[]): OneOnOneBlock[] {
   return packets.flatMap((packet, index) => {
-    const verdict = verdicts[index];
-    if (!verdict?.action.trim()) return [];
+    if (!packet.sources.length) return [];
+    const verdict = verdicts[index] ?? { waiting: false, action: '', sourceIds: [], reason: '' as const };
     if (!verdict.waiting && closureHolds(packet, verdict)) return [];
-    const sources = verdict.sourceIds.flatMap((id) => {
-      const source = sourceById(packet, id);
-      return source ? [{ label: source.label, href: source.href }] : [];
-    });
+    const sources = shownSources(packet, verdict.sourceIds);
     if (!sources.length) return [];
-    return [{ name: packet.name, lines: [{ text: verdict.action.trim(), sources }] }];
+    const text = verdict.action.trim() || uncheckedText(packet);
+    return [{ name: packet.name, lines: [{ text, sources: sources.map((source) => ({ label: source.label, href: source.href })) }] }];
   });
 }
 
@@ -171,14 +205,19 @@ function sourceById(packet: MeetingPacket, id: string): PacketSource | undefined
 }
 
 function closureHolds(packet: MeetingPacket, verdict: TurnVerdict): boolean {
-  const sources = verdict.sourceIds.flatMap((id) => {
-    const source = sourceById(packet, id);
-    return source ? [source] : [];
-  });
-  if (!sources.length) return false;
-  if (verdict.reason === 'сотрудник ещё не передал свою часть') return true;
-  if (verdict.reason === 'руководитель решил') return sources.some((source) => source.role === 'письмо_руководителя' || source.role === 'протокол');
-  if (verdict.reason === 'задача закрыта') return sources.some((source) => source.role === 'задача_закрыта');
+  const sources = citedSources(packet, verdict.sourceIds);
+  const last = lastEmployeeLetter(packet)?.at;
+  if (verdict.reason === 'сотрудник ещё не передал свою часть') {
+    const letter = lastEmployeeLetter(packet);
+    if (!letter) return sources.length > 0;
+    return sources.some((source) => source.id === letter.id);
+  }
+  if (verdict.reason === 'руководитель решил') {
+    return sources.some((source) => (source.role === 'письмо_руководителя' || source.role === 'протокол') && notBefore(source.at, last));
+  }
+  if (verdict.reason === 'задача закрыта') {
+    return sources.some((source) => source.role === 'задача_закрыта' && notBefore(source.at, last));
+  }
   return false;
 }
 
@@ -197,7 +236,7 @@ export async function judgeTurn(leaderId: string, packet: MeetingPacket): Promis
       'Не ждёт, если сотрудник ещё не передал свою часть, руководитель решил или задача закрыта и нового письма после закрытия нет.',
       'действие — одно короткое предложение, какого действия ждут от руководителя. Заполни и когда ждёт, и когда не ждёт.',
       'почему — пусто, если ждёт. Иначе одна из трёх причин.',
-      'источники — id записей, на которых основан ответ. Только id из списка.',
+      'источники — id записей, на которых основан ответ. Только id из списка. Если причина «сотрудник ещё не передал свою часть», назови его последнее письмо; если писем сотрудника нет — любой источник из списка.',
     ].join(' '),
     user: `Руководитель: ${packet.leaderName}. Сотрудник: ${packet.name}. Встреча: ${packet.summary}.\n${list || 'Источников нет.'}`,
     schemaName: 'one_on_one',

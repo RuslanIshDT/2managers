@@ -64,11 +64,14 @@ describe('контекст встречи один на один', () => {
     expect(shown[0]?.lines[0]?.text).toContain('вариант запуска');
     expect(shown[0]?.lines[0]?.sources.some((source) => source.href.includes('#protocol-'))).toBe(true);
     expect(shown[0]?.lines[0]?.sources.some((source) => source.href.includes('#letter-'))).toBe(true);
-    expect(blocksFromVerdicts([packet!], [{ waiting: false, action: 'нет', reason: 'руководитель решил', sourceIds: ['p:proto-1'] }])).toEqual([]);
+    const earlyDecision = blocksFromVerdicts([packet!], [{ waiting: false, action: 'нет', reason: 'руководитель решил', sourceIds: ['p:proto-1'] }]);
+    expect(earlyDecision[0]?.lines).toHaveLength(1);
     expect(blocksFromVerdicts([packet!], [{ waiting: false, action: 'Выбрать вариант', reason: 'руководитель решил', sourceIds: ['m:letter-options'] }])[0]?.lines).toHaveLength(1);
     expect(blocksFromVerdicts([packet!], [{ waiting: true, action: 'Выбрать', reason: '', sourceIds: ['letter-options'] }])[0]?.lines).toHaveLength(1);
-    expect(blocksFromVerdicts([packet!], [{ waiting: true, action: 'Выбрать', reason: '', sourceIds: ['нет-такого'] }])).toEqual([]);
-    expect(blocksFromVerdicts([packet!], [{ waiting: true, action: '  ', reason: '', sourceIds: ['p:proto-1'] }])).toEqual([]);
+    const missing = blocksFromVerdicts([packet!], [{ waiting: true, action: 'Выбрать', reason: '', sourceIds: ['нет-такого'] }]);
+    expect(missing[0]?.lines[0]?.text).toContain('Выбрать');
+    expect(missing[0]?.lines[0]?.sources.some((source) => source.href.includes('letter-options'))).toBe(true);
+    expect(blocksFromVerdicts([packet!], [{ waiting: true, action: '  ', reason: '', sourceIds: ['p:proto-1'] }])[0]?.lines[0]?.text).toContain('не смог проверить');
   });
 
   it('закрытая задача входит, если она не раньше писем и протокола', () => {
@@ -81,6 +84,35 @@ describe('контекст встречи один на один', () => {
     expect(task?.role).toBe('задача_закрыта');
     expect(task?.text).toContain('Статус: закрыта');
     expect(blocksFromVerdicts(later, [{ waiting: false, action: 'Выбрать', reason: 'задача закрыта', sourceIds: ['t:QUEUE-7'] }])).toEqual([]);
+    const beforeLetter = blocksFromVerdicts(later, [{ waiting: false, action: 'Выбрать', reason: 'задача закрыта', sourceIds: ['t:QUEUE-1'] }]);
+    expect(beforeLetter[0]?.lines).toHaveLength(1);
+    const decision = {
+      id: 'letter-decision',
+      at: '2026-12-16T11:00',
+      fromName: 'Наталья Фомина',
+      fromEmail: 'natalia@example.test',
+      toEmail: 'kirill@example.test',
+      subject: 'Re: Варианты запуска',
+      body: 'Делаем по второму.',
+    };
+    const after = briefPackets(input('2026-12-22', [options, decision]))[0];
+    expect(blocksFromVerdicts([after!], [{ waiting: false, action: 'нет', reason: 'руководитель решил', sourceIds: ['m:letter-decision'] }])).toEqual([]);
+    const newer = blocksFromVerdicts([after!], [{ waiting: false, action: 'Посмотреть новый вариант', reason: 'руководитель решил', sourceIds: ['m:letter-decision', 'нет-письма'] }]);
+    expect(newer).toEqual([]);
+    const stale = blocksFromVerdicts([after!], [{ waiting: false, action: 'Посмотреть', reason: 'руководитель решил', sourceIds: ['m:missing'] }]);
+    expect(stale[0]?.lines[0]?.sources.some((source) => source.href.includes('letter-options') || source.href.includes('letter-decision'))).toBe(true);
+  });
+
+  it('пустой ответ, ответ не по схеме и сбой оставляют строку с пометкой', async () => {
+    const [packet] = briefPackets(input('2026-12-15', [options]));
+    const empty = blocksFromVerdicts([packet!], [{ waiting: false, action: '', reason: '', sourceIds: [] }]);
+    expect(empty[0]?.lines[0]?.text).toContain('не смог проверить');
+    expect(empty[0]?.lines[0]?.text).toContain('Варианты запуска');
+    const broken = await oneOnOneBrief(input('2026-12-15', [options]), async () => {
+      throw new Error('сбой');
+    });
+    expect(broken[0]?.lines[0]?.text).toContain('не смог проверить');
+    expect(blocksFromVerdicts([{ ...packet!, sources: [] }], [{ waiting: true, action: 'Выбрать', reason: '', sourceIds: [] }])).toEqual([]);
   });
 
   it('письмо из отправленных находится по тому же номеру, что в ссылке', () => {
