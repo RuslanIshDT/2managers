@@ -18,9 +18,13 @@ export interface MatrixRow {
   basis: string;
 }
 
+export function emailMedian(counts: number[]): number {
+  const sorted = [...counts].sort((a, b) => a - b);
+  return sorted.length ? sorted[Math.floor((sorted.length - 1) / 2)] : 0;
+}
+
 export function departmentMatrix(people: MatrixInput[]): MatrixRow[] {
-  const counts = people.map((person) => person.emails).sort((a, b) => a - b);
-  const median = counts.length ? counts[Math.floor((counts.length - 1) / 2)] : 0;
+  const median = emailMedian(people.map((person) => person.emails));
   return people.map((person) => {
     const many = person.emails > median;
     const cell: MatrixCell = person.lagging
@@ -109,7 +113,7 @@ export interface MorningInput {
   today: string;
   waiting: { who: string; what: string; days: number }[];
   ownWeek: { title: string; dueOn: string }[];
-  plan: { title: string; goal: string; minutes: number; why: string }[] | null;
+  plan: { title: string; goal: string; minutes: number; why: string; lag?: string }[] | null;
   returned: { who: string; what: string }[];
   overdue: { title: string; owner: string; days: number }[];
   todayMeetings: string[];
@@ -145,7 +149,7 @@ export function renderMorning(input: MorningInput): string {
     input.plan === null
       ? 'Три дела на сегодня модель выберет при отправке.'
       : input.plan.length
-        ? ['Три дела на сегодня:', ...input.plan.map((item, index) => `${index + 1}. ${item.title}. ${item.minutes} мин, цель «${item.goal}». ${item.why}`)].join('\n')
+        ? ['Три дела на сегодня:', ...input.plan.map((item, index) => `${index + 1}. ${item.title}. ${item.minutes} мин, цель «${item.goal}». ${item.why}${item.lag ? ` ${item.lag}` : ''}`)].join('\n')
         : 'Три дела на сегодня: модель не выбрала ни одного.',
   );
   parts.set('overdue', overdueLines(input.overdue).join('\n'));
@@ -245,4 +249,73 @@ export function goalMinutes(
 export function morningHtml(text: string): string {
   const escaped = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   return escaped.replace(/^([ \t]*)(\S[^\n]*?)[ \t]+(https:\/\/\S+)$/gm, (_, indent: string, label: string, url: string) => `${indent}<a href="${url}">${label}</a>`);
+}
+
+export type AdviceKind = 'помочь' | 'один_на_один' | 'расширить';
+
+export interface PersonKpi {
+  name: string;
+  unit: string;
+  weeks: { week: string; plan: string; fact: string; lagging: boolean }[];
+}
+
+export function adviceKind(title: string): AdviceKind | null {
+  if (title.includes('помочь по существу')) return 'помочь';
+  if (title.includes('один на один')) return 'один_на_один';
+  if (title.includes('расширить полномочия')) return 'расширить';
+  return null;
+}
+
+export function adviceMeaning(kind: AdviceKind): string {
+  if (kind === 'помочь') return 'Помочь по существу: человек пишет и просит, но показатель падает, разберите с ним дела, на которых он застрял.';
+  if (kind === 'один_на_один') return 'Один на один: отстаёт и молчит.';
+  return 'Расширить полномочия: в норме и много спрашивает.';
+}
+
+function withUnit(value: string, unit: string): string {
+  const text = value.trim();
+  if (unit === '%') return text.endsWith('%') ? text : `${text}%`;
+  if (!unit || unit === '—') return text;
+  return text.endsWith(unit) ? text : `${text} ${unit}`;
+}
+
+export function kpiTrail(kpi: PersonKpi): string {
+  const weeks = kpi.weeks.filter((week) => week.week && week.week !== 'квартал').sort((a, b) => a.week.localeCompare(b.week));
+  if (!weeks.length) return '';
+  const facts = weeks.map((week) => withUnit(week.fact, kpi.unit)).join(' → ');
+  const plans = weeks.map((week) => withUnit(week.plan, kpi.unit));
+  const plan = plans.every((item) => item === plans[0]) ? plans[0] : plans.join(' → ');
+  return `${kpi.name}: ${facts} при плане ${plan}`;
+}
+
+export function personLines(input: { advice: AdviceKind; kpis: PersonKpi[]; emails: number; median: number; waiting: string[]; why: string }): string[] {
+  const lines: string[] = [];
+  const lagging = input.kpis.filter((kpi) => kpi.weeks.some((week) => week.lagging));
+  const shown = lagging.length ? lagging : input.kpis;
+  for (const kpi of shown) {
+    const trail = kpiTrail(kpi);
+    if (!trail) continue;
+    lines.push(kpi.weeks.some((week) => week.lagging) ? trail : `В плане. ${trail}`);
+  }
+  const place = input.emails > input.median ? 'это выше середины отдела' : input.emails < input.median ? 'это ниже середины отдела' : 'это середина отдела';
+  lines.push(`Писем за неделю: ${input.emails}, ${place} (${input.median}).`);
+  lines.push(adviceMeaning(input.advice));
+  lines.push(input.waiting.length ? `Ждёт вашего решения: ${input.waiting.join('; ')}.` : 'Писем, которые ждут вашего решения, нет.');
+  if (input.why.trim()) lines.push(`Почему в делах дня: ${input.why.trim()}`);
+  return lines;
+}
+
+export function lagHint(kpis: PersonKpi[]): string {
+  const kpi = kpis.find((item) => item.weeks.some((week) => week.lagging));
+  const trail = kpi ? kpiTrail(kpi) : '';
+  return trail ? `Отстаёт: ${trail}` : '';
+}
+
+export function lagForTitle(title: string, people: { name: string; kpis: PersonKpi[] }[]): string {
+  const kind = adviceKind(title);
+  if (kind !== 'помочь' && kind !== 'один_на_один') return '';
+  const person = people
+    .filter((item) => item.name.trim() && title.includes(item.name))
+    .sort((a, b) => b.name.length - a.name.length)[0];
+  return person ? lagHint(person.kpis) : '';
 }

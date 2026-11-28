@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState, type FormEvent } from 'react';
 import { ConnectionFields, LeadersPanel } from './leaders.tsx';
 import { rememberChoiceVisible } from './decision-ui.ts';
+import { splitPreview, workGroups } from '../../src/agents/home-groups.ts';
 import { Button } from './components/ui/button.tsx';
 import { Card } from './components/ui/card.tsx';
 import { Input } from './components/ui/input.tsx';
@@ -217,6 +218,7 @@ interface WorkItem {
   lines: { id: string; title: string }[];
   origin: Origin;
   mail?: DecisionMail;
+  today?: boolean;
 }
 
 interface Desk {
@@ -1288,20 +1290,32 @@ function HomeDesk({
   onRefresh: () => Promise<void>;
 }) {
   if (!desk) return null;
-  const tasks = desk.work.filter((item) => item.kind === 'task');
-  const rest = desk.work.filter((item) => item.kind !== 'task');
+  const groups = workGroups(desk.work);
+  const card = (item: WorkItem) => (
+    <WorkCard key={item.id} item={item} pending={pending} onDecision={onDecision} onAccept={onAccept} onSeries={onSeries} onOpen={onOpen} onTalk={onTalk} onRefresh={onRefresh} />
+  );
   return (
     <>
       <section className="mb-6">
         <h2 className="mb-3 text-lg font-semibold">Что нужно от вас</h2>
-        {rest.length + tasks.length === 0 ? <p className="text-sm text-[#5d6878]">Сейчас от вас ничего не ждут.</p> : null}
-        <div className="grid gap-3">
-          {rest.map((item) => (
-            <WorkCard key={item.id} item={item} pending={pending} onDecision={onDecision} onAccept={onAccept} onSeries={onSeries} onOpen={onOpen} onTalk={onTalk} onRefresh={onRefresh} />
-          ))}
-          {tasks.map((item) => (
-            <WorkCard key={item.id} item={item} pending={pending} onDecision={onDecision} onAccept={onAccept} onSeries={onSeries} onOpen={onOpen} onTalk={onTalk} onRefresh={onRefresh} />
-          ))}
+        {groups.length === 0 ? <p className="text-sm text-[#5d6878]">Сейчас от вас ничего не ждут.</p> : null}
+        <div className="grid gap-6">
+          {groups.map((group) => {
+            const preview = group.id === 'waiting' ? splitPreview(group.items) : { head: group.items, more: 0 };
+            const rest = group.items.slice(preview.head.length);
+            return (
+              <div key={group.id} className="grid gap-3">
+                <h3 className="text-base font-semibold">{group.title}</h3>
+                {preview.head.map(card)}
+                {preview.more ? (
+                  <details>
+                    <summary className="cursor-pointer text-sm text-[#1f5fbf]">ещё {preview.more}</summary>
+                    <div className="mt-3 grid gap-3">{rest.map(card)}</div>
+                  </details>
+                ) : null}
+              </div>
+            );
+          })}
         </div>
         <Button className="mt-3" type="button" variant="outline" disabled={pending} onClick={onSend}>
           Прислать утреннее сообщение сейчас
@@ -1390,6 +1404,13 @@ function WorkCard({
         </div>
       ) : null}
       {item.kind === 'decision' && item.lines.length ? <p className="mt-1 text-sm">{item.lines.map((line) => line.title).join(' ')}</p> : null}
+      {item.kind === 'task' || item.kind === 'talk'
+        ? item.lines.map((line) => (
+            <p key={line.id} className="mt-1 text-sm">
+              {line.title}
+            </p>
+          ))
+        : null}
       {item.wait ? <p className="mt-1 text-sm text-[#5d6878]">{item.wait}</p> : null}
       {item.minutes ? <p className="text-sm text-[#5d6878]">{item.minutes}</p> : null}
       <Origin origin={item.origin} onOpen={onOpen} />

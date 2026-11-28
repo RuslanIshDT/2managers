@@ -5,7 +5,7 @@ import { decisions, focusPlans, freedSlots, leaders, meetings, revisions, series
 import { calendarAfter } from './free-time.ts';
 import { departmentForLeader } from './k1.ts';
 import { chooseFocus, classifySeries, GOAL_KINDS, type Candidate, type FocusPlan } from './conductor.ts';
-import { adviceTitle, departmentMatrix, goalMinutes, isLeaderTask, morningHtml, overdueLines, overdueTasks, ownWeekTasks, renderMorning } from './focus.ts';
+import { adviceTitle, departmentMatrix, goalMinutes, isLeaderTask, lagForTitle, morningHtml, overdueLines, overdueTasks, ownWeekTasks, renderMorning } from './focus.ts';
 import { combineMorning, parseMorningStored, type MorningShape } from './morning.ts';
 import { withLlmScope } from '../llm.ts';
 import { canonicalCategory, confirmationPoints } from './confirm.ts';
@@ -46,7 +46,8 @@ export async function sendFocus(db: Db, leaderId: string) {
   } catch (err) {
     console.error('Сводка к встрече один на один не собралась', err instanceof Error ? err.message : err);
   }
-  const text = renderMorning({ ...scene.morning, plan: plan.today, questions, notes: live.notes, morning, oneOnOne });
+  const today = plan.today.map((item) => ({ ...item, lag: lagForTitle(item.title, scene.people) }));
+  const text = renderMorning({ ...scene.morning, plan: today, questions, notes: live.notes, morning, oneOnOne });
   try {
     await sendTaskReminders(db, leaderId, leader.name, live.tasks, clockFor(leaderId).today);
   } catch (err) {
@@ -165,6 +166,14 @@ async function sceneFor(db: Db, leaderId: string, leaderName: string, live?: { t
     share,
     candidates,
     names: department.people.map((person) => person.name),
+    people: department.people.map((person) => ({
+      name: person.name,
+      kpis: person.kpis.map((kpi) => ({
+        name: kpi.name,
+        unit: kpi.unit,
+        weeks: kpi.weeks.map((week) => ({ week: week.week, plan: week.plan, fact: week.fact, lagging: week.status === 'отстаёт' })),
+      })),
+    })),
     morning,
     draft: renderMorning({ ...morning, plan: null, questions: [], notes: [], morning: morningRule }),
     meetings: meetingRows,

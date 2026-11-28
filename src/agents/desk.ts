@@ -9,6 +9,7 @@ import { kpiStatus } from './k1.ts';
 import { letterHits, meetingHits, readingForLetter, replayWeek, trustOffers, type FlowRule, type HistoryRow } from './replay.ts';
 import { letterExcerpt, releaseDeferred } from './decision.ts';
 import { listFlowRules, ownProposal } from './week.ts';
+import { adviceKind, emailMedian, personLines, type AdviceKind, type PersonKpi } from './focus.ts';
 import { calendarConfig } from '../yandex/calendar.ts';
 import { trackerConfig } from '../yandex/tracker.ts';
 
@@ -48,6 +49,7 @@ export interface WorkItem {
   lines: { id: string; title: string }[];
   origin: Origin;
   mail?: DecisionMail;
+  today?: boolean;
 }
 
 export interface DoneLine {
@@ -80,13 +82,13 @@ export interface DeskInput {
   letters: { id?: string; fromName: string; fromEmail: string; subject: string; body: string; received: string; reading?: { area: string; value: number; unit: string; others: boolean } | null }[];
   meetings: { summary: string; minutes: number }[];
   rules: FlowRule[];
-  people: { id: string; name: string; emails: number; laggingWeeks: { name: string; week: string }[] }[];
+  people: { id: string; name: string; emails: number; laggingWeeks: { name: string; week: string }[]; kpis?: PersonKpi[] }[];
   authorities: { personId: string; area: string; limit: string; unit: string }[];
   history: HistoryRow[];
   series: { title: string; open: boolean }[];
   relief: { letters: number; meetings: number } | null;
   proposal?: FlowRule[];
-  tasks: { title: string; minutes: number; goal: string }[];
+  tasks: { title: string; minutes: number; goal: string; why?: string }[];
   calls: { purpose: string; at: string }[];
   remote?: { tracker: boolean; calendar: boolean };
   points?: string[];
@@ -115,6 +117,16 @@ export function buildDesk(input: DeskInput): Desk {
   const names = new Map(input.people.map((person) => [person.id, person.name]));
   const offers = trustOffers(input.history, input.authorities).map((offer) => ({ ...offer, name: names.get(offer.personId) ?? '' }));
 
+  const openDecisions = input.decisions
+    .filter((row) => row.status === 'ждёт')
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+  const paired = new Map<string, DeskInput['tasks'][number]>();
+  for (const task of input.tasks) {
+    const hit = openDecisions.find((row) => sameMatter(task.title, row.summary) || (row.subject ? sameMatter(task.title, row.subject) : false));
+    if (hit && !paired.has(hit.id)) paired.set(hit.id, task);
+  }
+  const median = emailMedian(input.people.map((person) => person.emails));
+
   const work: WorkItem[] = [];
   if (!input.accepted && input.relief && (input.relief.letters > 0 || input.relief.meetings > 0)) {
     work.push({
@@ -127,7 +139,7 @@ export function buildDesk(input: DeskInput): Desk {
       origin: made('k10', 'Правила потока', 'Подсчёт по отчёту аудита этого руководителя, правила ещё не записаны', 'Посчитано по данным', []),
     });
   }
-  for (const decision of input.decisions.filter((row) => row.status === 'ждёт')) {
+  for (const decision of openDecisions) {
     const letter = letterOf(decision, input.letters);
     const person = input.people.find((row) => row.name === decision.replyName);
     const named = input.verdicts.find((row) => row.id === `v-${decision.id}`)?.area?.trim().toLowerCase() ?? '';
@@ -136,9 +148,12 @@ export function buildDesk(input: DeskInput): Desk {
     if (right && person) rows.push(`Полномочие ${person.name}: ${right.area} ${right.limit}${right.unit === '—' ? '' : ` ${right.unit}`}`);
     const gap = draftGap(decision.draft ?? '');
     const note = (decision.draftNote ?? '').trim();
+    const task = paired.get(decision.id);
+    const why = task?.why?.trim() ?? '';
     const lines = [
       ...(gap ? [{ id: `${decision.id}:gap`, title: 'В черновике пропуск. Допишите его перед утверждением.' }] : []),
       ...(note ? [{ id: `${decision.id}:note`, title: note }] : []),
+      ...(why ? [{ id: `${decision.id}:why`, title: `Почему в делах дня: ${why}` }] : []),
     ];
     const body = letter?.body ?? '';
     const excerpt = letterExcerpt(body);
@@ -146,8 +161,9 @@ export function buildDesk(input: DeskInput): Desk {
       id: decision.id,
       title: shown(`Решите: ${decision.summary}`),
       wait: decision.createdAt ? `Ждёт с ${dateWords(decision.createdAt)}` : '',
-      minutes: '',
+      minutes: task && task.minutes > 0 ? `${countWords(task.minutes, 'минута', 'минуты', 'минут')}, так назвала модель` : '',
       kind: 'decision',
+      today: Boolean(task),
       lines,
       mail: {
         fromName: letter?.fromName || decision.replyName,
@@ -164,13 +180,14 @@ export function buildDesk(input: DeskInput): Desk {
   }
   for (const person of quiet) {
     const weeks = person.laggingWeeks.map((row) => `${row.name}, неделя ${dateWords(row.week)}`).join('; ');
+    const dropped = input.tasks.find((task) => person.name.trim() && task.title.includes(person.name));
     work.push({
       id: `talk:${person.id}`,
       title: `Поговорите: ${person.name}`,
       wait: person.laggingWeeks.length ? `KPI отстаёт ${countWords(person.laggingWeeks.length, 'неделю', 'недели', 'недель')}` : '',
-      minutes: '',
+      minutes: dropped && dropped.minutes > 0 ? `${countWords(dropped.minutes, 'минута', 'минуты', 'минут')}, так назвала модель` : '',
       kind: 'talk',
-      lines: [],
+      lines: briefLines(`talk:${person.id}`, 'один_на_один', person, input, median, dropped?.why ?? ''),
       origin: made('k8', 'Контроль KPI', `${person.name}: писем ${person.emails}. ${weeks}`, 'Посчитано по данным', person.laggingWeeks.map((row) => `${person.name}, ${row.name}, ${dateWords(row.week)}`)),
     });
   }
@@ -218,14 +235,16 @@ export function buildDesk(input: DeskInput): Desk {
   const waiting = input.decisions.filter((row) => row.status === 'ждёт').map((row) => row.summary);
   // Дело «поговорить» с тихой проблемой уже стоит карточкой «Поговорите» выше — второй раз не показываем.
   const talked = (title: string) => quiet.some((person) => person.name.trim() && title.includes(person.name));
-  for (const task of input.tasks.filter((task) => !waiting.some((summary) => sameMatter(task.title, summary)) && !staleQuiet(task.title, input.people) && !talked(task.title))) {
+  for (const task of input.tasks.filter((task) => ![...paired.values()].includes(task) && !waiting.some((summary) => sameMatter(task.title, summary)) && !staleQuiet(task.title, input.people) && !talked(task.title))) {
+    const kind = adviceKind(task.title);
+    const person = kind ? namedPerson(task.title, input.people) : undefined;
     work.push({
       id: `task:${task.title}`,
       title: shown(`Сделайте: ${task.title}`),
       wait: '',
       minutes: task.minutes > 0 ? `${countWords(task.minutes, 'минута', 'минуты', 'минут')}, так назвала модель` : '',
       kind: 'task',
-      lines: [],
+      lines: person && kind ? briefLines(`task:${task.title}`, kind, person, input, median, task.why ?? '') : [],
       origin: made('k4', 'Три дела на сегодня', task.goal ? `Цель: ${task.goal}` : 'План на сегодня', howModel(input.calls, 'k4', ''), task.goal ? [task.goal] : []),
     });
   }
@@ -338,7 +357,7 @@ export async function deskForLeader(db: Db, leaderId: string, series: { title: s
     if (!person) continue;
     mailByPerson.set(person.externalId, (mailByPerson.get(person.externalId) ?? 0) + 1);
   }
-  const plan = planRows[0]?.plan as { today?: { title?: string; minutes?: number; goal?: string }[] } | undefined;
+  const plan = planRows[0]?.plan as { today?: { title?: string; minutes?: number; goal?: string; why?: string }[] } | undefined;
   const verdictByLetter = new Map(verdictRows.map((row) => [row.messageId, row.category]));
   const readings = verdictRows.map((row) => ({
     id: row.id,
@@ -413,13 +432,14 @@ export async function deskForLeader(db: Db, leaderId: string, series: { title: s
           .filter((kpi) => kpi.personId === row.externalId && kpi.week !== 'квартал')
           .filter((kpi) => kpiStatus(kpi.better, kpi.plan, kpi.fact) === 'отстаёт')
           .map((kpi) => ({ name: kpi.name, week: kpi.week })),
+        kpis: personKpis(kpiRows, row.externalId),
       })),
     authorities: authRows.map((row) => ({ personId: row.personId, area: row.area, limit: row.limitValue, unit: row.unit })),
     history,
     series,
     tasks: (plan?.today ?? [])
       .filter((row) => row.title)
-      .map((row) => ({ title: row.title ?? '', minutes: row.minutes ?? 0, goal: row.goal ?? '' })),
+      .map((row) => ({ title: row.title ?? '', minutes: row.minutes ?? 0, goal: row.goal ?? '', why: row.why ?? '' })),
     calls: callRows.map((row) => ({ purpose: row.purpose, at: row.at.toISOString() })),
     remote: { tracker: Boolean(trackerConfig()), calendar: Boolean(calendarConfig()) },
     points: confirmationPoints(leaderRows[0]?.profile ?? ''),
@@ -508,6 +528,37 @@ function staleQuiet(title: string, people: DeskInput['people']): boolean {
   const text = title.toLowerCase();
   if (!text.includes('писем 0') && !text.includes('тихая проблема')) return false;
   return people.some((person) => person.emails > 0 && person.name.trim() && text.includes(person.name.toLowerCase()));
+}
+
+function personKpis(
+  rows: { personId: string; name: string; unit: string; better: string; week: string; plan: string; fact: string }[],
+  personId: string,
+): PersonKpi[] {
+  const own = rows
+    .filter((row) => row.personId === personId && row.week !== 'квартал')
+    .sort((a, b) => a.week.localeCompare(b.week) || a.name.localeCompare(b.name, 'ru'));
+  const byName = new Map<string, PersonKpi>();
+  for (const row of own) {
+    const item = byName.get(row.name) ?? { name: row.name, unit: row.unit, weeks: [] };
+    item.weeks.push({ week: row.week, plan: row.plan, fact: row.fact, lagging: kpiStatus(row.better, row.plan, row.fact) === 'отстаёт' });
+    byName.set(row.name, item);
+  }
+  return [...byName.values()];
+}
+
+function namedPerson(title: string, people: DeskInput['people']) {
+  return people.filter((person) => person.name.trim() && title.includes(person.name)).sort((a, b) => b.name.length - a.name.length)[0];
+}
+
+function briefLines(id: string, advice: AdviceKind, person: DeskInput['people'][number], input: DeskInput, median: number, why: string) {
+  const waiting = input.decisions
+    .filter((row) => row.status === 'ждёт' && row.replyName.trim() === person.name.trim())
+    .map((row) => (row.subject || row.summary).trim())
+    .filter(Boolean);
+  return personLines({ advice, kpis: person.kpis ?? [], emails: person.emails, median, waiting, why }).map((title, index) => ({
+    id: `${id}:${index}`,
+    title,
+  }));
 }
 
 function letterOf(

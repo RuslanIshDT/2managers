@@ -966,7 +966,7 @@ describe('главная T34', () => {
     expect(letterLine?.text).toContain('оценка');
     expect(meetingLine?.text).toContain('40 минут');
     expect(meetingLine?.text).not.toContain('оценка');
-    expect(desk.work[0]?.minutes).toBe('');
+    expect(desk.work[0]?.minutes).toBe('10 минут, так назвала модель');
     expect(desk.helpers.filter((card) => /^k\d+$/.test(card.id))).toHaveLength(15);
     expect(desk.helpers.filter((card) => card.mode === 'заглушка').map((card) => card.id)).toEqual(['stub-tasks', 'stub-calendar']);
     expect(desk.helpers.find((card) => card.id === 'r5')?.mode).toBe('код');
