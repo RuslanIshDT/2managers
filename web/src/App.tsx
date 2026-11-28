@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useState, type FormEvent } from 'react';
+import { ConnectionFields, LeadersPanel } from './leaders.tsx';
 import { Button } from './components/ui/button.tsx';
 import { Card } from './components/ui/card.tsx';
 import { Input } from './components/ui/input.tsx';
@@ -146,8 +147,16 @@ interface Cabinet {
   audiencesBuilt?: boolean;
   linkCode: string;
   counts: { people: number; emails: number; meetings: number; tasks: number };
-  mail: 'configured' | 'missing';
-  telegram: 'configured' | 'missing';
+  mail: 'configured' | 'missing' | 'stub';
+  telegram: 'configured' | 'missing' | 'unbound';
+  connections?: {
+    mode: 'live' | 'stub';
+    note: string;
+    editable: boolean;
+    mailAddress: string;
+    trackerOrg: string;
+    trackerQueue: string;
+  };
   department: { errors: string[]; people: DepartmentPerson[] };
   feed: { items: FeedItem[]; outside: number };
   week: WeekScene;
@@ -686,6 +695,7 @@ export function App() {
       ) : null}
       {section === 'settings' ? (
         <>
+      <LeadersPanel />
       <Card className="mb-4">
         <h2 className="mb-2 text-lg font-semibold">Профиль</h2>
         <p className="mb-2 text-sm text-[#5d6878]">Полный профиль руководителя. Ниже — действующие правила: их можно добавить, изменить и удалить. Правило применяется со следующего письма, протокола или утреннего плана.</p>
@@ -711,10 +721,34 @@ export function App() {
       <Card className="mb-4">
         <h2 className="mb-2 text-lg font-semibold">Подключения</h2>
         <ul className="grid gap-1 text-sm">
-          <li>Почта: {cabinet?.mail === 'configured' ? 'учётные данные заданы' : 'не настроена — заглушки отправки нет, ящик синтетики в базе'}</li>
-          <li>Telegram: {cabinet?.telegram === 'configured' ? 'токен задан' : 'не настроен — нет токена бота'}</li>
-          <li>Код для бота: <code>{cabinet?.linkCode || '…'}</code> — сообщение <code>/start {cabinet?.linkCode}</code></li>
+          {cabinet?.connections?.note ? <li>{cabinet.connections.note}</li> : null}
+          <li>
+            Почта:{' '}
+            {cabinet?.mail === 'configured'
+              ? 'учётные данные заданы'
+              : cabinet?.mail === 'stub'
+                ? 'не подключено'
+                : 'не настроена — заглушки отправки нет, ящик синтетики в базе'}
+          </li>
+          <li>
+            Telegram:{' '}
+            {cabinet?.telegram === 'configured' ? 'токен задан' : cabinet?.telegram === 'unbound' ? 'чат не привязан' : 'не настроен — нет токена бота'}
+          </li>
+          <li>
+            Код для бота: <code>{cabinet?.linkCode || '…'}</code> — сообщение <code>/start {cabinet?.linkCode}</code>
+          </li>
         </ul>
+        {cabinet?.connections?.editable ? (
+          <ConnectionFields
+            mailAddress={cabinet.connections.mailAddress}
+            trackerOrg={cabinet.connections.trackerOrg}
+            trackerQueue={cabinet.connections.trackerQueue}
+            onSaved={async () => {
+              const fresh = await api<Cabinet>('/api/cabinet');
+              setCabinet(fresh);
+            }}
+          />
+        ) : null}
         <div className="mt-4 flex flex-wrap items-center gap-3">
           <Button type="button" onClick={pullMail} disabled={pending}>
             {pending ? 'Разбор…' : 'Разобрать новые письма'}

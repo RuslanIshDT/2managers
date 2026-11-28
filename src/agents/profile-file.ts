@@ -16,6 +16,11 @@ export function nextProfile(stored: string, file: string): string | null {
   return stored === file ? null : file;
 }
 
+export function profileToStore(stored: string, file: string, locked: boolean): string | null {
+  if (locked) return null;
+  return nextProfile(stored, file);
+}
+
 export function parseGoals(csv: string): GoalFileRow[] {
   const body = csv
     .split(/\r?\n/)
@@ -61,11 +66,11 @@ export async function catalogProfile(dir: string): Promise<string | null> {
 }
 
 export async function reloadProfiles(db: Db, root = 'data'): Promise<string[]> {
-  const rows = await db.select({ id: leaders.id, profile: leaders.profile }).from(leaders);
+  const rows = await db.select({ id: leaders.id, profile: leaders.profile, profileLocked: leaders.profileLocked }).from(leaders);
   const changed: string[] = [];
   for (const row of rows) {
     const file = await catalogProfile(join(root, row.id));
-    if (file === null || nextProfile(row.profile, file) === null) continue;
+    if (file === null || profileToStore(row.profile, file, row.profileLocked) === null) continue;
     await db.update(leaders).set({ profile: file }).where(eq(leaders.id, row.id));
     changed.push(row.id);
   }

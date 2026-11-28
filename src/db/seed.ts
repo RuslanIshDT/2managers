@@ -5,7 +5,7 @@ import { count, eq } from 'drizzle-orm';
 import type { Db } from './client.ts';
 import { emailEtalon, emails, leaders, meetingEtalon, meetings, people, tasks } from './schema.ts';
 import { hashPassword } from '../auth.ts';
-import { loadSynthetic } from '../data/synthetic.ts';
+import { loadSynthetic, type Synthetic } from '../data/synthetic.ts';
 
 export const LEADER_ID = 'synthetic';
 
@@ -30,77 +30,7 @@ export async function seedIfEmpty(db: Db, dir = 'data/synthetic') {
     telegramChatId: process.env.TELEGRAM_CHAT_ID || null,
   });
 
-  if (data.people.length) {
-    await db.insert(people).values(
-      data.people.map((p) => ({
-        leaderId: LEADER_ID,
-        externalId: p.id,
-        name: p.name,
-        position: p.position,
-        role: p.role,
-        reportsTo: p.reportsTo,
-        email: p.email,
-      })),
-    );
-  }
-  if (data.emails.length) {
-    await db.insert(emails).values(
-      data.emails.map((e) => ({
-        leaderId: LEADER_ID,
-        externalId: e.id,
-        received: e.received,
-        fromName: e.fromName,
-        fromEmail: e.fromEmail,
-        senderRole: e.senderRole,
-        toAddr: e.to,
-        subject: e.subject,
-        body: e.body,
-      })),
-    );
-    await db.insert(emailEtalon).values(
-      [...data.emailEtalon.values()].map((e) => ({
-        leaderId: LEADER_ID,
-        externalId: e.id,
-        category: e.category,
-        expectedAction: e.expectedAction,
-        reason: e.reason,
-      })),
-    );
-  }
-  if (data.meetings.length) {
-    await db.insert(meetings).values(
-      data.meetings.map((m) => ({
-        leaderId: LEADER_ID,
-        uid: m.uid,
-        startsAt: m.start,
-        endsAt: m.end,
-        minutes: m.minutes,
-        summary: m.summary,
-        organizer: m.organizer,
-        attendees: m.attendees,
-      })),
-    );
-    await db.insert(meetingEtalon).values(
-      [...data.meetingEtalon.values()].map((m) => ({
-        leaderId: LEADER_ID,
-        uid: m.uid,
-        category: m.category,
-      })),
-    );
-  }
-  if (data.tasks.length) {
-    await db.insert(tasks).values(
-      data.tasks.map((t) => ({
-        leaderId: LEADER_ID,
-        externalId: t.id,
-        title: t.task,
-        ownerName: t.owner,
-        dueOn: t.due,
-        status: t.status,
-        source: t.source,
-      })),
-    );
-  }
+  await insertCatalog(db, LEADER_ID, data);
 
   const row = await db.select({ linkCode: leaders.linkCode }).from(leaders).where(eq(leaders.id, LEADER_ID));
   return { seeded: true as const, login, linkCode: row[0]?.linkCode ?? linkCode };
@@ -137,80 +67,84 @@ export async function seedMissingCatalogs(db: Db, root = 'data'): Promise<string
       linkCode,
       telegramChatId: null,
     });
-    if (data.people.length) {
-      await db.insert(people).values(
-        data.people.map((person) => ({
-          leaderId: dir,
-          externalId: person.id,
-          name: person.name,
-          position: person.position,
-          role: person.role,
-          reportsTo: person.reportsTo,
-          email: person.email,
-        })),
-      );
-    }
-    if (data.emails.length) {
-      await db.insert(emails).values(
-        data.emails.map((email) => ({
-          leaderId: dir,
-          externalId: email.id,
-          received: email.received,
-          fromName: email.fromName,
-          fromEmail: email.fromEmail,
-          senderRole: email.senderRole,
-          toAddr: email.to,
-          subject: email.subject,
-          body: email.body,
-        })),
-      );
-      await db.insert(emailEtalon).values(
-        [...data.emailEtalon.values()].map((row) => ({
-          leaderId: dir,
-          externalId: row.id,
-          category: row.category,
-          expectedAction: row.expectedAction,
-          reason: row.reason,
-        })),
-      );
-    }
-    if (data.meetings.length) {
-      await db.insert(meetings).values(
-        data.meetings.map((meeting) => ({
-          leaderId: dir,
-          uid: meeting.uid,
-          startsAt: meeting.start,
-          endsAt: meeting.end,
-          minutes: meeting.minutes,
-          summary: meeting.summary,
-          organizer: meeting.organizer,
-          attendees: meeting.attendees,
-        })),
-      );
-      await db.insert(meetingEtalon).values(
-        [...data.meetingEtalon.values()].map((row) => ({
-          leaderId: dir,
-          uid: row.uid,
-          category: row.category,
-        })),
-      );
-    }
-    if (data.tasks.length) {
-      await db.insert(tasks).values(
-        data.tasks.map((task) => ({
-          leaderId: dir,
-          externalId: task.id,
-          title: task.task,
-          ownerName: task.owner,
-          dueOn: task.due,
-          status: task.status,
-          source: task.source,
-        })),
-      );
-    }
+    await insertCatalog(db, dir, data);
     added.push(login);
   }
   return added;
+}
+
+export async function insertCatalog(db: Db, leaderId: string, data: Synthetic) {
+  if (data.people.length) {
+    await db.insert(people).values(
+      data.people.map((person) => ({
+        leaderId,
+        externalId: person.id,
+        name: person.name,
+        position: person.position,
+        role: person.role,
+        reportsTo: person.reportsTo,
+        email: person.email,
+      })),
+    );
+  }
+  if (data.emails.length) {
+    await db.insert(emails).values(
+      data.emails.map((email) => ({
+        leaderId,
+        externalId: email.id,
+        received: email.received,
+        fromName: email.fromName,
+        fromEmail: email.fromEmail,
+        senderRole: email.senderRole,
+        toAddr: email.to,
+        subject: email.subject,
+        body: email.body,
+      })),
+    );
+    await db.insert(emailEtalon).values(
+      [...data.emailEtalon.values()].map((row) => ({
+        leaderId,
+        externalId: row.id,
+        category: row.category,
+        expectedAction: row.expectedAction,
+        reason: row.reason,
+      })),
+    );
+  }
+  if (data.meetings.length) {
+    await db.insert(meetings).values(
+      data.meetings.map((meeting) => ({
+        leaderId,
+        uid: meeting.uid,
+        startsAt: meeting.start,
+        endsAt: meeting.end,
+        minutes: meeting.minutes,
+        summary: meeting.summary,
+        organizer: meeting.organizer,
+        attendees: meeting.attendees,
+      })),
+    );
+    await db.insert(meetingEtalon).values(
+      [...data.meetingEtalon.values()].map((row) => ({
+        leaderId,
+        uid: row.uid,
+        category: row.category,
+      })),
+    );
+  }
+  if (data.tasks.length) {
+    await db.insert(tasks).values(
+      data.tasks.map((task) => ({
+        leaderId,
+        externalId: task.id,
+        title: task.task,
+        ownerName: task.owner,
+        dueOn: task.due,
+        status: task.status,
+        source: task.source,
+      })),
+    );
+  }
 }
 
 async function catalogLogin(base: string, fallback: string): Promise<string> {

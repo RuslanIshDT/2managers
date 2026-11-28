@@ -8,6 +8,10 @@ export const leaders = pgTable('leaders', {
   profile: text('profile').notNull(),
   linkCode: text('link_code').notNull(),
   telegramChatId: text('telegram_chat_id'),
+  profileLocked: boolean('profile_locked').notNull().default(false),
+  mailAddress: text('mail_address').notNull().default(''),
+  trackerOrg: text('tracker_org').notNull().default(''),
+  trackerQueue: text('tracker_queue').notNull().default(''),
 });
 
 export const sessions = pgTable('sessions', {

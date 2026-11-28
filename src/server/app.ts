@@ -29,6 +29,7 @@ import { focusForLeader, sendFocus } from '../agents/focus-run.ts';
 import { mirrorForLeader, sendWeeklyNote, setSeriesFate } from '../agents/mirror-run.ts';
 import { checkMail, findOutgoing, mailConfig, readSyntheticInbox } from '../mail.ts';
 import { standOwner } from '../agents/live-sources.ts';
+import { connectLeader, leaderDirectory, leadersInSource, openSources, SOURCE_NOTE, storedLinks, STUB_NOTE, templateLists } from '../agents/connect.ts';
 import { applyOrigin, formOrigin } from '../http/origin.ts';
 import { assertAuditConfirm, exampleQuote, FLOW_AUDIT_QUEUE, type FlowAuditJob } from '../jobs/flow-audit-job.ts';
 import { answerCallback, editChoiceKeyboard, parseCallback, parseRuleCallback, parseStart, sendMessage, sendRulesCard, telegramConfigured } from '../telegram.ts';
@@ -225,6 +226,92 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     return { user: { name: leader.name, login: leader.login } };
   });
 
+  app.get('/api/leaders', async (request, reply) => {
+    const leader = await currentLeader(request);
+    if (!leader) return reply.code(401).send({ error: 'Нужен вход' });
+    return {
+      note: 'Роли администратора нет. Подключить руководителя может любой, кто вошёл в кабинет.',
+      leaders: await leaderDirectory(deps.db),
+    };
+  });
+
+  app.get('/api/leaders/template', async (request, reply) => {
+    const leader = await currentLeader(request);
+    if (!leader) return reply.code(401).send({ error: 'Нужен вход' });
+    const lists = templateLists(await readFile('data/profile-template.md', 'utf8'));
+    return { note: SOURCE_NOTE, confirm: lists.confirm, time: lists.time };
+  });
+
+  app.get('/api/leaders/sources', async (request, reply) => {
+    const leader = await currentLeader(request);
+    if (!leader) return reply.code(401).send({ error: 'Нужен вход' });
+    const taken = (await deps.db.select({ id: leaders.id }).from(leaders)).map((row) => row.id);
+    return { note: SOURCE_NOTE, sources: await openSources('data', taken) };
+  });
+
+  app.get('/api/leaders/sources/:id', async (request, reply) => {
+    const leader = await currentLeader(request);
+    if (!leader) return reply.code(401).send({ error: 'Нужен вход' });
+    const id = (request.params as { id?: string }).id ?? '';
+    if (!/^[a-z0-9][a-z0-9._-]{0,40}$/i.test(id)) return reply.code(400).send({ error: 'Некорректный источник' });
+    const taken = (await deps.db.select({ id: leaders.id }).from(leaders)).map((row) => row.id);
+    if (taken.includes(id)) return reply.code(404).send({ error: 'Этот источник уже подключён' });
+    try {
+      return { leaders: await leadersInSource(join('data', id)) };
+    } catch {
+      return reply.code(404).send({ error: 'Источник не читается' });
+    }
+  });
+
+  const connectBody = z.object({
+    source: z.string().max(80),
+    personId: z.string().max(80),
+    login: z.string().max(80),
+    password: z.string().max(200),
+    confirm: z.array(z.string().max(300)).max(40).default([]),
+    confirmOwn: z.string().max(2000).default(''),
+    time: z.array(z.string().max(300)).max(40).default([]),
+    timeOwn: z.string().max(2000).default(''),
+    hours: z.string().max(20).default(''),
+    mailAddress: z.string().max(200).default(''),
+    mailPassword: z.string().max(200).default(''),
+    calendarPassword: z.string().max(200).default(''),
+    trackerOrg: z.string().max(200).default(''),
+    trackerQueue: z.string().max(200).default(''),
+    trackerToken: z.string().max(200).default(''),
+  });
+
+  app.post('/api/leaders', async (request, reply) => {
+    const leader = await currentLeader(request);
+    if (!leader) return reply.code(401).send({ error: 'Нужен вход' });
+    const parsed = connectBody.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: 'Проверьте поля формы', errors: ['Проверьте поля формы'] });
+    const result = await connectLeader(deps.db, parsed.data);
+    if (!result.ok) return reply.code(400).send({ error: 'Руководитель не подключён', errors: result.errors });
+    return result.summary;
+  });
+
+  const linksBody = z.object({
+    mailAddress: z.string().max(200).optional(),
+    mailPassword: z.string().max(200).optional(),
+    calendarPassword: z.string().max(200).optional(),
+    trackerOrg: z.string().max(200).optional(),
+    trackerQueue: z.string().max(200).optional(),
+    trackerToken: z.string().max(200).optional(),
+  });
+
+  app.post('/api/connections', async (request, reply) => {
+    const leader = await currentLeader(request);
+    if (!leader) return reply.code(401).send({ error: 'Нужен вход' });
+    const [row] = await deps.db.select({ locked: leaders.profileLocked }).from(leaders).where(eq(leaders.id, leader.id));
+    if (!row?.locked) return reply.code(400).send({ error: 'Живые подключения этого руководителя задаются на стенде' });
+    const parsed = linksBody.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: 'Проверьте поля' });
+    const saved = storedLinks(parsed.data);
+    await deps.db.update(leaders).set(saved).where(eq(leaders.id, leader.id));
+    return saved;
+  });
+
   app.get('/api/cabinet', async (request, reply) => {
     const leader = await currentLeader(request);
     if (!leader) return reply.code(401).send({ error: 'Нужен вход' });
@@ -233,7 +320,17 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       deps.db.select({ n: count() }).from(emails).where(eq(emails.leaderId, leader.id)),
       deps.db.select({ n: count() }).from(meetings).where(eq(meetings.leaderId, leader.id)),
       deps.db.select({ n: count() }).from(tasks).where(eq(tasks.leaderId, leader.id)),
-      deps.db.select({ profile: leaders.profile, linkCode: leaders.linkCode }).from(leaders).where(eq(leaders.id, leader.id)),
+      deps.db
+        .select({
+          profile: leaders.profile,
+          linkCode: leaders.linkCode,
+          profileLocked: leaders.profileLocked,
+          mailAddress: leaders.mailAddress,
+          trackerOrg: leaders.trackerOrg,
+          trackerQueue: leaders.trackerQueue,
+        })
+        .from(leaders)
+        .where(eq(leaders.id, leader.id)),
       departmentForLeader(deps.db, leader.id),
     ]);
     const taskRows = await deps.db
@@ -256,6 +353,8 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
         : [],
     );
     const audienceState = await loadAudienceState(deps.db, leader.id);
+    const live = (await standOwner(deps.db)) === leader.id;
+    const locked = profileRow[0]?.profileLocked ?? false;
     return {
       name: leader.name,
       scene: sceneWords(leader.id),
@@ -270,8 +369,16 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
         meetings: Number(meetingN[0]?.n ?? 0),
         tasks: Number(taskN[0]?.n ?? 0),
       },
-      mail: mailConfig() ? 'configured' : 'missing',
-      telegram: telegramConfigured() ? 'configured' : 'missing',
+      mail: live ? (mailConfig() ? 'configured' : 'missing') : 'stub',
+      telegram: live ? (telegramConfigured() ? 'configured' : 'missing') : 'unbound',
+      connections: {
+        mode: live ? 'live' : 'stub',
+        note: live ? '' : STUB_NOTE,
+        editable: locked,
+        mailAddress: locked ? (profileRow[0]?.mailAddress ?? '') : '',
+        trackerOrg: locked ? (profileRow[0]?.trackerOrg ?? '') : '',
+        trackerQueue: locked ? (profileRow[0]?.trackerQueue ?? '') : '',
+      },
       department,
       feed: await requestFeed(deps.db, leader.id),
       week: await weekScene(deps.db, leader.id),

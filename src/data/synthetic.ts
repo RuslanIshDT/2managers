@@ -65,10 +65,14 @@ export interface Synthetic {
   tasks: Task[];
 }
 
-export async function loadSynthetic(dir = 'data/synthetic'): Promise<Synthetic> {
+export async function loadSynthetic(dir = 'data/synthetic', options?: { profileOptional?: boolean }): Promise<Synthetic> {
   const read = (f: string) => readFile(join(dir, f), 'utf8');
+  const profilePromise = read('leader_profile.md').catch((err: unknown) => {
+    if (options?.profileOptional) return '';
+    throw err;
+  });
   const [profile, orgCsv, inboxCsv, ics, tasksCsv] = await Promise.all([
-    read('leader_profile.md'),
+    profilePromise,
     read('org_structure.csv'),
     read('inbox.csv'),
     read('calendar.ics'),
